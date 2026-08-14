@@ -1,10 +1,9 @@
-// Map a reasoning cloud routing to the InferenceMode its Settings tab selects on.
-// Mirrors deriveTranscriptionMode (byok custom → self-hosted, other cloud → providers).
+// Map persisted provider routing to the InferenceMode its Settings tab selects on.
 export function deriveReasoningMode(cloudMode, provider) {
   if (cloudMode === "byok") {
     return provider === "custom" ? "self-hosted" : "providers";
   }
-  return "openwhispr";
+  return "local";
 }
 
 // Whether a scope may borrow the fallback scope's API key along with its endpoint.
@@ -15,11 +14,10 @@ export function inheritsFallbackEndpoint(own, fallbackMode) {
   return !!fallbackMode && own.mode === fallbackMode;
 }
 
-// Fan a cleanup config out to all five LLM scopes; the four non-cleanup scopes
-// mirror only cloud routing plus the derived mode (each tab selects on its mode).
+// Fan a cleanup config out to all five LLM scopes; each tab selects on its mode.
 export function buildReasoningScopePatches(settings, mode) {
   const dictationCleanup = { ...settings, cleanupMode: mode };
-  // The four non-cleanup scopes mirror only the cloud routing fields that are set.
+  // The four non-cleanup scopes mirror the provider routing fields that are set.
   const routing = {
     ...(settings.cleanupProvider !== undefined ? { provider: settings.cleanupProvider } : {}),
     ...(settings.cleanupModel !== undefined ? { model: settings.cleanupModel } : {}),
@@ -34,10 +32,8 @@ export function buildReasoningScopePatches(settings, mode) {
   };
 }
 
-// Onboarding "use Corti everywhere" payloads. Transcription always routes to
-// Corti. Reasoning routes to Corti only in the EU region with an API key, since
-// Corti Models is EU-only and needs its own key; otherwise it routes to the
-// HIPAA-compliant OpenWhispr Cloud so clinical text never reaches a third party.
+// Onboarding "use Corti everywhere" payloads for users who explicitly choose
+// the optional BYOK provider.
 // useCleanupModel is forced true either way so the routing sticks.
 export function buildCortiOnboardingPayloads(
   transcriptionProvider,
@@ -60,6 +56,6 @@ export function buildCortiOnboardingPayloads(
           cleanupModel: cortiModel,
           cleanupCloudMode: "byok",
         }
-      : { useCleanupModel: true, cleanupCloudMode: "openwhispr" };
+      : { useCleanupModel: true, cleanupMode: "local" };
   return { transcription, reasoning };
 }

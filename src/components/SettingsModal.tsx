@@ -1,20 +1,16 @@
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { usePolicyStore } from "../stores/policyStore";
 import {
   Sliders,
   Mic,
   Brain,
-  UserCircle,
   Wrench,
   Keyboard,
-  CreditCard,
   Shield,
-  Users,
+  CalendarDays,
 } from "lucide-react";
 import SidebarModal, { type SidebarItem } from "./ui/SidebarModal";
 import SettingsPage, { SettingsSectionType } from "./SettingsPage";
-import { useAuth } from "../hooks/useAuth";
 
 export type { SettingsSectionType };
 
@@ -22,6 +18,9 @@ export type { SettingsSectionType };
 // intelligence, agentMode) — they now collapse into two: speechToText + llms.
 // Legacy deep-links land on the matching sub-tab via LEGACY_SUB_TAB.
 const SECTION_ALIASES: Record<string, SettingsSectionType> = {
+  account: "general",
+  plansBilling: "general",
+  workspace: "general",
   aiModels: "llms",
   agentConfig: "llms",
   agentMode: "llms",
@@ -55,31 +54,8 @@ interface SettingsModalProps {
 
 export default function SettingsModal({ open, onOpenChange, initialSection }: SettingsModalProps) {
   const { t } = useTranslation();
-  const { isSignedIn } = useAuth();
-  const policyManaged = usePolicyStore((s) => s.managed);
   const sidebarItems: SidebarItem<SettingsSectionType>[] = useMemo(() => {
     const items: SidebarItem<SettingsSectionType>[] = [
-      {
-        id: "account",
-        label: t("settingsModal.sections.account.label"),
-        icon: UserCircle,
-        description: t("settingsModal.sections.account.description"),
-        group: t("settingsModal.groups.account"),
-      },
-      {
-        id: "plansBilling",
-        label: t("settingsModal.sections.plansBilling.label"),
-        icon: CreditCard,
-        description: t("settingsModal.sections.plansBilling.description"),
-        group: t("settingsModal.groups.account"),
-      },
-      {
-        id: "workspace" as const,
-        label: t("settingsModal.sections.workspace.label"),
-        icon: Users,
-        description: t("settingsModal.sections.workspace.description"),
-        group: t("settingsModal.groups.account"),
-      },
       {
         id: "general",
         label: t("settingsModal.sections.general.label"),
@@ -92,6 +68,13 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
         label: t("settingsModal.sections.hotkeys.label"),
         icon: Keyboard,
         description: t("settingsModal.sections.hotkeys.description"),
+        group: t("settingsModal.groups.app"),
+      },
+      {
+        id: "calendarReminders",
+        label: "Calendar & Reminders",
+        icon: CalendarDays,
+        description: "Connect calendars and manage meeting reminders",
         group: t("settingsModal.groups.app"),
       },
       {
@@ -123,12 +106,23 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
         group: t("settingsModal.groups.system"),
       },
     ];
-    return isSignedIn ? items : items.filter((item) => item.id !== "workspace");
-  }, [t, isSignedIn]);
+    return items;
+  }, [t]);
 
   const resolveSection = (section: string | undefined): SettingsSectionType => {
-    if (!section) return "account";
-    return (SECTION_ALIASES[section] ?? section) as SettingsSectionType;
+    if (!section) return "general";
+    const resolved = SECTION_ALIASES[section] ?? section;
+    return [
+      "general",
+      "hotkeys",
+      "calendarReminders",
+      "speechToText",
+      "llms",
+      "privacyData",
+      "system",
+    ].includes(resolved)
+      ? (resolved as SettingsSectionType)
+      : "general";
   };
 
   const [activeSection, setActiveSection] = React.useState<SettingsSectionType>(() =>
@@ -162,11 +156,6 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
       activeSection={activeSection}
       onSectionChange={handleSectionChange}
     >
-      {policyManaged && (
-        <div className="mx-4 mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
-          {t("settingsModal.managedByOrg")}
-        </div>
-      )}
       <SettingsPage
         activeSection={activeSection}
         onNavigateToSection={handleSectionChange}

@@ -33,7 +33,7 @@ function loadEngine() {
   }
 }
 
-function createEngine() {
+function createEngine(databaseManager = {}) {
   const MeetingDetectionEngine = loadEngine();
 
   const reminderScheduler = {
@@ -53,11 +53,12 @@ function createEngine() {
   audioDetector.stop = () => {};
 
   const shown = [];
+  const navigations = [];
   const windowManager = {
     notificationPrefs: {},
     showMeetingNotification: (data) => shown.push(data),
     dismissMeetingNotification: () => {},
-    queueMeetingNoteNavigation: async () => {},
+    queueMeetingNoteNavigation: async (data) => navigations.push(data),
   };
 
   const engine = new MeetingDetectionEngine(
@@ -65,10 +66,10 @@ function createEngine() {
     processDetector,
     audioDetector,
     windowManager,
-    {}
+    databaseManager
   );
 
-  return { engine, audioDetector, shown };
+  return { engine, audioDetector, shown, navigations };
 }
 
 test("an unanswered audio prompt expires without cooling down the mic detector", () => {
@@ -90,4 +91,35 @@ test("explicitly dismissing an audio prompt still starts the mic cooldown", asyn
   await engine.handleNotificationResponse(shown[0].detectionId, "dismiss");
 
   assert.equal(audioDetector.dismissals, 1, "an explicit decline must keep its cooldown");
+});
+
+test("calendar start retries reuse the encounter-owned meeting note", async () => {
+  let starts = 0;
+  const databaseManager = {
+    startEncounterForCalendarEvent: () => {
+      starts += 1;
+      return {
+        success: true,
+        createdNote: starts === 1,
+        encounter: { id: 11, note_id: 42, lifecycle_state: "in_progress" },
+        note: { id: 42, folder_id: 8 },
+      };
+    },
+    getCalendarEventById: (id) => ({ id, summary: "Follow-up" }),
+    getMeetingsFolder: () => ({ id: 8 }),
+  };
+  const { engine, navigations } = createEngine(databaseManager);
+
+  const first = await engine.joinCalendarMeeting("event-1", "encounter-start", {
+    meetingContext: "in_person",
+  });
+  const retry = await engine.joinCalendarMeeting("event-1", "hotkey");
+
+  assert.equal(starts, 2);
+  assert.equal(first.note.id, 42);
+  assert.equal(retry.note.id, 42);
+  assert.deepEqual(
+    navigations.map((navigation) => navigation.noteId),
+    [42, 42]
+  );
 });

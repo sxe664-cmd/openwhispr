@@ -1,14 +1,124 @@
 import type { ModelDefinition } from "../models/ModelRegistry";
 import type { TinfoilCatalogModel } from "../models/tinfoilModels";
-import type { UsageResponse } from "../lib/usageStore";
-import type { OrgPolicy } from "./policy";
-import type { ManagedEnterpriseConfig } from "./enterpriseIdentity";
+import type { CalendarEvent } from "./calendar";
+
+export interface CalendarRangeRequest {
+  startIso: string;
+  endIso: string;
+  limit?: number;
+}
+
+export interface CalendarActionResult {
+  success: boolean;
+  eventId?: string;
+  error?: { code: string; message: string };
+  [key: string]: unknown;
+}
 
 export type LocalTranscriptionProvider = "whisper" | "nvidia";
 
+export type MeetingContext = "in_person" | "telehealth";
+export type MeetingDiarizationStatus =
+  "idle" | "queued" | "processing" | "completed" | "skipped" | "failed";
+
+export const DEFAULT_MEETING_CONTEXT: MeetingContext = "telehealth";
+
+export function normalizeMeetingContext(value: unknown): MeetingContext {
+  return value === "in_person" ? "in_person" : DEFAULT_MEETING_CONTEXT;
+}
+
+export type EncounterLifecycleState = "scheduled" | "in_progress" | "completed" | "cancelled";
+export type EncounterOutputStatus = "pending" | "processing" | "ready" | "failed" | "stale";
+export type EncounterOutputType = "summary" | "soap" | "focus" | "all";
+export type PatientResolution =
+  | "created"
+  | "matched"
+  | "unassigned_missing_email"
+  | "unassigned_multiple_attendees"
+  | "unassigned_conflict"
+  | "unassigned_invalid_metadata"
+  | "unassigned_folder_unavailable"
+  | "unassigned_legacy";
+
+export interface LocalEncounter {
+  id: number;
+  calendar_event_id: string | null;
+  provider: string | null;
+  calendar_id: string | null;
+  title: string;
+  start_time: string | null;
+  end_time: string | null;
+  source_status: string;
+  lifecycle_state: EncounterLifecycleState;
+  note_id: number | null;
+  patient_profile_id: number | null;
+  patient_resolution: PatientResolution;
+  meeting_context: MeetingContext | null;
+  attendees_count: number;
+  attendees: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  has_conference_url: boolean | number;
+  has_calendar_event_url: boolean | number;
+}
+
+export interface EncounterOutput {
+  encounter_id: number;
+  transcript_hash: string;
+  transcript_revision: number;
+  summary: string | null;
+  soap: string | null;
+  focus: string | null;
+  summary_status: EncounterOutputStatus;
+  soap_status: EncounterOutputStatus;
+  focus_status: EncounterOutputStatus;
+  /** Derived from the two independent clinical output states. */
+  status: EncounterOutputStatus;
+  summary_provider: string | null;
+  summary_model: string | null;
+  soap_provider: string | null;
+  soap_model: string | null;
+  focus_provider: string | null;
+  focus_model: string | null;
+  summary_error_code: string | null;
+  soap_error_code: string | null;
+  focus_error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  summary_updated_at: string | null;
+  soap_updated_at: string | null;
+  focus_updated_at: string | null;
+}
+
+export interface EncounterTranscriptToken {
+  transcriptRevision: number;
+  transcriptHash: string;
+}
+
+export interface EncounterOutputGenerationUpdate {
+  summary?: string | null;
+  soap?: string | null;
+  focus?: string | null;
+  summary_status?: "ready" | "failed";
+  soap_status?: "ready" | "failed";
+  focus_status?: "ready" | "failed";
+  summary_provider?: string | null;
+  summary_model?: string | null;
+  soap_provider?: string | null;
+  soap_model?: string | null;
+  focus_provider?: string | null;
+  focus_model?: string | null;
+  summary_error_code?: string | null;
+  soap_error_code?: string | null;
+  focus_error_code?: string | null;
+}
+
 export type ChineseScriptPreference = "simplified" | "traditional" | "as-transcribed";
 
-export type InferenceMode = "openwhispr" | "providers" | "local" | "self-hosted" | "enterprise";
+export type InferenceMode = "providers" | "local" | "self-hosted" | "enterprise";
 
 export type SelfHostedType = "openai-compatible" | "lan";
 
@@ -62,16 +172,6 @@ export type ProxyTranscriptionResult =
   | { text: string; model?: string; error?: undefined }
   | { error: string; code?: string; messageKey?: string; text?: undefined };
 
-export interface AuthTokenState {
-  token: string | null;
-  generation: number;
-}
-
-export interface AuthTokenMutationResult extends AuthTokenState {
-  success: boolean;
-  code?: string;
-}
-
 export interface TranscriptionItem {
   id: number;
   text: string;
@@ -109,10 +209,11 @@ export interface NoteItem {
   participants: string | null;
   diarization_enabled: number | null;
   expected_speaker_count: number | null;
+  meeting_context: MeetingContext | null;
   cloud_id: string | null;
   is_shared: number;
   share_token: string | null;
-  // The note's owner (CloudNote.user_id) — who created it, not who last
+  // The note's owner (CloudNote.user_id) â€” who created it, not who last
   // edited it. Only populated from the cloud; NULL on local-only rows and on
   // team notes mirrored before ownership shipped (the UI fails closed on
   // those until the owner backfill fills them).
@@ -133,43 +234,6 @@ export interface NoteItem {
   // 1 while a cloud-backed row that left a team space still owes its scope
   // retraction push (D6); cleared when the row settles.
   left_team?: number;
-}
-
-// Immutable view of every local field that affects a note push. The main
-// process compares this atomically when the cloud response returns, so an
-// in-flight create/PATCH cannot settle a newer edit or a purged identity.
-export type NotePushSnapshot = Pick<
-  NoteItem,
-  | "client_note_id"
-  | "title"
-  | "content"
-  | "enhanced_content"
-  | "enhancement_prompt"
-  | "enhanced_at_content_hash"
-  | "note_type"
-  | "source_file"
-  | "audio_duration_seconds"
-  | "folder_id"
-  | "space_id"
-  | "transcript"
-  | "calendar_event_id"
-  | "participants"
-  | "diarization_enabled"
-  | "expected_speaker_count"
-  | "created_at"
-  | "updated_at"
-  | "sync_status"
-  | "deleted_at"
-  | "cloud_updated_at"
-  | "left_team"
->;
-
-export type NoteCreateSnapshot = NotePushSnapshot;
-export type NoteUpdateSnapshot = NotePushSnapshot;
-
-export interface NoteCreateAckResult {
-  success: boolean;
-  outcome: "synced" | "pending" | "already-linked" | "orphaned" | "unresolved";
 }
 
 export interface NoteUpdateAckResult {
@@ -290,7 +354,7 @@ export interface SpaceItem {
   name: string;
   emoji: string | null;
   sort_order: number;
-  // Server-computed max effective role across assigned teams (ws owner/admin ⇒ admin).
+  // Server-computed max effective role across assigned teams (ws owner/admin â‡’ admin).
   my_role: "admin" | "member" | null;
   // Server-computed deduped union of assigned team rosters.
   member_count: number | null;
@@ -323,140 +387,6 @@ export interface SnippetEntryItem {
   cloud_id: string | null;
   sync_status: "synced" | "pending" | "error";
   deleted_at: string | null;
-}
-
-export type WorkspaceRole = "owner" | "admin" | "member";
-
-export interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  created_by_user_id: string;
-  stripe_customer_id: string | null;
-  stripe_subscription_id: string | null;
-  plan: string;
-  status: string;
-  trial_ends_at: string | null;
-  current_period_end: string | null;
-  cancel_at_period_end: boolean;
-  seats: number;
-  // Optional: absent from API responses that predate unified billing.
-  seats_used?: number;
-  created_at: string;
-  updated_at: string;
-  role: WorkspaceRole;
-  is_billable?: boolean;
-  billing_manager?: string | null;
-}
-
-export interface WorkspaceMember {
-  user_id: string;
-  role: WorkspaceRole;
-  is_billable?: boolean;
-  joined_at: string;
-  email: string;
-  name: string | null;
-  image: string | null;
-}
-
-export type TeamRole = "admin" | "member";
-
-export interface Team {
-  id: string;
-  workspace_id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  emoji?: string | null;
-  created_at: string;
-  updated_at: string;
-  member_count?: number;
-}
-
-export interface TeamMember {
-  user_id: string;
-  role: TeamRole;
-  joined_at: string;
-  email: string;
-  name: string | null;
-  image: string | null;
-}
-
-export interface WorkspaceInvitation {
-  id: string;
-  email: string;
-  workspace_role: WorkspaceRole;
-  team_ids: string[];
-  invited_by_user_id: string;
-  expires_at: string;
-  created_at: string;
-  accepted_at: string | null;
-  revoked_at: string | null;
-}
-
-export interface JoinableMember {
-  name: string | null;
-  email: string;
-  image: string | null;
-}
-
-/**
- * A workspace the signed-in user can act on, from GET /api/me/joinable.
- * `source` is why they can see it, `mode` is what the button does: a direct
- * invitation joins, while a company-domain match only earns the right to ask
- * an admin. Enterprise SSO and SCIM provision through the SSO callback.
- */
-export interface JoinableWorkspace {
-  source: "invitation" | "domain";
-  mode: "join" | "request";
-  request_state: "none" | "pending";
-  invitation_id: string | null;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_slug: string;
-  role: WorkspaceRole;
-  member_count: number;
-  members: JoinableMember[];
-  inviter_name: string | null;
-  inviter_email: string | null;
-}
-
-export interface WorkspaceJoinRequest {
-  id: string;
-  user_id: string;
-  name: string | null;
-  email: string;
-  image: string | null;
-  created_at: string;
-}
-
-export interface InvitationPreview {
-  id: string;
-  email: string;
-  workspace_role: WorkspaceRole;
-  team_ids: string[];
-  expires_at: string;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_slug: string;
-  inviter_name: string | null;
-  inviter_email: string | null;
-}
-
-export interface WorkspaceApiKey {
-  id: string;
-  name: string;
-  key_prefix: string;
-  scopes: string[];
-  last_used_at: string | null;
-  expires_at: string | null;
-  created_at: string;
-  created_by_user_id: string | null;
-  description: string | null;
-}
-
-export interface NewWorkspaceApiKey extends WorkspaceApiKey {
-  key: string;
 }
 
 export interface ActionItem {
@@ -689,6 +619,7 @@ export interface ParakeetDownloadProgressData {
   model: string;
   percentage?: number;
   downloaded_bytes?: number;
+
   total_bytes?: number;
   error?: string;
   code?: string;
@@ -882,50 +813,6 @@ declare global {
         | null
       >;
 
-      // Org policy (see src/types/policy.ts)
-      getWorkspacePolicy?: (
-        accountId?: string,
-        expectedAuthGeneration?: number
-      ) => Promise<{
-        success: boolean;
-        status?: "network" | "cached" | "current" | "unsupported" | "restricted" | "error";
-        revision?: number;
-        accountId?: string | null;
-        authGeneration?: number | null;
-        managed?: boolean;
-        policy?: OrgPolicy | null;
-        policyUpdatedAt?: string | null;
-        endpointSupported?: boolean;
-        code?: string;
-        error?: string;
-        enforcementRequired?: boolean;
-      }>;
-      onWorkspacePolicyChanged?: (
-        callback: (
-          snapshot:
-            | {
-                success: true;
-                status: "network" | "cached" | "current" | "unsupported";
-                revision: number;
-                accountId: string | null;
-                authGeneration: number;
-                managed: boolean;
-                policy: OrgPolicy | null;
-                policyUpdatedAt: string | null;
-                endpointSupported: boolean;
-              }
-            | {
-                success: false;
-                status: "error";
-                revision: number;
-                accountId: string | null;
-                authGeneration: number;
-                code: "POLICY_UNRESOLVABLE";
-                error: string;
-              }
-        ) => void
-      ) => () => void;
-
       getNoteRecordingConfig?: () => Promise<NoteRecordingConfigResult | null>;
 
       // Database operations
@@ -1002,7 +889,7 @@ declare global {
 
       // Dictionary operations
       getDictionary: () => Promise<string[]>;
-      /** Replaces the whole dictionary — omitted words are deleted. Prefer applyDictionaryChanges. */
+      /** Replaces the whole dictionary â€” omitted words are deleted. Prefer applyDictionaryChanges. */
       setDictionary: (words: string[]) => Promise<{ success: boolean }>;
       applyDictionaryChanges?: (changes: {
         add?: string[];
@@ -1053,6 +940,7 @@ declare global {
           participants?: string | null;
           diarization_enabled?: number | null;
           expected_speaker_count?: number | null;
+          meeting_context?: MeetingContext | null;
           client_note_id?: string;
           cloud_id?: string | null;
           cloud_updated_at?: string | null;
@@ -1087,11 +975,6 @@ declare global {
       onSemanticReindexProgress: (
         callback: (data: { done: number; total: number }) => void
       ) => () => void;
-      updateNoteCloudId: (id: number, cloudId: string) => Promise<NoteItem>;
-      updateNoteShareState: (
-        id: number,
-        state: { is_shared: number; share_token?: string | null }
-      ) => Promise<NoteItem>;
 
       // Folder operations
       getFolders: (spaceId?: number | null) => Promise<FolderItem[]>;
@@ -1122,7 +1005,6 @@ declare global {
         id: number,
         options?: {
           mode?: "preserve-dirty" | "destructive";
-          expectedAuthGeneration?: number;
         }
       ) => Promise<{
         success: boolean;
@@ -1135,13 +1017,7 @@ declare global {
         relocatedCount?: number;
         relocatedTitles?: string[];
       }>;
-      upsertSpaceFromCloud?: (space: Record<string, unknown>) => Promise<SpaceItem>;
-      setSpaceSyncStatus?: (
-        id: number,
-        status: SpaceItem["sync_status"]
-      ) => Promise<{ success: boolean; space?: SpaceItem | null }>;
       onSpacePurged?: (callback: (payload: { spaceId: number }) => void) => () => void;
-      onSpaceSynced?: (callback: (space: SpaceItem) => void) => () => void;
 
       // Note files (markdown mirror)
       noteFilesSetEnabled?: (
@@ -1227,13 +1103,7 @@ declare global {
       onNoteAdded?: (callback: (note: NoteItem) => void) => () => void;
       onNoteUpdated?: (callback: (note: NoteItem) => void) => () => void;
       onNoteDeleted?: (callback: (payload: { id: number }) => void) => () => void;
-      onNoteSynced?: (callback: (note: NoteItem) => void) => () => void;
-      onFolderSynced?: (callback: (folder: FolderItem) => void) => () => void;
       onFolderDeleted?: (callback: (payload: { id: number }) => void) => () => void;
-
-      // Cross-window sync events
-      emitSyncEvent?: (name: string, payload?: unknown) => Promise<{ success: boolean }>;
-      onSyncEvent?: (callback: (event: { name: string; payload?: unknown }) => void) => () => void;
 
       // Database event listeners
       onTranscriptionAdded?: (callback: (item: TranscriptionItem) => void) => () => void;
@@ -1432,6 +1302,7 @@ declare global {
         provider: string;
         modelId: string;
         config: Record<string, unknown>;
+
         options: Record<string, unknown>;
       }) => Promise<{ success: boolean; error?: string }>;
       enterpriseStreamCancel?: (streamId: string) => Promise<void>;
@@ -1500,8 +1371,6 @@ declare global {
       installUpdate: () => Promise<UpdateResult>;
       getAppVersion: () => Promise<AppVersionResult>;
       getPostMigrationState: () => Promise<{ justMigrated: boolean }>;
-      getOAuthProtocolRegistered: () => Promise<boolean>;
-      getOAuthProtocol: () => Promise<string>;
       markBundleMigrated: () => Promise<void>;
       markBundleMigrationDismissed: () => Promise<void>;
       getUpdateStatus: () => Promise<UpdateStatusResult>;
@@ -1660,34 +1529,6 @@ declare global {
         provider: string,
         config: Record<string, unknown>
       ) => Promise<{ success: boolean; error?: string; action?: string; copyCommand?: string }>;
-      getManagedEnterpriseConfig?: (
-        accountId: string,
-        workspaceId: string,
-        expectedAuthGeneration: number,
-        forceRefresh?: boolean
-      ) => Promise<{
-        success: boolean;
-        status?: "network" | "current" | "cached" | "error";
-        accountId?: string | null;
-        workspaceId?: string | null;
-        authGeneration?: number | null;
-        config?: ManagedEnterpriseConfig;
-        code?: string;
-        error?: string;
-        enforcementRequired?: boolean;
-      }>;
-      onManagedEnterpriseConfigChanged?: (
-        callback: (snapshot: {
-          accountId: string;
-          workspaceId: string;
-          authGeneration: number;
-          config: ManagedEnterpriseConfig | null;
-          code: string | null;
-          enforcementRequired?: boolean;
-        }) => void
-      ) => () => void;
-      clearManagedEnterpriseIdentity?: () => Promise<void>;
-
       // Dictation key persistence (file-based for reliable startup)
       getDictationKey?: () => Promise<string | null>;
       getActiveDictationKey?: () => Promise<string>;
@@ -1760,169 +1601,6 @@ declare global {
       getAutoStartEnabled?: () => Promise<{ enabled: boolean; requiresApproval: boolean }>;
       setAutoStartEnabled?: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 
-      // Auth
-      authClearSession?: () => Promise<{
-        success: boolean;
-        tokenState?: AuthTokenState;
-        error?: string;
-      }>;
-      authGetToken?: () => Promise<string | null>;
-      authGetTokenState?: () => Promise<AuthTokenState>;
-      authSetToken?: (
-        token: string,
-        expectedGeneration: number
-      ) => Promise<AuthTokenMutationResult>;
-      onAuthTokenStateChanged?: (
-        callback: (state: { generation: number; hasToken: boolean }) => void
-      ) => () => void;
-
-      // OpenWhispr Cloud API
-      cloudTranscribe?: (
-        audioBuffer: ArrayBuffer,
-        opts: { language?: string; prompt?: string; useCase?: string; diarization?: boolean }
-      ) => Promise<
-        {
-          success: boolean;
-          text?: string;
-          warning?: string;
-          clientTranscriptionId?: string;
-          wordsUsed?: number;
-          wordsRemaining?: number;
-          limitReached?: boolean;
-        } & PolicyFailureMetadata
-      >;
-      cloudReason?: (
-        text: string,
-        opts: {
-          model?: string;
-          agentName?: string;
-          customDictionary?: string[];
-          customPrompt?: string;
-          systemPrompt?: string;
-          requestPurpose?: "agent";
-          promptMode?: "cleanup" | "agent";
-          screenContext?: ScreenContextImage;
-          language?: string;
-          locale?: string;
-        }
-      ) => Promise<{
-        success: boolean;
-        text?: string;
-        model?: string;
-        provider?: string;
-        promptMode?: string;
-        matchType?: string;
-        screenContextApplied?: boolean;
-        error?: string;
-        code?: string;
-      }>;
-      cloudStreamingUsage?: (
-        text: string,
-        audioDurationSeconds: number,
-        opts?: {
-          sendLogs?: boolean;
-          sttProvider?: string;
-          sttModel?: string;
-          sttProcessingMs?: number;
-          sttLanguage?: string;
-          audioSizeBytes?: number;
-          audioFormat?: string;
-          clientTotalMs?: number;
-        }
-      ) => Promise<{
-        success: boolean;
-        wordsUsed?: number;
-        wordsRemaining?: number;
-        limitReached?: boolean;
-        error?: string;
-        code?: string;
-      }>;
-      cloudHealthCheck?: () => Promise<{
-        ok: boolean;
-        status?: number;
-        code?: string;
-        messageKey?: string;
-      }>;
-      cloudUsage?: () => Promise<
-        UsageResponse & {
-          success: boolean;
-          error?: string;
-          code?: string;
-        }
-      >;
-      cloudCheckout?: (opts?: {
-        plan?: "monthly" | "annual";
-        tier?: "pro" | "business";
-      }) => Promise<{
-        success: boolean;
-        url?: string;
-        error?: string;
-        code?: string;
-      }>;
-      cloudBillingPortal?: () => Promise<{
-        success: boolean;
-        url?: string;
-        error?: string;
-        code?: string;
-      }>;
-      cloudSwitchPlan?: (opts: {
-        plan: "monthly" | "annual";
-        tier: "pro" | "business";
-      }) => Promise<{
-        success: boolean;
-        alreadyOnPlan?: boolean;
-        error?: string;
-      }>;
-      cloudPreviewSwitch?: (opts: {
-        plan: "monthly" | "annual";
-        tier: "pro" | "business";
-      }) => Promise<{
-        success: boolean;
-        immediateAmount?: number;
-        currency?: string;
-        currentPriceAmount?: number;
-        currentInterval?: string;
-        newPriceAmount?: number;
-        newInterval?: string;
-        nextBillingDate?: string;
-        alreadyOnPlan?: boolean;
-        error?: string;
-      }>;
-
-      // Authenticated cloud API proxy (`public: true` skips the auth requirement)
-      cloudApiRequest?: (opts: {
-        method?: string;
-        path: string;
-        body?: unknown;
-        public?: boolean;
-        expectedAuthGeneration?: number;
-      }) => Promise<
-        {
-          success: boolean;
-          data?: unknown;
-        } & PolicyFailureMetadata
-      >;
-
-      // Cloud audio file transcription
-      transcribeAudioFileCloud?: (
-        filePath: string,
-        options?: { requestId?: string }
-      ) => Promise<
-        {
-          success: boolean;
-          text?: string;
-          warning?: string;
-          failedChunks?: number;
-          totalChunks?: number;
-        } & PolicyFailureMetadata
-      >;
-
-      cancelUploadTranscription?: (requestId: string) => Promise<{ success: boolean }>;
-
-      onUploadTranscriptionProgress?: (
-        callback: (data: { stage: string; chunksTotal: number; chunksCompleted: number }) => void
-      ) => () => void;
-
       // BYOK audio file transcription
       transcribeAudioFileByok?: (options: {
         filePath: string;
@@ -1943,16 +1621,6 @@ declare global {
         error?: string;
         diarized?: boolean;
       }>;
-
-      // Usage limit events
-      notifyLimitReached?: (data: { wordsUsed: number; limit: number }) => void;
-      onLimitReached?: (
-        callback: (data: { wordsUsed: number; limit: number }) => void
-      ) => () => void;
-
-      // Workspace invitation deep link
-      onWorkspaceInvitationToken?: (callback: (token: string) => void) => () => void;
-      getPendingInvitationToken?: () => Promise<string | null>;
 
       // AssemblyAI Streaming
       assemblyAiStreamingWarmup?: (options?: { sampleRate?: number; language?: string }) => Promise<
@@ -1984,46 +1652,6 @@ declare global {
       onAssemblyAiSessionEnd?: (
         callback: (data: { audioDuration?: number; text?: string }) => void
       ) => () => void;
-
-      // Referral stats
-      getReferralStats?: () => Promise<{
-        referralCode: string;
-        referralLink: string;
-        totalReferrals: number;
-        completedReferrals: number;
-        pendingReferrals: number;
-        totalMonthsEarned: number;
-        referrals: Array<{
-          id: string;
-          email: string;
-          name: string;
-          status: "pending" | "completed" | "rewarded";
-          created_at: string;
-          first_payment_at: string | null;
-          words_used: number;
-        }>;
-      }>;
-
-      sendReferralInvite?: (email: string) => Promise<{
-        success: boolean;
-        invite: {
-          id: string;
-          recipientEmail: string;
-          status: "sent" | "failed" | "opened" | "converted";
-          sentAt: string;
-        };
-      }>;
-
-      getReferralInvites?: () => Promise<{
-        invites: Array<{
-          id: string;
-          recipientEmail: string;
-          status: "sent" | "failed" | "opened" | "converted";
-          sentAt: string;
-          openedAt?: string;
-          convertedAt?: string;
-        }>;
-      }>;
 
       // Agent Mode
       updateAgentHotkey?: (hotkey: string) => Promise<{ success: boolean; message: string }>;
@@ -2218,61 +1846,52 @@ declare global {
       onAgentStopRecording?: (callback: () => void) => () => void;
       onAgentToggleRecording?: (callback: () => void) => () => void;
 
-      // Agent cloud streaming (event-based)
-      startAgentStream?: (
-        messages: Array<{ role: string; content: string | Array<unknown> }>,
-        opts?: {
-          systemPrompt?: string;
-          tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
-        }
-      ) => void;
-      onAgentStreamChunk?: (
-        callback: (chunk: {
-          type: "content" | "tool_call" | "done";
-          text?: string;
-          id?: string;
-          name?: string;
-          arguments?: string;
-          finishReason?: string;
-        }) => void
-      ) => () => void;
-      onAgentStreamError?: (
-        callback: (error: PolicyFailureMetadata & { error: string }) => void
-      ) => () => void;
-      onAgentStreamEnd?: (callback: () => void) => () => void;
-
-      // Agent cloud tools
+      // Local agent tools
       agentOpenNote?: (noteId: number) => Promise<{ success: boolean; error?: string }>;
-      agentWebSearch?: (
-        query: string,
-        numResults?: number
-      ) => Promise<
-        {
-          success: boolean;
-          results?: Array<{
-            title: string;
-            url: string;
-            text: string;
-            publishedDate?: string;
-          }>;
-        } & PolicyFailureMetadata
-      >;
-
       // Google Calendar
-      gcalStartOAuth?: () => Promise<{ success: boolean; email?: string; error?: string }>;
-      gcalDisconnect?: (email?: string) => Promise<{ success: boolean; error?: string }>;
       gcalGetConnectionStatus?: () => Promise<{
         connected: boolean;
         accounts: Array<{ email: string }>;
-        email: string | null;
+        email?: string | null;
+        source?: string;
+        managed?: boolean;
+        state?: string;
+        lastSyncAt?: string | null;
+        lastSuccessfulSyncAt?: string | null;
+        error?: { code: string; message: string } | null;
+        errorCode?: string | null;
       }>;
       gcalGetCalendars?: () => Promise<{ success: boolean; calendars: any[] }>;
-      gcalSetCalendarSelection?: (
-        calendarId: string,
-        isSelected: boolean
-      ) => Promise<{ success: boolean; error?: string }>;
-      gcalSetPrimaryOnly?: (value: boolean) => Promise<{ success: boolean; error?: string }>;
-      gcalSyncEvents?: () => Promise<{ success: boolean; error?: string }>;
+      gcalSyncEvents?: (range?: CalendarRangeRequest) => Promise<{
+        success: boolean;
+        error?: { code: string; message: string };
+      }>;
+      gcalListEvents?: (range: CalendarRangeRequest) => Promise<{
+        success: boolean;
+        range?: CalendarRangeRequest;
+        events: CalendarEvent[];
+        cached?: boolean;
+        refreshing?: boolean;
+        tombstones?: Array<{ calendar_id?: string; event_id?: string }>;
+        error?: { code: string; message: string };
+      }>;
+      onGcalConnectionChanged?: (callback: (data: any) => void) => () => void;
+      onGcalEventsSynced?: (callback: (payload?: { provider?: string; eventCount?: number }) => void) => () => void;
+      gcalGetCalendarStatus?: () => Promise<{
+        connected: boolean;
+        managed?: boolean;
+        source?: string;
+        state: string;
+        email?: string | null;
+        lastSuccessfulSyncAt?: string | null;
+        error?: { code: string; message: string } | null;
+        errorCode?: string | null;
+      }>;
+      gcalConnectGoogle?: () => Promise<{
+        success: boolean;
+        managed?: boolean;
+        error?: { code: string; message: string };
+      }>;
       gcalGetUpcomingEvents?: (
         windowMinutes?: number
       ) => Promise<{ success: boolean; events: any[] }>;
@@ -2285,7 +1904,148 @@ declare global {
           end_time: string;
           attendees_count: number;
           attendees: string | null;
+          hangout_link: string | null;
+          html_link: string | null;
         } | null;
+      }>;
+      getEncounters?: (limit?: number) => Promise<{
+        success: boolean;
+        encounters: LocalEncounter[];
+        error?: string;
+      }>;
+      getEncountersInRange?: (range: CalendarRangeRequest) => Promise<{
+        success: boolean;
+        encounters: LocalEncounter[];
+        error?: string;
+      }>;
+      getEncountersForLocalDay?: (dateIso?: string, limit?: number) => Promise<{
+        success: boolean;
+        encounters: LocalEncounter[];
+        error?: string;
+        code?: string;
+      }>;
+      getAppointmentActions?: (eventId: string) => Promise<CalendarActionResult>;
+      getAppointmentReminderStatuses?: (eventIds: string[]) => Promise<{
+        success: boolean;
+        statuses?: Record<string, { email: boolean; sms: boolean }>;
+        error?: { code: string; message: string };
+      }>;
+      sendAppointmentEmail?: (eventId: string) => Promise<CalendarActionResult>;
+      sendAppointmentSms?: (eventId: string) => Promise<CalendarActionResult>;
+      renameAppointment?: (input: {
+        eventId: string;
+        summary: string;
+        calendarId?: string;
+      }) => Promise<CalendarActionResult>;
+      cancelAppointment?: (input: {
+        eventId: string;
+        confirmed?: boolean;
+        calendarId?: string;
+      }) => Promise<CalendarActionResult>;
+      rescheduleAppointment?: (input: {
+        eventId: string;
+        newStartIso: string;
+        confirmed?: boolean;
+      }) => Promise<CalendarActionResult>;
+      getReceptionistConfig?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      saveReceptionistConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; requiresRestart?: boolean; error?: { code: string; message: string } }>;
+      getMessageConfig?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      saveMessageConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      getPostAppointmentWorkspace?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      savePostAppointmentConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      getEmailSetup?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      saveEmailSetup?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      getEncounter?: (encounterId: number) => Promise<{
+        success: boolean;
+        encounter: LocalEncounter | null;
+        error?: string;
+        code?: string;
+      }>;
+      startEncounter?: (
+        eventId: string,
+        options?: { meetingContext?: MeetingContext }
+      ) => Promise<{
+        success: boolean;
+        encounter?: LocalEncounter;
+        note?: { id: number; folder_id: number | null };
+        createdNote?: boolean;
+        error?: string;
+        code?: string;
+      }>;
+      getEncounterOutput?: (encounterId: number) => Promise<{
+        success: boolean;
+        output: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      beginEncounterOutputGeneration?: (
+        encounterId: number,
+        outputTypes?: EncounterOutputType | Array<Exclude<EncounterOutputType, "all">>
+      ) => Promise<{
+        success: boolean;
+        output: EncounterOutput | null;
+        transcript: string | null;
+        token: EncounterTranscriptToken | null;
+        error?: string;
+        code?: string;
+      }>;
+      finishEncounterOutputGeneration?: (
+        encounterId: number,
+        token: EncounterTranscriptToken,
+        updates: EncounterOutputGenerationUpdate
+      ) => Promise<{
+        success: boolean;
+        applied: boolean;
+        output: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      retryEncounterOutput?: (
+        encounterId: number,
+        outputType?: EncounterOutputType
+      ) => Promise<{
+        success: boolean;
+        output: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      completeEncounterRecording?: (
+        noteId: number,
+        transcript: string
+      ) => Promise<{
+        success: boolean;
+        note?: NoteItem;
+        encounter?: LocalEncounter | null;
+        output?: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      aiReceptionistGetStatus?: () => Promise<{
+        available: boolean;
+        sourceAvailable?: boolean;
+        runtimeAvailable?: boolean;
+        seedAvailable?: boolean;
+        bundledPythonAvailable?: boolean | null;
+        mode?: string;
+        error?: { code: string; message: string };
+        agent?: {
+          enabled: boolean;
+          running: boolean;
+          pid?: number | null;
+          state: string;
+          message?: string;
+          errorCode?: string | null;
+        };
+      }>;
+      aiReceptionistStart?: (options?: { playgroundMode?: boolean }) => Promise<{
+        ok: boolean;
+        pid?: number | null;
+        error?: { code?: string; message?: string };
+      }>;
+      aiReceptionistStop?: () => Promise<{
+        ok: boolean;
+        stopped?: boolean;
+        error?: { code?: string; message?: string };
       }>;
 
       // Contacts
@@ -2304,15 +2064,20 @@ declare global {
         provider?: string;
         model?: string;
         language?: string;
+        meetingContext?: MeetingContext;
       }) => Promise<{ success: boolean; alreadyPrepared?: boolean } & PolicyFailureMetadata>;
       meetingTranscriptionStart?: (options: {
         provider?: string;
         model?: string;
         language?: string;
         noteId?: number | null;
+        meetingContext?: MeetingContext;
       }) => Promise<
         {
           success: boolean;
+          reused?: boolean;
+          recordingNoteId?: number | null;
+          encounterId?: number | null;
           systemAudioMode?: SystemAudioMode;
           systemAudioStrategy?: SystemAudioStrategy;
           oneOnOneAttendee?: { displayName: string; email: string | null } | null;
@@ -2340,6 +2105,7 @@ declare global {
       onMeetingSpeakerIdentified?: (
         callback: (data: {
           speakerId: string;
+
           displayName?: string | null;
           startTime: number;
           endTime: number;
@@ -2406,6 +2172,8 @@ declare global {
             speakerLockSource?: "user" | "diarization" | "suggestion";
           }>;
           speakerEmbeddings?: Record<string, number[]> | null;
+          status?: MeetingDiarizationStatus;
+          error?: string;
         }) => void
       ) => () => void;
 
@@ -2457,11 +2225,11 @@ declare global {
       // Dictation realtime streaming
       dictationRealtimeWarmup?: (options: {
         model?: string;
-        mode?: "byok" | "openwhispr";
+        mode?: "byok";
       }) => Promise<{ success: boolean } & PolicyFailureMetadata>;
       dictationRealtimeStart?: (options: {
         model?: string;
-        mode?: "byok" | "openwhispr";
+        mode?: "byok";
       }) => Promise<{ success: boolean } & PolicyFailureMetadata>;
       dictationRealtimeSend?: (buffer: ArrayBuffer) => void;
       dictationRealtimeStop?: () => Promise<{ success: boolean; text: string }>;
@@ -2469,10 +2237,6 @@ declare global {
       onDictationRealtimeFinal?: (callback: (text: string) => void) => () => void;
       onDictationRealtimeError?: (callback: (error: string) => void) => () => void;
       onDictationRealtimeSessionEnd?: (callback: (data: { text: string }) => void) => () => void;
-
-      // Google Calendar event listeners
-      onGcalConnectionChanged?: (callback: (data: any) => void) => () => void;
-      onGcalEventsSynced?: (callback: (data: any) => void) => () => void;
 
       // Microsoft Calendar
       mcalStartOAuth?: () => Promise<{ success: boolean; email?: string; error?: string }>;
@@ -2543,7 +2307,16 @@ declare global {
         detectionId: string,
         action: string
       ) => Promise<{ success: boolean }>;
-      joinCalendarMeeting?: (eventId: string) => Promise<{ success: boolean }>;
+      joinCalendarMeeting?: (
+        eventId: string,
+        options?: { meetingContext?: MeetingContext }
+      ) => Promise<{
+        success: boolean;
+        encounter?: LocalEncounter;
+        note?: { id: number; folder_id: number | null };
+        createdNote?: boolean;
+        error?: string;
+      }>;
       getPendingMeetingNoteNavigation?: () => Promise<{
         noteId: number;
         folderId: number;
@@ -2591,138 +2364,7 @@ declare global {
         bounds?: { x: number; y: number; width: number; height: number };
       }>;
       sendDictationPreviewAudio?: (data: ArrayBuffer) => void;
-
-      // Sync operations
-      getPendingNotes?: (spaceKind?: "private" | "team") => Promise<NoteItem[]>;
-      getPendingNoteDeletes?: () => Promise<NoteItem[]>;
-      getNoteByClientId?: (clientNoteId: string) => Promise<NoteItem | null>;
-      upsertNoteFromCloud?: (
-        cloudNote: Record<string, unknown>,
-        localFolderId: number | null,
-        localSpaceId?: number | null
-      ) => Promise<NoteItem>;
-      acknowledgeNoteCreate?: (
-        id: number,
-        snapshot: NoteCreateSnapshot,
-        cloudId: string,
-        cloudUpdatedAt?: string | null,
-        ownerUserId?: string | null,
-        settleIfUnchanged?: boolean
-      ) => Promise<NoteCreateAckResult>;
-      markNoteSyncedIfUnchanged?: (
-        id: number,
-        snapshot: NoteUpdateSnapshot,
-        expectedCloudId: string,
-        cloudUpdatedAt?: string | null,
-        ownerUserId?: string | null
-      ) => Promise<NoteUpdateAckResult>;
-      setNoteCloudBase?: (id: number, cloudUpdatedAt: string | null) => Promise<void>;
-      setNoteOwnerFromCloud?: (id: number, ownerUserId: string) => Promise<void>;
-      countTeamNotesMissingOwner?: () => Promise<number>;
-      markNoteSyncError?: (id: number) => Promise<void>;
-      restoreNoteAfterDeniedDelete?: (id: number) => Promise<{ success: boolean; id: number }>;
-      hardDeleteNote?: (id: number) => Promise<void>;
-
-      getPendingFolders?: (spaceKind?: "private" | "team") => Promise<FolderItem[]>;
-      getFolderByClientId?: (clientFolderId: string) => Promise<FolderItem | null>;
-      upsertFolderFromCloud?: (
-        cloudFolder: Record<string, unknown>,
-        localSpaceId?: number | null
-      ) => Promise<FolderItem>;
-      acknowledgeFolderCreate?: (
-        id: number,
-        snapshot: FolderPushSnapshot,
-        expectedCloudId: string | null,
-        responseClientFolderId: string,
-        cloudId: string,
-        cloudUpdatedAt?: string | null
-      ) => Promise<FolderAckResult>;
-      markFolderSyncedIfUnchanged?: (
-        id: number,
-        snapshot: FolderPushSnapshot,
-        expectedCloudId: string
-      ) => Promise<FolderAckResult>;
-      getFolderIdMap?: () => Promise<FolderItem[]>;
-      getPendingFolderDeletes?: () => Promise<FolderItem[]>;
-      restoreFolderAfterDeniedDelete?: (id: number) => Promise<{
-        success: boolean;
-        id: number;
-        folder?: FolderItem;
-        notes?: NoteItem[];
-        conversationIds?: number[];
-        reason?: "name-taken";
-        error?: string;
-      }>;
-      hardDeleteFolder?: (id: number) => Promise<{ success: boolean; id: number }>;
-      relocateRevokedFolder?: (
-        id: number,
-        privateSpaceId: number,
-        preserveFolder?: boolean
-      ) => Promise<{
-        success: boolean;
-        folder?: FolderItem | null;
-        folderName?: string;
-        relocatedNotes?: NoteItem[];
-        deletedNoteIds?: number[];
-        error?: string;
-      }>;
-
-      getPendingConversations?: () => Promise<ConversationPreview[]>;
-      getPendingConversationDeletes?: () => Promise<ConversationPreview[]>;
-      getConversationByClientId?: (clientId: string) => Promise<ConversationPreview | null>;
-      upsertConversationFromCloud?: (
-        cloudConv: Record<string, unknown>,
-        messages: Array<Record<string, unknown>>
-      ) => Promise<void>;
-      markConversationSynced?: (
-        id: number,
-        cloudId: string
-      ) => Promise<{ success: boolean } | undefined>;
-      hardDeleteConversation?: (id: number) => Promise<void>;
-
-      getPendingTranscriptions?: () => Promise<TranscriptionItem[]>;
-      getTranscriptionByClientId?: (clientId: string) => Promise<TranscriptionItem | null>;
-      upsertTranscriptionFromCloud?: (
-        cloudTranscription: Record<string, unknown>
-      ) => Promise<TranscriptionItem>;
-      markTranscriptionSynced?: (id: number, cloudId: string) => Promise<void>;
-      getPendingTranscriptionDeletes?: () => Promise<TranscriptionItem[]>;
-      hardDeleteTranscription?: (id: number) => Promise<{ success: boolean; id: number }>;
-
-      getPendingDictionary?: () => Promise<DictionaryEntryItem[]>;
-      getPendingDictionaryDeletes?: () => Promise<DictionaryEntryItem[]>;
-      getDictionaryByClientId?: (clientDictId: string) => Promise<DictionaryEntryItem | null>;
-      upsertDictionaryFromCloud?: (
-        cloudEntry: Record<string, unknown>
-      ) => Promise<DictionaryEntryItem | null>;
-      markDictionarySynced?: (
-        id: number,
-        cloudId: string
-      ) => Promise<{ success: boolean; changes: number }>;
-      hardDeleteDictionary?: (id: number) => Promise<{ success: boolean; id: number }>;
-      clearDictionaryCloudId?: (id: number) => Promise<{ success: boolean }>;
-      broadcastDictionaryUpdated?: () => Promise<{ success: boolean }>;
-
-      getPendingSnippets?: () => Promise<SnippetEntryItem[]>;
-      getPendingSnippetDeletes?: () => Promise<SnippetEntryItem[]>;
-      getSnippetForCloudMerge?: (
-        cloudEntry: Record<string, unknown>
-      ) => Promise<SnippetEntryItem | null>;
-      upsertSnippetFromCloud?: (
-        cloudEntry: Record<string, unknown>
-      ) => Promise<SnippetEntryItem | null>;
-      markSnippetSynced?: (
-        id: number,
-        cloudId: string,
-        serverUpdatedAt?: string,
-        expectedTrigger?: string,
-        expectedReplacement?: string
-      ) => Promise<{ success: boolean; changes: number }>;
-      hardDeleteSnippet?: (id: number) => Promise<{ success: boolean; id: number }>;
-      clearSnippetCloudId?: (id: number) => Promise<{ success: boolean }>;
-      broadcastSnippetsUpdated?: () => Promise<{ success: boolean }>;
     };
-
     api?: {
       sendDebugLog: (message: string) => void;
     };

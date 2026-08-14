@@ -22,7 +22,8 @@ export function useUpcomingEvents(): UseUpcomingEventsReturn {
   const gcalAccounts = useSettingsStore((s) => s.gcalAccounts);
   const mcalAccounts = useSettingsStore((s) => s.mcalAccounts);
   const appleCalendarConnected = useSettingsStore((s) => s.appleCalendarConnected);
-  const isConnected = gcalAccounts.length > 0 || mcalAccounts.length > 0 || appleCalendarConnected;
+  const [receptionistCalendarManaged, setReceptionistCalendarManaged] = useState(false);
+  const isConnected = receptionistCalendarManaged || gcalAccounts.length > 0 || mcalAccounts.length > 0 || appleCalendarConnected;
 
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -47,6 +48,14 @@ export function useUpcomingEvents(): UseUpcomingEventsReturn {
       setIsLoading(false);
     }
   }, [isConnected]);
+
+  useEffect(() => {
+    window.electronAPI?.gcalGetConnectionStatus?.().then((status) => {
+      setReceptionistCalendarManaged(
+        status?.managed === true || status?.source === "ai-receptionist"
+      );
+    }).catch(() => {});
+  }, []);
 
   // Fetch on mount and when connection status changes
   useEffect(() => {

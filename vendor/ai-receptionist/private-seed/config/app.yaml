@@ -1,0 +1,259 @@
+mode: production
+name: HIRA
+type: appointment-based office
+timezone: America/New_York
+communications:
+  default_transfer_number: +1 561 917 1744
+  email_from: HIRA Front Desk <contact@hirarw.com>
+  sms_from_number: ''
+message_templates:
+  post_followups:
+    thank_you_review:
+      email_subject: Thank you for visiting {business_name}
+      email_text: 'Hi {recipient_name},
+  
+  
+        Thank you for visiting {business_name}. We hope you''re feeling well after your
+        appointment.
+  
+  
+        If you have a moment, we''d appreciate a quick review:
+  
+        https://www.google.com/search?q=hira+restorative+wellness+center+boca+raton+reviews&rlz=1C1VDKB_enUS1102US1102&oq=hira+res&sourceid=chrome&source=chrome.ob&ie=UTF-8#lrd=0x88d91b27bb8fd007:0xbe531cb4ca72f018,3,,,,
+  
+  
+        If you have any questions or would like help planning your next visit, just
+        reply to this email or call {default_transfer_number}.
+  
+  
+        Warmly,
+  
+        {business_name}'
+      email_html: ''
+      sms: '{business_name}: Thanks for visiting us. We hope you''re feeling well. If
+        you have a moment, we''d appreciate a quick review: https://www.google.com/search?q=hira+restorative+wellness+center+boca+raton+reviews&rlz=1C1VDKB_enUS1102US1102&oq=hira+res&sourceid=chrome&source=chrome.ob&ie=UTF-8#lrd=0x88d91b27bb8fd007:0xbe531cb4ca72f018,3,,,,
+        Reply STOP to opt out.'
+    thank_you_only:
+      email_subject: Thank you for visiting {business_name}
+      email_text: |-
+        Hi {recipient_name},
+
+        Thank you for visiting {business_name}. We hope you're feeling well after your appointment.
+
+        Warmly,
+        {business_name}
+      email_html: ''
+      sms: '{business_name}: Thank you for visiting us. We hope you''re feeling well after
+        your appointment. Reply STOP to opt out.'
+    book_next_appointment:
+      email_subject: Ready to plan your next visit?
+      email_text: 'Hi {recipient_name},
+  
+  
+        When you''re ready, we''d be happy to help plan your next visit. Reply to this
+        email or call {default_transfer_number}.
+  
+  
+        Warmly,
+  
+        {business_name}'
+      email_html: ''
+      sms: '{business_name}: Ready to plan your next visit? Reply here or call {default_transfer_number}.
+        Reply STOP to opt out.'
+  confirmation_email_subject: 'Appointment confirmed: {appointment_time}'
+  confirmation_email_text: |-
+    Hi {recipient_name},
+    
+    Your appointment with {business_name} is confirmed for {appointment_time}.
+    
+    If you have any questions, feel free to call us at {default_transfer_number}.
+  confirmation_sms: '{business_name}: your appointment is confirmed for {appointment_time}. Reply STOP   to   opt   out.   Reply   HELP for help.'
+  reminder_email_subject: 'Appointment reminder: {appointment_time}'
+  reminder_email_text: |-
+    Hi {recipient_name},
+    
+    This is a reminder from {business_name} about your appointment on {appointment_time}.
+    
+    If you need to make changes, please call us at 561 917 1744.
+  reminder_sms: Reminder of your appointment with Dr. Espinoza on {appointment_time}. If you need   to   cancel or reschedule, please call {default_transfer_number}. Reply STOP to opt   out.   Reply HELP for help.
+  post_reminder_email_subject: Thank you for visiting {business_name}
+  post_reminder_email_text: |-
+    Hi {recipient_name},
+    
+    Thank you for visiting {business_name}. We hope you're feeling well after your appointment.
+    
+    If you have a moment, we'd appreciate a quick review:
+    https://www.google.com/search?q=hira+restorative+wellness+center+boca+raton+reviews&rlz=1C1VDKB_enUS1102US1102&oq=hira+res&sourceid=chrome&source=chrome.ob&ie=UTF-8#lrd=0x88d91b27bb8fd007:0xbe531cb4ca72f018,3,,,,
+    
+    If you have any questions or would like help planning your next visit, just reply to this email or call {default_transfer_number}.
+    
+    Warmly,
+    {business_name}
+  post_reminder_email_html: ''
+  post_reminder_sms: '{business_name}: Thanks for visiting us. We hope you''re feeling well. If you have   a moment, we''d appreciate a quick review: https://www.google.com/search?q=hira+restorative+wellness+center+boca+raton+reviews&rlz=1C1VDKB_enUS1102US1102&oq=hira+res&sourceid=chrome&source=chrome.ob&ie=UTF-8#lrd=0x88d91b27bb8fd007:0xbe531cb4ca72f018,3,,,,   Reply STOP to opt out.'
+  quick_sms: ''
+  quick_email: ''
+  quick_call_script: ''
+  message_email_subject: ''
+  message_email_text: ''
+  message_email_html: ''
+  call_end_email_subject: ''
+  call_end_email_text: ''
+  call_end_email_html: ''
+  booking_email_subject: ''
+  booking_email_text: ''
+  booking_email_html: ''
+voice:
+  voice_id: marin
+  model: gpt-realtime-mini
+  idle:
+    silence_hangup_enabled: true
+    away_seconds: 15
+    silence_grace_seconds: 30
+    max_call_duration_seconds: null
+    absolute_silence_seconds: null
+    unproductive_hangup_enabled: true
+    unproductive_turn_threshold: 5
+languages:
+  primary: en
+  allowed:
+  - en
+  - es
+greeting: Thank you for calling Hira Front Desk, how can I help you today?
+personality: 'You are a warm, professional receptionist. Be concise, confirm appointment
+
+  details carefully, and never book an appointment until the caller confirms
+
+  the exact time, phone number, and any email address they provide.
+
+  '
+hours:
+  monday:
+    open: 09:00
+    close: '17:00'
+  tuesday:
+    open: 09:00
+    close: '17:00'
+  wednesday:
+    open: 09:00
+    close: '17:00'
+  thursday:
+    open: 09:00
+    close: '17:00'
+  friday:
+    open: 09:00
+    close: '17:00'
+  saturday: null
+  sunday: null
+after_hours_message: The office is currently closed. Would you like to leave a message?
+routing:
+- name: Front Desk
+  number: null
+  description: General inquiries and scheduling
+faqs:
+- question: Can I book an appointment?
+  answer: Yes. I can check the calendar and help book an available appointment.
+receptionist:
+  description: HIRA's appointment desk can answer approved office questions, check
+    availability, book confirmed appointments, take messages, and transfer callers.
+  services:
+  - Appointment scheduling
+  - Calendar availability checks
+  - Message taking
+  escalation_rules:
+  - Transfer urgent, clinical, billing, or policy questions to the Front Desk.
+  - Take a message when an approved answer is unavailable.
+  prohibited_claims:
+  - Do not quote prices, clinical advice, insurance coverage, or guarantees.
+  - Do not promise availability until the calendar check and caller confirmation are
+    complete.
+messages:
+  channels:
+  - type: email
+    to:
+    - contact@hirarw.com
+    include_transcript: true
+    include_recording_link: true
+  - type: file
+    file_path: ./messages/
+email:
+  from: HIRA Front Desk <contact@hirarw.com>
+  sender:
+    type: gmail_oauth
+    gmail_oauth:
+      oauth_token_file: ./secrets/google-oauth.json
+  triggers:
+    on_message: true
+    on_call_end: false
+    on_booking: true
+calendar:
+  enabled: true
+  calendar_id: primary
+  auth:
+    type: oauth
+    oauth_token_file: ./secrets/google-oauth.json
+  appointment_duration_minutes: 30
+  buffer_minutes: 15
+  buffer_placement: after
+  booking_window_days: 30
+  earliest_booking_hours_ahead: 2
+appointment_changes:
+  enabled: true
+  admin_email_to:
+  - contact@hirarw.com
+  lookup_window_minutes: 45
+  token_ttl_seconds: 600
+  operation_retry_limit: 3
+  notification_retry_limit: 5
+reminders:
+  enabled: true
+  offset_days:
+  - 4
+  - 1
+  channels:
+  - email
+  - sms
+  post_appointment:
+    enabled: false
+    offset_days_after: 1
+    follow_ups:
+    - preset: thank_you_review
+      enabled: false
+      offset_days_after: 1
+      channels:
+      - email
+      - sms
+    - preset: thank_you_only
+      enabled: false
+      offset_days_after: 1
+      channels:
+      - email
+      - sms
+    - preset: book_next_appointment
+      enabled: false
+      offset_days_after: 30
+      channels:
+      - email
+      - sms
+  store_path: ./reminders.sqlite3
+  contacts_path: ./contacts.yaml
+  lookahead_days: 60
+  allow_retroactive_send: false
+  email_provider: configured
+  calendar_sources:
+  - type: google
+    calendar_id: primary
+sms:
+  provider:
+    type: twilio
+    messaging_service_sid_env: TWILIO_MESSAGING_SERVICE_SID
+telephony:
+  enabled: true
+  inbound_number: '+15614187024'
+  livekit_sip_uri: sip:3xboi56xn36.sip.livekit.cloud;transport=tcp
+  livekit_inbound_trunk_id: ST_XKUZxCEEnJxp
+  livekit_dispatch_rule_id: SDR_wrGFKrvviDJY
+retention:
+  recordings_days: 90
+  transcripts_days: 90
+  messages_days: 0

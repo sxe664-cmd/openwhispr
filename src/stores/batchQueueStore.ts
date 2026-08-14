@@ -2,9 +2,6 @@ import { create } from "zustand";
 import { transcribeFileWithSpeakers } from "../services/fileTranscription";
 import type { FileTranscriptionConfig, DiarizationSettings } from "../services/fileTranscription";
 import { DOWNLOAD_ERROR_KEYS, transcriptionErrorKey } from "../components/notes/shared";
-import { getSettings } from "./settingsStore";
-import { isTranscriptionContextAllowed } from "./policyRules";
-import { usePolicyStore } from "./policyStore";
 
 export type QueueItemStatus = "queued" | "downloading" | "transcribing" | "done" | "error";
 
@@ -90,7 +87,6 @@ export function removeQueueItem(id: string) {
 export function cancelBatch() {
   runId++;
   if (activeUploadRequestId) {
-    window.electronAPI.cancelUploadTranscription?.(activeUploadRequestId);
     activeUploadRequestId = null;
   }
   window.electronAPI.cancelUrlDownload();
@@ -118,7 +114,6 @@ export function processBatchQueue(
   diarization: DiarizationSettings
 ): void {
   if (useBatchQueueStore.getState().isProcessing) return;
-  if (!isTranscriptionContextAllowed(usePolicyStore.getState(), getSettings(), "upload")) return;
   const run = ++runId;
   useBatchQueueStore.setState({ isProcessing: true });
 

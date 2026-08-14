@@ -58,11 +58,7 @@ export async function resolveLocalNoteId(
   clientNoteId: string | null | undefined,
   lookup?: NoteByClientIdLookup
 ): Promise<number | null> {
-  const resolve =
-    lookup ??
-    (typeof window !== "undefined"
-      ? (window.electronAPI.getNoteByClientId as NoteByClientIdLookup | undefined)
-      : undefined);
+  const resolve = lookup;
   if (!clientNoteId || !resolve) return null;
   try {
     const note = await resolve(clientNoteId);
@@ -70,8 +66,7 @@ export async function resolveLocalNoteId(
       ? note.id
       : null;
   } catch {
-    // Cloud search results remain useful to the model even when their local
-    // rows cannot be resolved into clickable cards.
+    // A missing local row is not an error for a note tool lookup.
     return null;
   }
 }

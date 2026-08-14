@@ -8,7 +8,6 @@ function customConfig(baseUrl) {
     localTranscriptionProvider: "whisper",
     whisperModel: "base",
     parakeetModel: "parakeet-tdt-0.6b-v3",
-    isOpenWhisprCloud: false,
     getApiKey: () => "must-not-leak",
     cloudTranscriptionProvider: "custom",
     cloudTranscriptionBaseUrl: baseUrl,

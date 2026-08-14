@@ -1,43 +1,48 @@
-import { TeamsService } from "./TeamsService";
-import { SpacesService } from "./SpacesService";
-import { markSpacePurged, syncService, upsertCloudSpaces } from "./SyncService";
 import { loadSpaces, purgeSpace, updateSpaceMeta } from "../stores/noteStore";
-import { invalidateSpaceRoster } from "../lib/spaceRosterCache";
-import { createSpaceActions } from "./spaceActionsCore";
 
-// Single mutation path for spaces and their assigned teams: server call →
-// local SQLite mirror → store refresh. The orchestration lives in an
-// injectable core so ordering, rollback, and partial-failure behavior stay
-// testable without a renderer or cloud server.
-const actions = createSpaceActions({
-  teams: TeamsService,
-  spaces: SpacesService,
-  local: {
-    upsertSpaceFromCloud: async (space) =>
-      (await window.electronAPI.upsertSpaceFromCloud?.(space)) ?? null,
-    setSpaceSyncStatus: async (id, status) => {
-      await window.electronAPI.setSpaceSyncStatus?.(id, status);
-    },
-    updateSpaceMeta,
-    purgeSpace,
-    loadSpaces,
-  },
-  mirror: { upsertCloudSpaces },
-  sync: syncService,
-  markSpacePurged,
-  invalidateSpaceRoster,
-});
+/** Local-only space mutations. Team membership and cloud mirroring are gone. */
+export async function renameSpace(id: number, name: string, emoji?: string | null) {
+  return updateSpaceMeta(id, { name, emoji });
+}
 
-export const {
-  createSpace,
-  renameSpace,
-  deleteSpace,
-  assignTeamToSpace,
-  setSpaceTeamAccess,
-  unassignTeamFromSpace,
-  addTeamMembers,
-  removeTeamMember,
-  setTeamMemberRole,
-  leaveTeam,
-  deleteTeam,
-} = actions;
+export async function deleteSpace(id: number) {
+  const result = await purgeSpace(id);
+  if (result.success) await loadSpaces();
+  return result;
+}
+
+export async function createSpace(): Promise<never> {
+  throw new Error("Creating hosted spaces is unavailable in local-first mode");
+}
+
+export async function assignTeamToSpace(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function setSpaceTeamAccess(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function unassignTeamFromSpace(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function addTeamMembers(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function removeTeamMember(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function setTeamMemberRole(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function leaveTeam(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}
+
+export async function deleteTeam(): Promise<never> {
+  throw new Error("Team spaces are unavailable in local-first mode");
+}

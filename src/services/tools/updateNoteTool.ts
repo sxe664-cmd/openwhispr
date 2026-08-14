@@ -1,6 +1,5 @@
 import type { ToolDefinition, ToolResult } from "./ToolRegistry";
 import { resolveFolderId } from "./utils";
-import { syncService } from "../SyncService.js";
 
 export const updateNoteTool: ToolDefinition = {
   name: "update_note",
@@ -77,7 +76,6 @@ export const updateNoteTool: ToolDefinition = {
         return { success: false, data: null, displayText: "Failed to update note" };
       }
 
-      syncService.debouncedPush("note", id);
 
       const suffix = folderCreated ? ` (moved to new folder "${folderName}")` : "";
       return {

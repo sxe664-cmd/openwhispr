@@ -21,13 +21,12 @@
   <a href="https://openwhispr.com">Website</a> &middot;
   <a href="https://docs.openwhispr.com">Docs</a> &middot;
   <a href="https://github.com/OpenWhispr/openwhispr/releases/latest">Download</a> &middot;
-  <a href="https://docs.openwhispr.com/api/overview">API</a> &middot;
   <a href="https://github.com/OpenWhispr/openwhispr/blob/main/CHANGELOG.md">Changelog</a>
 </p>
 
 ---
 
-OpenWhispr turns your voice into text, notes, and actions from your desktop. Press a hotkey, speak, and your words appear at your cursor. Choose between fully private offline transcription with local speech-to-text engines like Whisper and NVIDIA Parakeet — where your audio never leaves your device — or cloud processing for speed. No data collection, no telemetry, fully open source.
+OpenWhispr turns your voice into text, notes, and actions from your desktop. Press a hotkey, speak, and your words appear at your cursor. Local speech-to-text engines like Whisper and NVIDIA Parakeet keep audio on your device; optional BYOK providers are available when you explicitly configure them. No data collection, no telemetry, fully open source.
 
 ## Download
 
@@ -48,12 +47,10 @@ OpenWhispr turns your voice into text, notes, and actions from your desktop. Pre
 - **Voice agent hotkey** — dedicated hotkey that sends your dictation straight to your AI agent as a command, no wake word needed and no cleanup pass; edit highlighted text in place, or opt in to sending a screenshot of your current screen as context
 - **Meeting transcription** — auto-detect Zoom, Teams, and FaceTime calls with live speaker diarization, voice fingerprinting, and Google, Microsoft, or Apple Calendar integration
 - **Local speaker diarization** — on-device speaker labelling with voice fingerprint recognition across meetings, no cloud required
-- **Notes** — create, organize, and search notes with folders, semantic search, cloud sync, and AI actions
-- **Team spaces & sharing** — free for signed-in users; share notes on the web with link, domain, or invite-only visibility, and collaborate in team spaces with roles, invitations, and server-enforced membership
+- **Notes** — create, organize, and search notes with folders, semantic search, local spaces, and AI actions
 - **Audio import** — transcribe existing audio and video: drag in files, batch-upload, or paste a YouTube/audio URL, with optional speaker detection
-- **Local or cloud — your choice** — all core features (transcription, AI reasoning, speaker diarization, semantic search) work with local models or cloud providers — including GPU-accelerated local Whisper on Metal, CUDA, and Vulkan (AMD/Intel)
-- **Enterprise controls** — enforce organization policy, company SSO and SCIM, and centrally managed Amazon Bedrock or Azure OpenAI access without distributing cloud keys
-- **Public API & MCP** — manage notes and transcriptions programmatically or connect your AI assistant via the [MCP server](https://docs.openwhispr.com/integrations/mcp)
+- **Local-first AI** — transcription, reasoning, speaker diarization, and semantic search work with local models, including GPU-accelerated local Whisper on Metal, CUDA, and Vulkan (AMD/Intel)
+- **Optional BYOK providers** — connect your own provider keys and endpoints when you choose
 
 ## Quick start
 
@@ -72,8 +69,6 @@ Visit **[docs.openwhispr.com](https://docs.openwhispr.com)** for:
 
 - [Getting started](https://docs.openwhispr.com/quickstart)
 - [Platform guides](https://docs.openwhispr.com/platform/macos) (macOS, Windows, Linux)
-- [API reference](https://docs.openwhispr.com/api/overview)
-- [MCP server setup](https://docs.openwhispr.com/integrations/mcp)
 - [Troubleshooting](https://docs.openwhispr.com/troubleshooting)
 
 Repo examples:
@@ -100,7 +95,7 @@ React 19, TypeScript, Tailwind CSS v4, Electron 41, better-sqlite3, whisper.cpp,
   </a>
 </p>
 
-<p align="center"><a href="https://console.neon.tech/app/?promo=openwhispr">Neon</a> is the serverless Postgres platform powering OpenWhispr Cloud.</p>
+<p align="center">OpenWhispr runs locally on your desktop. Optional BYOK providers and calendar integrations are opt-in.</p>
 
 ## Contributing
 
@@ -112,7 +107,7 @@ We welcome contributions. Fork the repo, create a feature branch, and open a pul
 
 ## Acknowledgments
 
-- **[OpenAI Whisper](https://github.com/openai/whisper)** — speech recognition model powering local and cloud transcription
+- **[OpenAI Whisper](https://github.com/openai/whisper)** — speech recognition model powering local transcription
 - **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** — high-performance C++ implementation for local processing
 - **[NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)** — fast multilingual ASR model
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)** — cross-platform ONNX runtime for Parakeet inference
@@ -121,4 +116,4 @@ We welcome contributions. Fork the repo, create a feature branch, and open a pul
 - **[Electron](https://www.electronjs.org/)** — cross-platform desktop framework
 - **[React](https://react.dev/)** — UI component library
 - **[shadcn/ui](https://ui.shadcn.com/)** — accessible components built on Radix primitives
-- **[Neon](https://console.neon.tech/app/?promo=openwhispr)** — serverless Postgres powering OpenWhispr Cloud
+- **Local-first storage** — notes, transcripts, models, and diarization data stay on your device

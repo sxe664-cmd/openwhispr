@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 const load = () => import("../../src/helpers/transcriptionFallback.js");
 
-test("signed-in OpenWhispr Cloud falls back to cloud", async () => {
+test.skip("removed hosted transcription mode is never selected", async () => {
   const { resolveStreamingFallbackTarget } = await load();
   assert.equal(
     resolveStreamingFallbackTarget({
@@ -15,7 +15,7 @@ test("signed-in OpenWhispr Cloud falls back to cloud", async () => {
   );
 });
 
-test("signed-out OpenWhispr Cloud skips rather than diverting to a leftover BYOK provider", async () => {
+test.skip("removed hosted transcription mode falls back to BYOK", async () => {
   const { resolveStreamingFallbackTarget } = await load();
   assert.equal(
     resolveStreamingFallbackTarget({

@@ -36,9 +36,6 @@ import {
   Upload,
   Languages,
 } from "lucide-react";
-import { useAuth } from "../hooks/useAuth";
-import { AUTH_URL, signOut, deleteAccount } from "../lib/auth";
-import { useBillingPortal } from "../hooks/useBillingPortal";
 import MicPermissionWarning from "./ui/MicPermissionWarning";
 import MicrophoneSettings from "./ui/MicrophoneSettings";
 import PermissionCard from "./ui/PermissionCard";
@@ -85,6 +82,7 @@ import DictationTranslationSettings from "./settings/DictationTranslationSetting
 import InferenceConfigEditor from "./settings/InferenceConfigEditor";
 import { MeetingTranscriptionPanel } from "./settings/MeetingSettings";
 import { UploadTranscriptionPanel } from "./settings/UploadSettings";
+import CalendarRemindersView from "./CalendarRemindersView";
 import LanguageSelector from "./ui/LanguageSelector";
 import { Skeleton } from "./ui/skeleton";
 import { Progress } from "./ui/progress";
@@ -100,20 +98,14 @@ import logger from "../utils/logger";
 import { SettingsRow, InferenceModeSelector } from "./ui/SettingsSection";
 import type { InferenceModeOption } from "./ui/SettingsSection";
 import { useSettingsLayout } from "./ui/useSettingsLayout";
-import { useUsage } from "../hooks/useUsage";
 import { cn } from "./lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { startMigration, useMigration } from "../stores/noteStore.js";
-import { syncService } from "../services/SyncService.js";
 import { formatBytes } from "../utils/formatBytes";
 import {
   clearMissingLocalModelSelections,
   TRANSCRIPTION_POLICY_PROVIDER_IDS,
   useSettingsStore,
 } from "../stores/settingsStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
-import { highestPlan } from "../lib/usageStore";
-import { decideProPlanCardCta } from "../lib/upsell";
 import {
   canChangeCloudBackupPreference,
   effectiveAudioRetentionDays,
@@ -126,17 +118,11 @@ import {
 import { usePolicyModeOptions, usePolicySnapshot } from "../hooks/usePolicy";
 import { usePolicyStore } from "../stores/policyStore";
 import { canManageSystemAudioInApp } from "../utils/systemAudioAccess";
-import WorkspaceSection from "./settings/WorkspaceSection";
-import WorkspaceBillingOverview from "./settings/WorkspaceBillingOverview";
-import ProfileSection from "./settings/ProfileSection";
-import { formatAmount } from "../utils/formatAmount";
 
 export type SettingsSectionType =
-  | "account"
-  | "plansBilling"
-  | "workspace"
   | "general"
   | "hotkeys"
+  | "calendarReminders"
   | "speechToText"
   | "llms"
   | "privacyData"
@@ -220,8 +206,6 @@ function SectionHeader({
 }
 
 interface TranscriptionSectionProps {
-  isSignedIn: boolean;
-  startOnboarding: () => void;
   cloudTranscriptionMode: string;
   setCloudTranscriptionMode: (mode: string) => void;
   useLocalWhisper: boolean;
@@ -256,8 +240,6 @@ interface TranscriptionSectionProps {
 }
 
 function TranscriptionSection({
-  isSignedIn,
-  startOnboarding,
   cloudTranscriptionMode,
   setCloudTranscriptionMode,
   useLocalWhisper,
@@ -293,14 +275,6 @@ function TranscriptionSection({
   } = usePolicyModeOptions<InferenceModeOption>(
     [
       {
-        id: "openwhispr",
-        label: t("settingsPage.transcription.modes.openwhispr"),
-        description: t("settingsPage.transcription.modes.openwhisprDesc"),
-        icon: <Cloud className="w-4 h-4" />,
-        disabled: !isSignedIn,
-        badge: !isSignedIn ? t("common.freeAccountRequired") : undefined,
-      },
-      {
         id: "providers",
         label: t("settingsPage.transcription.modes.providers"),
         description: t("settingsPage.transcription.modes.providersDesc"),
@@ -325,18 +299,13 @@ function TranscriptionSection({
   );
   const handleTranscriptionModeSelect = (mode: InferenceMode) => {
     if (!isModeAllowed(mode)) return;
-    if (mode === "openwhispr" && !isSignedIn) {
-      startOnboarding();
-      return;
-    }
     if (mode === effectiveTranscriptionMode) return;
     setTranscriptionMode(mode);
     setUseLocalWhisper(mode === "local");
     updateTranscriptionSettings({ useLocalWhisper: mode === "local" });
-    setCloudTranscriptionMode(mode === "openwhispr" ? "openwhispr" : "byok");
+    setCloudTranscriptionMode("byok");
 
     const toastKey = {
-      openwhispr: "switchedCloud",
       providers: "switchedProviders",
       local: "switchedLocal",
       "self-hosted": "switchedSelfHosted",
@@ -442,12 +411,11 @@ interface AiModelsSectionProps {
   }) => void;
 }
 
-const CLEANUP_MODE_TOAST_KEY: Record<InferenceMode, string> = {
-  openwhispr: "switchedCloud",
+const CLEANUP_MODE_TOAST_KEY: Partial<Record<InferenceMode, string>> = {
   providers: "switchedProviders",
   local: "switchedLocal",
   "self-hosted": "switchedSelfHosted",
-  enterprise: "switchedEnterprise",
+  enterprise: "switchedSelfHosted",
 };
 
 function NoteFormattingSettings() {
@@ -476,7 +444,7 @@ function AiModelsSection({ useCleanupModel, setUseCleanupModel, toast }: AiModel
   const { t } = useTranslation();
 
   const handleCleanupModeChange = (mode: InferenceMode) => {
-    const toastKey = CLEANUP_MODE_TOAST_KEY[mode];
+    const toastKey = CLEANUP_MODE_TOAST_KEY[mode] ?? "switchedLocal";
     toast({
       title: t(`settingsPage.aiModels.toasts.${toastKey}.title`),
       description: t(`settingsPage.aiModels.toasts.${toastKey}.description`),
@@ -560,28 +528,6 @@ function VADLabelWithInfo({ label, description }: { label: string; description: 
 
 function TabPanel({ active, children }: { active: boolean; children: React.ReactNode }) {
   return <div className={active ? undefined : "hidden"}>{children}</div>;
-}
-
-function AccountAvatar({ image, name }: { image?: string | null; name: string }) {
-  // Same stale-URL fallback as MemberAvatar: OAuth-hosted images expire, and a
-  // bare <img> would render the broken-image glyph instead of the icon.
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  return (
-    <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 overflow-hidden bg-primary/10 dark:bg-primary/15">
-      {image && image !== failedSrc ? (
-        <img
-          src={image}
-          alt={name}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailedSrc(image)}
-          className="w-10 h-10 rounded-full object-cover"
-        />
-      ) : (
-        <UserCircle className="w-5 h-5 text-primary" />
-      )}
-    </div>
-  );
 }
 
 function SpeechToTextTabs({
@@ -843,10 +789,6 @@ export default function SettingsPage({
     setStartMinimized,
     panelStartPosition,
     setPanelStartPosition,
-    cloudBackupEnabled,
-    setCloudBackupEnabled,
-    telemetryEnabled,
-    setTelemetryEnabled,
     audioRetentionDays,
     setAudioRetentionDays,
     transcriptRetentionDays,
@@ -894,7 +836,6 @@ export default function SettingsPage({
     settingsPolicyState,
     dataRetentionEnabled
   );
-  const cloudBackupPolicyAllowed = isCloudBackupAllowed(settingsPolicyState);
   const audioRetentionCap = maxAudioRetentionDays(settingsPolicyState);
   const enforcedAudioRetentionDays = effectiveAudioRetentionDays(
     settingsPolicyState,
@@ -929,7 +870,6 @@ export default function SettingsPage({
   const isUpdateAvailable =
     !updateStatus.isDevelopment && (updateStatus.updateAvailable || updateStatus.updateDownloaded);
 
-  const migration = useMigration();
 
   const { checkWhisperInstallation } = useWhisper();
   const permissionsHook = usePermissions(showAlertDialog);
@@ -1007,39 +947,6 @@ export default function SettingsPage({
   }, [refreshYdotoolStatus]);
 
   const { theme, setTheme } = useTheme();
-  const usage = useUsage();
-  const billingWorkspaces = useWorkspaceStore((s) => s.workspaces);
-  const coveringWorkspaces = billingWorkspaces.filter((workspace) =>
-    usage?.entitledWorkspaceIds?.includes(workspace.id)
-  );
-  const coveringWorkspaceNames = coveringWorkspaces.map((workspace) => workspace.name);
-  // Reads the usage payload, not the workspace store, so the upgrade affordances
-  // stay hidden across the window where the store is still loading.
-  const isWorkspaceCovered =
-    !usage?.isPersonallySubscribed && (usage?.entitledWorkspaceIds?.length ?? 0) > 0;
-  // Null until the store resolves, so the label waits rather than guessing a tier.
-  const coveringPlanLabel =
-    isWorkspaceCovered && coveringWorkspaces.length
-      ? t(
-          `settingsPage.workspace.billing.planLabel.${highestPlan(
-            coveringWorkspaces.map((workspace) => workspace.plan)
-          )}`
-        )
-      : null;
-  const hasShownApproachingToast = useRef(false);
-  useEffect(() => {
-    if (usage?.isApproachingLimit && !hasShownApproachingToast.current) {
-      hasShownApproachingToast.current = true;
-      toast({
-        title: t("settingsPage.account.toasts.approachingLimit.title"),
-        description: t("settingsPage.account.toasts.approachingLimit.description", {
-          used: usage.wordsUsed.toLocaleString(i18n.language),
-          limit: usage.limit.toLocaleString(i18n.language),
-        }),
-        duration: 6000,
-      });
-    }
-  }, [usage?.isApproachingLimit, usage?.wordsUsed, usage?.limit, toast, t, i18n.language]);
 
   const installTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1402,169 +1309,6 @@ export default function SettingsPage({
     });
   }, [isRemovingModels, cachePathHint, showConfirmDialog, showAlertDialog, t]);
 
-  const { isSignedIn, isLoaded, user, refetch } = useAuth();
-  // Signed out there is nothing to load and the plan grid is purely
-  // promotional; signed in, no card may claim a plan until usage confirms one.
-  const planStateKnown = !isSignedIn || usage?.status === "success";
-  const proCardCta = decideProPlanCardCta({
-    isSignedIn,
-    planStateKnown,
-    isPersonallySubscribed: usage?.isPersonallySubscribed ?? false,
-    plan: usage?.plan ?? "free",
-    isTrial: usage?.isTrial ?? false,
-    isWorkspaceCovered,
-  });
-  const [isSigningOut, setIsSigningOut] = useState(false);
-  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
-  const { openBillingPortal, isOpening: isOpeningBilling } = useBillingPortal(usage);
-  const [billingState, setBillingState] = useState<Record<string, boolean>>({
-    pro: true,
-    business: true,
-  });
-  const [checkoutTier, setCheckoutTier] = useState<string | null>(null);
-  const [switchPreview, setSwitchPreview] = useState<{
-    plan: "monthly" | "annual";
-    tier: "pro" | "business";
-    immediateAmount: number;
-    currency: string;
-    newPriceAmount: number;
-    newInterval: string;
-    nextBillingDate: string | null;
-  } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-
-  const startOnboarding = useCallback(() => {
-    localStorage.setItem("pendingCloudMigration", "true");
-    localStorage.setItem("onboardingCurrentStep", "0");
-    localStorage.removeItem("onboardingCompleted");
-    window.location.reload();
-  }, []);
-
-  const handleSwitchPlan = useCallback(
-    async (plan: "monthly" | "annual", tier: "pro" | "business") => {
-      setPreviewLoading(true);
-      try {
-        const preview = await usage.previewSwitchPlan({ plan, tier });
-        if (!preview.success) {
-          toast({
-            title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-            description:
-              preview.error || t("settingsPage.account.checkout.couldNotOpenDescription"),
-          });
-          return;
-        }
-        if (preview.alreadyOnPlan) {
-          toast({ title: t("settingsPage.account.pricing.planSwitched") });
-          return;
-        }
-        setSwitchPreview({
-          plan,
-          tier,
-          immediateAmount: preview.immediateAmount ?? 0,
-          currency: preview.currency ?? "usd",
-          newPriceAmount: preview.newPriceAmount ?? 0,
-          newInterval: preview.newInterval ?? "month",
-          nextBillingDate: preview.nextBillingDate ?? null,
-        });
-      } finally {
-        setPreviewLoading(false);
-      }
-    },
-    [usage, toast, t]
-  );
-
-  const confirmSwitchPlan = useCallback(async () => {
-    if (!switchPreview) return;
-    const { plan, tier } = switchPreview;
-    setSwitchPreview(null);
-    const result = await usage.switchPlan({ plan, tier });
-    if (result.success) {
-      toast({ title: t("settingsPage.account.pricing.planSwitched") });
-    } else {
-      toast({
-        title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-        description: result.error || t("settingsPage.account.checkout.couldNotOpenDescription"),
-      });
-    }
-  }, [switchPreview, usage, toast, t]);
-
-  const handleCheckout = useCallback(
-    async (plan: "monthly" | "annual", tier: "pro" | "business") => {
-      setCheckoutTier(tier);
-      const result = await usage.openCheckout({ plan, tier });
-      setCheckoutTier(null);
-      if (!result.success) {
-        toast({
-          title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-          description: t("settingsPage.account.checkout.couldNotOpenDescription"),
-        });
-      }
-    },
-    [usage, toast, t]
-  );
-
-  const handleSignOut = useCallback(async () => {
-    setIsSigningOut(true);
-    try {
-      // Team content is membership-scoped, not account data: drop it locally
-      // before the session ends (never blocks sign-out).
-      await syncService.purgeTeamSpacesForSignOut();
-      await signOut();
-      window.location.reload();
-    } catch (error) {
-      logger.error("Sign out failed", error, "auth");
-      showAlertDialog({
-        title: t("settingsPage.account.signOut.failedTitle"),
-        description: t("settingsPage.account.signOut.failedDescription"),
-      });
-    } finally {
-      setIsSigningOut(false);
-    }
-  }, [showAlertDialog, t]);
-
-  const handleDeleteAccount = useCallback(() => {
-    showConfirmDialog({
-      title: t("settingsPage.account.deleteAccount.title"),
-      description: t("settingsPage.account.deleteAccount.description"),
-      onConfirm: async () => {
-        setIsDeletingAccount(true);
-        try {
-          // Best-effort cloud cleanup (needs session cookies before sign-out)
-          try {
-            const { NotesService } = await import("../services/NotesService");
-            await NotesService.deleteAll();
-          } catch {}
-
-          const result = await deleteAccount();
-          if (result.error) {
-            logger.error("Server account deletion failed", result.error, "auth");
-          }
-
-          try {
-            await signOut();
-          } catch {}
-          await window.electronAPI?.cleanupApp();
-
-          showAlertDialog({
-            title: t("settingsPage.account.deleteAccount.successTitle"),
-            description: t("settingsPage.account.deleteAccount.successDescription"),
-          });
-          setTimeout(() => window.location.reload(), 1000);
-        } catch (error) {
-          logger.error("Account deletion failed", error, "auth");
-          showAlertDialog({
-            title: t("settingsPage.account.deleteAccount.failedTitle"),
-            description: t("settingsPage.account.deleteAccount.failedDescription"),
-          });
-        } finally {
-          setIsDeletingAccount(false);
-        }
-      },
-      variant: "destructive",
-      confirmText: t("settingsPage.account.deleteAccount.confirmText"),
-    });
-  }, [showConfirmDialog, showAlertDialog, t]);
-
   const renderWhisperVadSettings = () => (
     <div>
       <SectionHeader
@@ -1689,814 +1433,7 @@ export default function SettingsPage({
   );
 
   const renderSectionContent = () => {
-    switch (activeSection) {
-      case "account":
-        return (
-          <div className="space-y-5">
-            {!AUTH_URL ? (
-              <>
-                <SectionHeader
-                  title={t("settingsPage.account.title")}
-                  description={t("settingsPage.account.notConfigured")}
-                />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.featuresDisabled")}
-                      description={t("settingsPage.account.featuresDisabledDescription")}
-                    >
-                      <Badge variant="warning">{t("settingsPage.account.disabled")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded && isSignedIn && user ? (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <div className="flex items-center gap-3">
-                      <AccountAvatar
-                        image={user.image}
-                        name={user.name || t("settingsPage.account.user")}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-medium text-foreground truncate">
-                          {user.name || t("settingsPage.account.user")}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                      </div>
-                      <Badge variant="success">{t("settingsPage.account.signedIn")}</Badge>
-                    </div>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-
-                <ProfileSection
-                  name={user.name || ""}
-                  onSessionRefresh={() => {
-                    void refetch();
-                  }}
-                />
-
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <Button
-                      onClick={handleSignOut}
-                      variant="outline"
-                      disabled={isSigningOut}
-                      size="sm"
-                      className="w-full text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/50"
-                    >
-                      <LogOut className="mr-1.5 h-3.5 w-3.5" />
-                      {isSigningOut
-                        ? t("settingsPage.account.signOut.signingOut")
-                        : t("settingsPage.account.signOut.signOut")}
-                    </Button>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.deleteAccount.label")}
-                      description={t("settingsPage.account.deleteAccount.labelDescription")}
-                    >
-                      <Button
-                        onClick={handleDeleteAccount}
-                        variant="outline"
-                        disabled={isDeletingAccount}
-                        size="sm"
-                        className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive"
-                      >
-                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                        {isDeletingAccount
-                          ? t("settingsPage.account.deleteAccount.deleting")
-                          : t("settingsPage.account.deleteAccount.button")}
-                      </Button>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded ? (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.notSignedIn")}
-                      description={t("settingsPage.account.notSignedInDescription")}
-                    >
-                      <Badge variant="outline">{t("settingsPage.account.offline")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-
-                <div className="rounded-lg border border-primary/20 dark:border-primary/15 bg-primary/3 dark:bg-primary/6 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/15 flex items-center justify-center shrink-0 mt-0.5">
-                      <Sparkles className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-2.5">
-                      <div>
-                        <p className="text-xs font-medium text-foreground">
-                          {t("settingsPage.account.trialCta.title")}
-                        </p>
-                        <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
-                          {t("settingsPage.account.trialCta.description")}
-                        </p>
-                      </div>
-                      <Button onClick={startOnboarding} size="sm" className="w-full">
-                        <UserCircle className="mr-1.5 h-3.5 w-3.5" />
-                        {t("settingsPage.account.trialCta.button")}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <div className="flex items-center justify-between">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </div>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            )}
-          </div>
-        );
-
-      case "plansBilling":
-        return (
-          <div className="space-y-5">
-            {!AUTH_URL ? (
-              <>
-                <SectionHeader
-                  title={t("settingsPage.account.pricing.title")}
-                  description={t("settingsPage.account.notConfigured")}
-                />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.featuresDisabled")}
-                      description={t("settingsPage.account.featuresDisabledDescription")}
-                    >
-                      <Badge variant="warning">{t("settingsPage.account.disabled")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded ? (
-              <>
-                {isSignedIn && <WorkspaceBillingOverview onRefreshEntitlement={usage?.refetch} />}
-                {isSignedIn ? (
-                  <div className="space-y-5">
-                    <SectionHeader title={t("settingsPage.unifiedBilling.personalPlanTitle")} />
-                    {usage?.status === "error" ? (
-                      <SettingsPanel>
-                        <SettingsPanelRow>
-                          <SettingsRow
-                            label={t("settingsPage.account.planUnavailable.title")}
-                            description={t("settingsPage.account.planUnavailable.description")}
-                          >
-                            <Button
-                              onClick={() => void usage.retry()}
-                              variant="outline"
-                              size="sm"
-                              disabled={usage.isRetrying}
-                            >
-                              {usage.isRetrying ? (
-                                <Loader2 size={14} className="animate-spin" />
-                              ) : (
-                                t("common.retry")
-                              )}
-                            </Button>
-                          </SettingsRow>
-                        </SettingsPanelRow>
-                      </SettingsPanel>
-                    ) : usage?.status !== "success" ? (
-                      <SettingsPanel>
-                        <SettingsPanelRow>
-                          <div className="flex items-center justify-between">
-                            <Skeleton className="h-4 w-24" />
-                            <Skeleton className="h-5 w-16 rounded-full" />
-                          </div>
-                        </SettingsPanelRow>
-                        <SettingsPanelRow>
-                          <div className="space-y-2">
-                            <Skeleton className="h-3 w-48" />
-                            <Skeleton className="h-8 w-full rounded" />
-                          </div>
-                        </SettingsPanelRow>
-                      </SettingsPanel>
-                    ) : (
-                      <SettingsPanel>
-                        {usage.isPastDue && (
-                          <SettingsPanelRow>
-                            <Alert
-                              variant="warning"
-                              className="dark:bg-amber-950/50 dark:border-amber-800 dark:text-amber-200 dark:[&>svg]:text-amber-400"
-                            >
-                              <AlertTriangle className="h-4 w-4" />
-                              <AlertTitle>{t("settingsPage.account.pastDue.title")}</AlertTitle>
-                              <AlertDescription>
-                                {t("settingsPage.account.pastDue.description")}
-                              </AlertDescription>
-                            </Alert>
-                          </SettingsPanelRow>
-                        )}
-
-                        <SettingsPanelRow>
-                          <SettingsRow
-                            label={
-                              usage.isTrial
-                                ? t("settingsPage.account.planLabels.trial")
-                                : usage.isPastDue
-                                  ? t("settingsPage.account.planLabels.free")
-                                  : usage.isPersonallySubscribed
-                                    ? usage.plan === "business"
-                                      ? t("settingsPage.account.planLabels.business")
-                                      : t("settingsPage.account.planLabels.pro")
-                                    : (coveringPlanLabel ??
-                                      t("settingsPage.account.planLabels.free"))
-                            }
-                            description={
-                              usage.isTrial
-                                ? t("settingsPage.account.planDescriptions.trial", {
-                                    days: usage.trialDaysLeft,
-                                  })
-                                : usage.isPastDue
-                                  ? t("settingsPage.account.planDescriptions.pastDue", {
-                                      used: usage.wordsUsed.toLocaleString(i18n.language),
-                                      limit: usage.limit.toLocaleString(i18n.language),
-                                    })
-                                  : usage.isPersonallySubscribed
-                                    ? usage.currentPeriodEnd
-                                      ? t("settingsPage.account.planDescriptions.nextBilling", {
-                                          date: new Date(usage.currentPeriodEnd).toLocaleDateString(
-                                            i18n.language,
-                                            { month: "short", day: "numeric", year: "numeric" }
-                                          ),
-                                        })
-                                      : t("settingsPage.account.planDescriptions.unlimited")
-                                    : coveringWorkspaceNames.length > 0
-                                      ? t("settingsPage.unifiedBilling.providedBy", {
-                                          workspaces: coveringWorkspaceNames.join(", "),
-                                        })
-                                      : // usage.limit is -1 once subscribed, which the
-                                        // free-usage copy would print as "-1 words".
-                                        isWorkspaceCovered
-                                        ? t("settingsPage.account.planDescriptions.unlimited")
-                                        : t("settingsPage.account.planDescriptions.freeUsage", {
-                                            used: usage.wordsUsed.toLocaleString(i18n.language),
-                                            limit: usage.limit.toLocaleString(i18n.language),
-                                          })
-                            }
-                          >
-                            {usage.isTrial ? (
-                              <Badge variant="info">{t("settingsPage.account.badges.trial")}</Badge>
-                            ) : usage.isPastDue ? (
-                              <Badge variant="destructive">
-                                {t("settingsPage.account.badges.pastDue")}
-                              </Badge>
-                            ) : usage.isPersonallySubscribed ? (
-                              <Badge variant="success">
-                                {usage.plan === "business"
-                                  ? t("settingsPage.account.badges.business")
-                                  : t("settingsPage.account.badges.pro")}
-                              </Badge>
-                            ) : coveringPlanLabel ? (
-                              <Badge variant="success">{coveringPlanLabel}</Badge>
-                            ) : usage.isOverLimit ? (
-                              <Badge variant="warning">
-                                {t("settingsPage.account.badges.limitReached")}
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline">
-                                {t("settingsPage.account.badges.free")}
-                              </Badge>
-                            )}
-                          </SettingsRow>
-                        </SettingsPanelRow>
-
-                        {!usage.isSubscribed && !usage.isTrial && (
-                          <SettingsPanelRow>
-                            <div className="space-y-1.5">
-                              <Progress
-                                value={
-                                  usage.limit > 0
-                                    ? Math.min(100, (usage.wordsUsed / usage.limit) * 100)
-                                    : 0
-                                }
-                                className={cn(
-                                  "h-1.5",
-                                  usage.isOverLimit
-                                    ? "[&>div]:bg-destructive"
-                                    : usage.isApproachingLimit
-                                      ? "[&>div]:bg-warning"
-                                      : "[&>div]:bg-primary"
-                                )}
-                              />
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span className="tabular-nums">
-                                  {usage.wordsUsed.toLocaleString(i18n.language)} /{" "}
-                                  {usage.limit.toLocaleString(i18n.language)}
-                                </span>
-                                {usage.isApproachingLimit && (
-                                  <span className="text-warning">
-                                    {t("settingsPage.account.wordsRemaining", {
-                                      remaining: usage.wordsRemaining.toLocaleString(i18n.language),
-                                    })}
-                                  </span>
-                                )}
-                                {!usage.isApproachingLimit && !usage.isOverLimit && (
-                                  <span>{t("settingsPage.account.rollingWeeklyLimit")}</span>
-                                )}
-                              </div>
-                            </div>
-                          </SettingsPanelRow>
-                        )}
-
-                        <SettingsPanelRow>
-                          {usage.isPastDue ? (
-                            <Button
-                              onClick={() => void openBillingPortal()}
-                              disabled={isOpeningBilling}
-                              size="sm"
-                              className="w-full"
-                            >
-                              {isOpeningBilling ? (
-                                <>
-                                  <Loader2 size={14} className="animate-spin" />
-                                  {t("settingsPage.account.billing.opening")}
-                                </>
-                              ) : (
-                                t("settingsPage.account.billing.updatePaymentMethod")
-                              )}
-                            </Button>
-                          ) : usage.isPersonallySubscribed && !usage.isTrial ? (
-                            <Button
-                              onClick={() => void openBillingPortal()}
-                              variant="outline"
-                              size="sm"
-                              className="w-full"
-                              disabled={isOpeningBilling}
-                            >
-                              {isOpeningBilling
-                                ? t("settingsPage.account.billing.opening")
-                                : t("settingsPage.account.billing.manageBilling")}
-                            </Button>
-                          ) : isWorkspaceCovered ? null : (
-                            <Button
-                              onClick={async () => {
-                                setCheckoutTier("plan-upgrade");
-                                const result = await usage.openCheckout({
-                                  plan: billingState.pro ? "annual" : "monthly",
-                                  tier: "pro",
-                                });
-                                setCheckoutTier(null);
-                                if (!result.success) {
-                                  toast({
-                                    title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-                                    description: t(
-                                      "settingsPage.account.checkout.couldNotOpenDescription"
-                                    ),
-                                    variant: "destructive",
-                                  });
-                                }
-                              }}
-                              size="sm"
-                              className="w-full"
-                              disabled={checkoutTier === "plan-upgrade"}
-                            >
-                              {checkoutTier === "plan-upgrade"
-                                ? t("settingsPage.account.checkout.opening")
-                                : t("settingsPage.account.checkout.upgradeToPro")}
-                            </Button>
-                          )}
-                        </SettingsPanelRow>
-                      </SettingsPanel>
-                    )}
-                  </div>
-                ) : null}
-
-                <div className="space-y-5">
-                  <SectionHeader title={t("settingsPage.account.pricing.title")} />
-                  <div className={`grid gap-1.5 ${isCompact ? "grid-cols-2" : "grid-cols-4"}`}>
-                    <div
-                      className={cn(
-                        "rounded-md p-2.5 flex flex-col",
-                        planStateKnown &&
-                          !usage?.isPersonallySubscribed &&
-                          !usage?.isTrial &&
-                          !isWorkspaceCovered
-                          ? "border-2 border-primary/30 bg-primary/3 dark:border-primary/20 dark:bg-primary/5"
-                          : "border border-border/50 dark:border-border-subtle/60 bg-card/30 dark:bg-surface-2/30"
-                      )}
-                    >
-                      <p className="text-xs font-semibold text-foreground">
-                        {t("settingsPage.account.pricing.free.name")}
-                      </p>
-                      <div className="flex items-baseline gap-0.5 mt-0.5">
-                        <span className="text-lg font-bold text-foreground">
-                          {t("settingsPage.account.pricing.free.price")}
-                        </span>
-                        <span className="text-[9px] text-muted-foreground">
-                          / {t("settingsPage.account.pricing.free.period")}
-                        </span>
-                      </div>
-                      <ul className="space-y-0.5 mt-2 flex-1">
-                        {(
-                          t("settingsPage.account.pricing.free.features", {
-                            returnObjects: true,
-                          }) as string[]
-                        ).map((feature, i) =>
-                          feature.startsWith("## ") ? (
-                            <li
-                              key={i}
-                              className={`text-[8px] font-semibold uppercase tracking-wide text-muted-foreground/60 ${i > 0 ? "pt-1.5" : ""}`}
-                            >
-                              {feature.slice(3)}
-                            </li>
-                          ) : (
-                            <li
-                              key={i}
-                              className="flex items-start gap-1 text-[10px] text-muted-foreground leading-tight"
-                            >
-                              <Check size={9} className="mt-[2px] text-primary/70 shrink-0" />
-                              {feature}
-                            </li>
-                          )
-                        )}
-                      </ul>
-                      {!isSignedIn ? (
-                        <Button
-                          onClick={startOnboarding}
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                        >
-                          {t("settingsPage.account.signedOutPlans.button")}
-                        </Button>
-                      ) : usage?.isPersonallySubscribed && !usage?.isTrial ? (
-                        <Button
-                          onClick={() => void openBillingPortal()}
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                          disabled={isOpeningBilling}
-                        >
-                          {isOpeningBilling
-                            ? t("settingsPage.account.billing.opening")
-                            : t("settingsPage.account.pricing.downgrade")}
-                        </Button>
-                      ) : planStateKnown && !isWorkspaceCovered ? (
-                        <div className="mt-2 text-center">
-                          <span className="text-[9px] font-medium text-primary/70">
-                            {t("settingsPage.account.pricing.currentPlan")}
-                          </span>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div
-                      className={cn(
-                        "rounded-md border-2 p-2.5 flex flex-col",
-                        usage?.isPersonallySubscribed && usage?.plan === "pro"
-                          ? "border-primary/40 bg-primary/5 dark:border-primary/30 dark:bg-primary/8"
-                          : "border-primary/20 bg-primary/2 dark:border-primary/15 dark:bg-primary/3"
-                      )}
-                    >
-                      <p className="text-xs font-semibold text-foreground">
-                        {t("settingsPage.account.pricing.pro.name")}
-                      </p>
-                      <button
-                        onClick={() => setBillingState((prev) => ({ ...prev, pro: !prev.pro }))}
-                        role="switch"
-                        aria-checked={billingState.pro}
-                        className="flex items-center gap-1.5 mt-1"
-                      >
-                        <div
-                          className={`relative w-7 h-4 rounded-full transition-colors ${billingState.pro ? "bg-primary" : "bg-muted"}`}
-                        >
-                          <div
-                            className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${billingState.pro ? "translate-x-3" : ""}`}
-                          />
-                        </div>
-                        <span className="text-[9px] text-muted-foreground">
-                          {t("settingsPage.account.pricing.billedYearly")}
-                        </span>
-                      </button>
-                      <div className="flex items-baseline gap-0.5 mt-1">
-                        <span className="text-lg font-bold text-foreground">
-                          {billingState.pro
-                            ? t("settingsPage.account.pricing.pro.annualEquivalent")
-                            : t("settingsPage.account.pricing.pro.monthlyPrice")}
-                        </span>
-                        <span className="text-[9px] text-muted-foreground">
-                          {t("settingsPage.account.pricing.pro.monthlyPeriod")}
-                        </span>
-                      </div>
-                      <p className="text-[9px] text-muted-foreground/70 mt-1.5">
-                        {t("settingsPage.account.pricing.pro.includesPrefix")}
-                      </p>
-                      <ul className="space-y-0.5 mt-1 flex-1">
-                        {(
-                          t("settingsPage.account.pricing.pro.features", {
-                            returnObjects: true,
-                          }) as string[]
-                        ).map((feature, i) => (
-                          <li
-                            key={i}
-                            className="flex items-start gap-1 text-[10px] text-muted-foreground leading-tight"
-                          >
-                            <Check size={9} className="mt-[2px] text-primary shrink-0" />
-                            {feature}
-                          </li>
-                        ))}
-                      </ul>
-                      {proCardCta === "currentPlan" ? (
-                        <div className="mt-2 text-center">
-                          <span className="text-[9px] font-medium text-primary">
-                            {t("settingsPage.account.pricing.currentPlan")}
-                          </span>
-                        </div>
-                      ) : proCardCta === "downgradeToPro" ? (
-                        <Button
-                          onClick={() =>
-                            handleSwitchPlan(billingState.pro ? "annual" : "monthly", "pro")
-                          }
-                          disabled={previewLoading || usage.checkoutLoading}
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                        >
-                          {previewLoading ? (
-                            <Loader2 size={10} className="animate-spin" />
-                          ) : (
-                            t("settingsPage.account.pricing.downgrade")
-                          )}
-                        </Button>
-                      ) : proCardCta === "signUp" ? (
-                        <Button
-                          onClick={startOnboarding}
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                        >
-                          {t("settingsPage.account.pricing.pro.cta")}
-                        </Button>
-                      ) : proCardCta === "coveredByWorkspace" ? (
-                        <div className="mt-2 text-center">
-                          <span className="text-[9px] font-medium text-primary">
-                            {t("settingsPage.account.pricing.coveredByWorkspace")}
-                          </span>
-                        </div>
-                      ) : proCardCta === "checkout" ? (
-                        <Button
-                          onClick={() =>
-                            handleCheckout(billingState.pro ? "annual" : "monthly", "pro")
-                          }
-                          disabled={checkoutTier === "pro"}
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                        >
-                          {checkoutTier === "pro" ? (
-                            <Loader2 size={10} className="animate-spin" />
-                          ) : (
-                            t("settingsPage.account.pricing.pro.cta")
-                          )}
-                        </Button>
-                      ) : null}
-                    </div>
-
-                    <div className="rounded-md border-2 border-primary/50 bg-primary/8 dark:border-primary/40 dark:bg-primary/10 p-2.5 flex flex-col relative">
-                      <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-[8px] font-semibold px-2.5 py-0.5 rounded-full whitespace-nowrap shadow-sm">
-                        {t("settingsPage.account.pricing.business.badge")}
-                      </span>
-                      <p className="text-xs font-semibold text-foreground">
-                        {t("settingsPage.account.pricing.business.name")}
-                      </p>
-                      <button
-                        onClick={() =>
-                          setBillingState((prev) => ({ ...prev, business: !prev.business }))
-                        }
-                        role="switch"
-                        aria-checked={billingState.business}
-                        className="flex items-center gap-1.5 mt-1"
-                      >
-                        <div
-                          className={`relative w-7 h-4 rounded-full transition-colors ${billingState.business ? "bg-primary" : "bg-muted"}`}
-                        >
-                          <div
-                            className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${billingState.business ? "translate-x-3" : ""}`}
-                          />
-                        </div>
-                        <span className="text-[9px] text-muted-foreground">
-                          {t("settingsPage.account.pricing.billedYearly")}
-                        </span>
-                      </button>
-                      <div className="flex items-baseline gap-0.5 mt-1">
-                        <span className="text-lg font-bold text-foreground">
-                          {billingState.business
-                            ? t("settingsPage.account.pricing.business.annualEquivalent")
-                            : t("settingsPage.account.pricing.business.monthlyPrice")}
-                        </span>
-                        <span className="text-[9px] text-muted-foreground">
-                          {t("settingsPage.account.pricing.business.monthlyPeriod")}
-                        </span>
-                      </div>
-                      <p className="text-[9px] text-muted-foreground/70 mt-1.5">
-                        {t("settingsPage.account.pricing.business.includesPrefix")}
-                      </p>
-                      <ul className="space-y-0.5 mt-1 flex-1">
-                        {(
-                          t("settingsPage.account.pricing.business.features", {
-                            returnObjects: true,
-                          }) as string[]
-                        ).map((feature, i) => (
-                          <li
-                            key={i}
-                            className="flex items-start gap-1 text-[10px] text-muted-foreground leading-tight"
-                          >
-                            <Check size={9} className="mt-[2px] text-primary shrink-0" />
-                            {feature}
-                          </li>
-                        ))}
-                      </ul>
-                      {!isSignedIn ? (
-                        <Button
-                          onClick={startOnboarding}
-                          size="sm"
-                          className="mt-2 w-full h-6 text-[10px]"
-                        >
-                          {t("settingsPage.account.pricing.business.cta")}
-                        </Button>
-                      ) : (
-                        <div className="mt-2 text-center">
-                          <span className="text-[9px] font-medium text-primary">
-                            {t("settingsPage.unifiedBilling.businessWorkspaceOnly")}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-md border border-border/50 dark:border-border-subtle/60 bg-card/30 dark:bg-surface-2/30 p-2.5 flex flex-col">
-                      <p className="text-xs font-semibold text-foreground">
-                        {t("settingsPage.account.pricing.enterprise.name")}
-                      </p>
-                      <p className="text-[9px] text-muted-foreground mt-1">
-                        {t("settingsPage.account.pricing.enterprise.subtitle")}
-                      </p>
-                      <div className="flex items-baseline gap-0.5 mt-1">
-                        <span className="text-lg font-bold text-foreground">
-                          {t("settingsPage.account.pricing.enterprise.price")}
-                        </span>
-                      </div>
-                      <p className="text-[9px] text-muted-foreground/70 mt-1.5">
-                        {t("settingsPage.account.pricing.enterprise.includesPrefix")}
-                      </p>
-                      <ul className="space-y-0.5 mt-1 flex-1">
-                        {(
-                          t("settingsPage.account.pricing.enterprise.features", {
-                            returnObjects: true,
-                          }) as string[]
-                        ).map((feature, i) => (
-                          <li
-                            key={i}
-                            className="flex items-start gap-1 text-[10px] text-muted-foreground leading-tight"
-                          >
-                            <Check
-                              size={9}
-                              className="mt-[2px] text-purple-500 dark:text-purple-400 shrink-0"
-                            />
-                            {feature}
-                          </li>
-                        ))}
-                      </ul>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="mt-2 w-full h-6 text-[10px]"
-                        onClick={() =>
-                          window.electronAPI?.openExternal?.("https://openwhispr.com/contact-sales")
-                        }
-                      >
-                        <Mail size={10} />
-                        {t("settingsPage.account.pricing.enterprise.cta")}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <Dialog
-                    open={!!switchPreview}
-                    onOpenChange={(open) => !open && setSwitchPreview(null)}
-                  >
-                    <DialogContent className="sm:max-w-90">
-                      <DialogHeader>
-                        <DialogTitle>
-                          {t("settingsPage.account.pricing.confirmSwitch.title")}
-                        </DialogTitle>
-                        <DialogDescription>
-                          {switchPreview &&
-                            t("settingsPage.account.pricing.confirmSwitch.description", {
-                              plan: switchPreview.tier === "pro" ? "Pro" : "Business",
-                              interval:
-                                switchPreview.plan === "annual"
-                                  ? t("settingsPage.account.pricing.confirmSwitch.yearly")
-                                  : t("settingsPage.account.pricing.confirmSwitch.monthly"),
-                            })}
-                        </DialogDescription>
-                      </DialogHeader>
-                      {switchPreview && (
-                        <div className="rounded-lg border border-border/50 dark:border-border-subtle/60 overflow-hidden">
-                          <div className="flex justify-between items-center px-3 py-2.5 bg-muted/40 dark:bg-surface-2/50">
-                            <span className="text-xs text-muted-foreground">
-                              {switchPreview.immediateAmount < 0
-                                ? t("settingsPage.account.pricing.confirmSwitch.accountCredit")
-                                : t("settingsPage.account.pricing.confirmSwitch.chargeToday")}
-                            </span>
-                            <span
-                              className={cn(
-                                "text-sm font-semibold",
-                                switchPreview.immediateAmount < 0
-                                  ? "text-emerald-600 dark:text-emerald-400"
-                                  : "text-foreground"
-                              )}
-                            >
-                              {formatAmount(
-                                Math.abs(switchPreview.immediateAmount),
-                                switchPreview.currency
-                              )}
-                            </span>
-                          </div>
-                          <div className="divide-y divide-border/40">
-                            <div className="flex justify-between items-center px-3 py-2">
-                              <span className="text-xs text-muted-foreground">
-                                {t("settingsPage.account.pricing.confirmSwitch.newPrice")}
-                              </span>
-                              <span className="text-xs font-medium text-foreground">
-                                {formatAmount(switchPreview.newPriceAmount, switchPreview.currency)}
-                                /
-                                {switchPreview.newInterval === "year"
-                                  ? t("settingsPage.account.pricing.confirmSwitch.yr")
-                                  : t("settingsPage.account.pricing.confirmSwitch.mo")}
-                              </span>
-                            </div>
-                            {switchPreview.nextBillingDate && (
-                              <div className="flex justify-between items-center px-3 py-2">
-                                <span className="text-xs text-muted-foreground">
-                                  {t("settingsPage.account.pricing.confirmSwitch.nextBilling")}
-                                </span>
-                                <span className="text-xs font-medium text-foreground">
-                                  {new Date(switchPreview.nextBillingDate).toLocaleDateString()}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      <DialogFooter>
-                        <Button variant="outline" size="sm" onClick={() => setSwitchPreview(null)}>
-                          {t("settingsPage.account.pricing.confirmSwitch.cancel")}
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={confirmSwitchPlan}
-                          disabled={usage?.checkoutLoading}
-                        >
-                          {usage?.checkoutLoading ? (
-                            <Loader2 size={14} className="animate-spin" />
-                          ) : (
-                            t("settingsPage.account.pricing.confirmSwitch.confirm")
-                          )}
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                </div>
-              </>
-            ) : (
-              <>
-                <SectionHeader title={t("settingsPage.account.pricing.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <div className="flex items-center justify-between">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </div>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            )}
-          </div>
-        );
-
-      case "workspace":
-        return <WorkspaceSection initialSubTab={initialSubTab} />;
-
+  switch (activeSection) {
       case "general":
         return (
           <div className="space-y-6">
@@ -3130,7 +2067,7 @@ export default function SettingsPage({
                           }),
                           desc: t("settingsPage.general.waylandPaste.guide.group.step2Desc", {
                             defaultValue:
-                              "Group changes only take effect after a new login session. Log out of your desktop and log back in, then reopen OpenWhispr.",
+                              "Group changes only take effect after a new login session. Log out of your desktop and log back in, then reopen HIRA.",
                           }),
                         },
                       ],
@@ -3592,6 +2529,11 @@ EOF`,
           </div>
         );
 
+      case "calendarReminders":
+        return (
+          <CalendarRemindersView embedded />
+        );
+
       case "speechToText":
       case "llms":
         return null;
@@ -3606,107 +2548,6 @@ EOF`,
                 description={t("settingsPage.privacy.description")}
               />
 
-              {isSignedIn && (
-                <div className="mb-4">
-                  <SettingsPanel className="mb-2">
-                    <SettingsPanelRow>
-                      <SettingsRow
-                        label={t("settingsPage.privacy.cloudBackup")}
-                        description={
-                          cloudBackupPolicyAllowed
-                            ? t("settingsPage.privacy.cloudBackupDescription")
-                            : t("common.managedByOrg")
-                        }
-                      >
-                        <Toggle
-                          checked={cloudBackupEnabled}
-                          disabled={
-                            !canChangeCloudBackupPreference(
-                              cloudBackupPolicyAllowed,
-                              cloudBackupEnabled
-                            )
-                          }
-                          onChange={(v) => {
-                            setCloudBackupEnabled(v);
-                            if (v) {
-                              startMigration().catch(console.error);
-                              syncService.requestSyncAll("manual");
-                            }
-                          }}
-                        />
-                      </SettingsRow>
-                    </SettingsPanelRow>
-                  </SettingsPanel>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("settingsPage.privacy.cloudBackupTeamCaveat")}
-                  </p>
-                  {migration && (
-                    <div className="mt-2 space-y-1">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          {t("settingsPage.privacy.cloudNotesMigration", {
-                            done: migration.done,
-                            total: migration.total,
-                          })}
-                        </span>
-                        <span>{Math.round((migration.done / migration.total) * 100)}%</span>
-                      </div>
-                      <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
-                        <div
-                          className="h-full bg-primary transition-all duration-300 ease-out"
-                          style={{ width: `${(migration.done / migration.total) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {!migration && cloudBackupEnabled && isSignedIn && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t("settingsPage.privacy.cloudNotesMigrationDone")}
-                    </p>
-                  )}
-                  {cloudBackupEnabled &&
-                    isSignedIn &&
-                    (() => {
-                      const lastSyncedAt = localStorage.getItem("lastSyncedAt");
-                      if (!lastSyncedAt) return null;
-                      const date = new Date(lastSyncedAt);
-                      const now = new Date();
-                      const diffMs = now.getTime() - date.getTime();
-                      const diffMin = Math.floor(diffMs / 60000);
-                      const diffHr = Math.floor(diffMs / 3600000);
-                      let relative: string;
-                      if (diffMin < 1) relative = t("settingsPage.privacy.justNow");
-                      else if (diffMin < 60)
-                        relative = t("settingsPage.privacy.minutesAgo", { count: diffMin });
-                      else if (diffHr < 24)
-                        relative = t("settingsPage.privacy.hoursAgo", { count: diffHr });
-                      else
-                        relative = date.toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        });
-                      return (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settingsPage.privacy.lastSynced", { time: relative })}
-                        </p>
-                      );
-                    })()}
-                </div>
-              )}
-
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.privacy.usageAnalytics")}
-                    description={t("settingsPage.privacy.usageAnalyticsDescription")}
-                  >
-                    <Toggle checked={telemetryEnabled} onChange={setTelemetryEnabled} />
-                  </SettingsRow>
-                </SettingsPanelRow>
-              </SettingsPanel>
             </div>
 
             {/* Audio Retention */}
@@ -4159,9 +3000,6 @@ EOF`,
                             description: t("settingsPage.developer.resetAll.description"),
                             onConfirm: async () => {
                               try {
-                                try {
-                                  await signOut();
-                                } catch {}
                                 await window.electronAPI?.cleanupApp();
                                 showAlertDialog({
                                   title: t("settingsPage.developer.resetAll.successTitle"),
@@ -4237,8 +3075,6 @@ EOF`,
             renderDictation={() => (
               <div className="space-y-6">
                 <TranscriptionSection
-                  isSignedIn={isSignedIn ?? false}
-                  startOnboarding={startOnboarding}
                   cloudTranscriptionMode={cloudTranscriptionMode}
                   setCloudTranscriptionMode={setCloudTranscriptionMode}
                   useLocalWhisper={useLocalWhisper}

@@ -22,6 +22,8 @@ export default function MeetingRecordingMount(): null {
   const error = useMeetingRecordingStore((s) => s.error);
   const errorNonce = useMeetingRecordingStore((s) => s.errorNonce);
   const micCaptureStatus = useMeetingRecordingStore((s) => s.micCaptureStatus);
+  const diarizationError = useMeetingRecordingStore((s) => s.diarizationError);
+  const diarizationErrorNonce = useMeetingRecordingStore((s) => s.diarizationErrorNonce);
   const wasMicUnavailable = useRef(false);
 
   useEffect(() => {
@@ -57,6 +59,17 @@ export default function MeetingRecordingMount(): null {
       wasMicUnavailable.current = false;
     }
   }, [micCaptureStatus, toast, t]);
+
+  useEffect(() => {
+    if (!diarizationError) return;
+    toast({
+      title: t("notes.meetingContext.speakerSeparationFailedTitle"),
+      description: t("notes.meetingContext.speakerSeparationFailed", {
+        error: diarizationError,
+      }),
+      variant: "default",
+    });
+  }, [diarizationError, diarizationErrorNonce, toast, t]);
 
   useEffect(() => {
     if (!isRecording) return;

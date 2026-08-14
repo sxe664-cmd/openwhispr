@@ -103,11 +103,8 @@ class MenuManager {
           label: i18nMain.t("menu.help"),
           submenu: [
             {
-              label: i18nMain.t("menu.learnMore"),
-              click: async () => {
-                const { shell } = require("electron");
-                await shell.openExternal("https://github.com/OpenWhispr/openwhispr");
-              },
+              label: "Help? Pray!",
+              click: () => undefined,
             },
           ],
         },

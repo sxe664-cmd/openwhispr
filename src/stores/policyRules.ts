@@ -1,136 +1,85 @@
-import type { InferenceMode, ShareVisibility } from "../types/electron";
-import type { OrgPolicy, PolicyScope } from "../types/policy";
+import type { InferenceMode } from "../types/electron";
 import type { SettingsState } from "./settingsStore";
-import { compareAppVersions } from "../utils/version.ts";
 
+/** Local-first builds have no remote policy authority. */
 export type PolicyStatus = "idle" | "loading" | "managed" | "unmanaged" | "error";
+export type PolicyScope = "transcription" | "llm";
 
 export interface PolicyDecisionSnapshot {
   status: PolicyStatus;
-  policy: OrgPolicy | null;
+  policy: null;
   appVersion: string | null;
 }
 
-function managedPolicy(state: PolicyDecisionSnapshot): OrgPolicy | null {
-  return state.status === "managed" && state.policy ? state.policy : null;
+export function isPolicyActionAllowed(_state: PolicyDecisionSnapshot): boolean {
+  return true;
 }
 
-export function isPolicyActionAllowed(state: PolicyDecisionSnapshot): boolean {
-  if (state.status === "idle" || state.status === "unmanaged") return true;
-  if (state.status !== "managed" || !state.policy) return false;
-  if (!state.policy.minAppVersion) return true;
-  if (!state.appVersion) return false;
-  return compareAppVersions(state.appVersion, state.policy.minAppVersion) >= 0;
-}
-
-/** Whether the org's minimum app version blocks this build (drives the update banner). */
-export function isUpdateRequiredByOrg(state: PolicyDecisionSnapshot): boolean {
-  const minAppVersion = managedPolicy(state)?.minAppVersion;
-  if (!minAppVersion || !state.appVersion) return false;
-  return compareAppVersions(state.appVersion, minAppVersion) < 0;
-}
-
-/** Fail closed while unresolved, allow unmanaged users, else ask the policy. */
-function managedPolicyDecision(
-  state: PolicyDecisionSnapshot,
-  decide: (policy: OrgPolicy) => boolean
-): boolean {
-  if (!isPolicyActionAllowed(state)) return false;
-  const policy = managedPolicy(state);
-  return policy ? decide(policy) : true;
+export function isUpdateRequiredByOrg(_state: PolicyDecisionSnapshot): boolean {
+  return false;
 }
 
 export function effectiveLocalHistoryEnabled(
-  state: PolicyDecisionSnapshot,
+  _state: PolicyDecisionSnapshot,
   personalPreference: boolean
 ): boolean {
-  return lockedLocalHistoryValue(state) ?? personalPreference;
+  return personalPreference;
 }
 
-/** The org-forced local history value, or null when the user may choose. */
-export function lockedLocalHistoryValue(state: PolicyDecisionSnapshot): boolean | null {
-  const mode = managedPolicy(state)?.dataRetention.localHistoryMode;
-  if (mode === "always_on") return true;
-  if (mode === "always_off") return false;
+export function lockedLocalHistoryValue(_state: PolicyDecisionSnapshot): boolean | null {
   return null;
 }
 
 export function effectiveAudioRetentionDays(
-  state: PolicyDecisionSnapshot,
+  _state: PolicyDecisionSnapshot,
   personalPreference: number
 ): number {
-  if (personalPreference === 0) return personalPreference;
-  const maximumDays = maxAudioRetentionDays(state);
-  return maximumDays === null ? personalPreference : Math.min(personalPreference, maximumDays);
+  return personalPreference;
 }
 
-/** The org cap on audio retention days, or null when uncapped. */
-export function maxAudioRetentionDays(state: PolicyDecisionSnapshot): number | null {
-  return managedPolicy(state)?.dataRetention.audioRetentionMaxDays ?? null;
+export function maxAudioRetentionDays(_state: PolicyDecisionSnapshot): number | null {
+  return null;
 }
 
-/** Whether a transcription/LLM mode is allowed. Unmanaged users allow everything. */
 export function isModeAllowedByPolicy(
-  state: PolicyDecisionSnapshot,
-  scope: PolicyScope,
-  mode: InferenceMode
+  _state: PolicyDecisionSnapshot,
+  _scope: PolicyScope,
+  _mode: InferenceMode
 ): boolean {
-  return managedPolicyDecision(state, (policy) => policy[scope].allowedModes.includes(mode));
+  return true;
 }
 
-/** Whether a BYOK provider id is allowed for a scope. Unmanaged users allow everything. */
 export function isProviderAllowedByPolicy(
-  state: PolicyDecisionSnapshot,
-  scope: PolicyScope,
-  providerId: string
+  _state: PolicyDecisionSnapshot,
+  _scope: PolicyScope,
+  _providerId: string
 ): boolean {
-  return managedPolicyDecision(state, (policy) =>
-    policy[scope].allowedByokProviders.includes(providerId)
-  );
+  return true;
 }
 
-/** Whether an enterprise-cloud provider id is allowed. Unmanaged users allow everything. */
+/** Optional BYOK provider integrations are available without managed policy. */
 export function isEnterpriseProviderAllowed(
-  state: PolicyDecisionSnapshot,
-  providerId: string
+  _state: PolicyDecisionSnapshot,
+  _providerId: string
 ): boolean {
-  return managedPolicyDecision(state, (policy) =>
-    policy.llm.allowedEnterpriseProviders.includes(providerId)
-  );
+  return true;
 }
 
-/** Whether the AI agent (dictation, voice, and chat) is allowed. */
-export function isAgentAllowed(state: PolicyDecisionSnapshot): boolean {
-  return managedPolicyDecision(state, (policy) => policy.features.agentEnabled);
+export function isAgentAllowed(_state: PolicyDecisionSnapshot): boolean {
+  return true;
 }
 
-/** Whether the agent's web_search tool is allowed. */
-export function isWebSearchAllowed(state: PolicyDecisionSnapshot): boolean {
-  return managedPolicyDecision(state, (policy) => policy.features.webSearchEnabled);
+export function isWebSearchAllowed(_state: PolicyDecisionSnapshot): boolean {
+  return true;
 }
 
-/**
- * Whether the voice agent may attach screen context. Servers that predate the
- * field send none; absent means allowed.
- */
-export function isScreenContextAllowed(state: PolicyDecisionSnapshot): boolean {
-  return managedPolicyDecision(state, (policy) => policy.features.screenContextEnabled !== false);
+export function isScreenContextAllowed(_state: PolicyDecisionSnapshot): boolean {
+  return true;
 }
 
-/** Whether cloud backup/sync is allowed. */
-export function isCloudBackupAllowed(state: PolicyDecisionSnapshot): boolean {
-  return managedPolicyDecision(state, (policy) => policy.dataRetention.cloudBackupAllowed);
-}
-
-/**
- * True only when a policy transition newly grants cloud backup, so sync
- * resumes once per grant instead of on every periodic policy refresh.
- */
-export function cloudBackupResumed(
-  previous: PolicyDecisionSnapshot,
-  next: PolicyDecisionSnapshot
-): boolean {
-  return isCloudBackupAllowed(next) && !isCloudBackupAllowed(previous);
+/** Cloud backup is not part of the local-first client. */
+export function isCloudBackupAllowed(_state: PolicyDecisionSnapshot): boolean {
+  return false;
 }
 
 export interface LlmSelection {
@@ -144,71 +93,19 @@ export interface PolicySelectionCatalog {
   enterpriseProviders?: readonly string[];
 }
 
-/**
- * Derive the selection used for future work without mutating the user's saved
- * preference. Managed users keep an allowed selection; stale selections use
- * the first usable choice in the same order as the settings UI.
- */
 export function resolveEffectivePolicySelection(
-  state: PolicyDecisionSnapshot,
-  scope: PolicyScope,
+  _state: PolicyDecisionSnapshot,
+  _scope: PolicyScope,
   selection: LlmSelection,
-  catalog: PolicySelectionCatalog
-): LlmSelection | null {
-  if (state.status === "idle" || state.status === "unmanaged") return selection;
-  if (!isPolicyActionAllowed(state)) return null;
-  const policy = managedPolicy(state);
-  if (!policy) return null;
-
-  const allowedByokProviders = catalog.byokProviders.filter((provider) =>
-    policy[scope].allowedByokProviders.includes(provider)
-  );
-  const allowedEnterpriseProviders = (catalog.enterpriseProviders ?? []).filter((provider) =>
-    policy.llm.allowedEnterpriseProviders.includes(provider)
-  );
-  const modeIsUsable = (mode: InferenceMode): boolean => {
-    if (!catalog.modes.includes(mode)) return false;
-    if (!policy[scope].allowedModes.includes(mode)) return false;
-    if (mode === "providers") return allowedByokProviders.length > 0;
-    if (mode === "enterprise") return scope === "llm" && allowedEnterpriseProviders.length > 0;
-    return true;
-  };
-
-  const mode = modeIsUsable(selection.mode)
-    ? selection.mode
-    : (catalog.modes.find(modeIsUsable) ?? null);
-  if (!mode) return null;
-
-  if (mode === "providers") {
-    return {
-      mode,
-      provider: allowedByokProviders.includes(selection.provider)
-        ? selection.provider
-        : allowedByokProviders[0],
-    };
-  }
-  if (mode === "enterprise") {
-    return {
-      mode,
-      provider: allowedEnterpriseProviders.includes(selection.provider)
-        ? selection.provider
-        : allowedEnterpriseProviders[0],
-    };
-  }
-  return { mode, provider: selection.provider };
+  _catalog: PolicySelectionCatalog
+): LlmSelection {
+  return selection;
 }
 
 export function isLlmSelectionAllowed(
-  state: PolicyDecisionSnapshot,
-  selection: LlmSelection
+  _state: PolicyDecisionSnapshot,
+  _selection: LlmSelection
 ): boolean {
-  if (!isModeAllowedByPolicy(state, "llm", selection.mode)) return false;
-  if (selection.mode === "providers") {
-    return isProviderAllowedByPolicy(state, "llm", selection.provider);
-  }
-  if (selection.mode === "enterprise") {
-    return isEnterpriseProviderAllowed(state, selection.provider);
-  }
   return true;
 }
 
@@ -218,12 +115,10 @@ export interface TranscriptionSelection {
 }
 
 export function isTranscriptionSelectionAllowed(
-  state: PolicyDecisionSnapshot,
-  selection: TranscriptionSelection
+  _state: PolicyDecisionSnapshot,
+  _selection: TranscriptionSelection
 ): boolean {
-  if (!isModeAllowedByPolicy(state, "transcription", selection.mode)) return false;
-  if (selection.mode !== "providers") return true;
-  return isProviderAllowedByPolicy(state, "transcription", selection.provider);
+  return true;
 }
 
 export type TranscriptionPolicyContext = "dictation" | "meeting" | "upload";
@@ -251,174 +146,70 @@ export function getTranscriptionSelection(
 }
 
 export function isTranscriptionContextAllowed(
-  state: PolicyDecisionSnapshot,
-  settings: SettingsState,
-  context: TranscriptionPolicyContext
+  _state: PolicyDecisionSnapshot,
+  _settings: SettingsState,
+  _context: TranscriptionPolicyContext
 ): boolean {
-  return isTranscriptionSelectionAllowed(state, getTranscriptionSelection(settings, context));
-}
-
-/** Whether a note share visibility is allowed under the org's external-sharing mode. */
-export function isShareVisibilityAllowed(
-  state: PolicyDecisionSnapshot,
-  visibility: ShareVisibility
-): boolean {
-  return managedPolicyDecision(state, (policy) => {
-    const mode = policy.sharing.externalLinkSharing;
-    if (mode === "allowed") return true;
-    if (mode === "domain_only") return visibility === "private" || visibility === "domain";
-    return visibility === "private";
-  });
-}
-
-/** Hide policy-denied sharing choices while always retaining private recovery. */
-export function filterShareVisibilityOptions<T extends { id: ShareVisibility }>(
-  options: T[],
-  state: PolicyDecisionSnapshot
-): T[] {
-  return options.filter((option) => isShareVisibilityAllowed(state, option.id));
-}
-
-/** Whether this surface can offer at least one exposure-increasing share mode. */
-export function hasUsableExternalShareVisibility(
-  state: PolicyDecisionSnapshot,
-  canOfferDomainVisibility: boolean
-): boolean {
-  return (
-    isShareVisibilityAllowed(state, "link") ||
-    isShareVisibilityAllowed(state, "invited") ||
-    (canOfferDomainVisibility && isShareVisibilityAllowed(state, "domain"))
-  );
-}
-
-export type SharePolicyAction =
-  | "create-link"
-  | "copy-link"
-  | "rotate-link"
-  | "invite"
-  | "resend-invitation"
-  | "create-grant"
-  | "change-grant"
-  | "set-domain"
-  | "make-private"
-  | "revoke-invitation"
-  | "remove-grant";
-
-export function isShareActionAllowed(
-  state: PolicyDecisionSnapshot,
-  action: SharePolicyAction,
-  currentVisibility: ShareVisibility
-): boolean {
-  if (action === "make-private" || action === "revoke-invitation" || action === "remove-grant") {
-    return true;
-  }
-  if (action === "copy-link" || action === "rotate-link") {
-    // A domain or invited share has a link too, scoped by that visibility, so
-    // the current visibility governs rather than open link sharing.
-    return currentVisibility !== "private" && isShareVisibilityAllowed(state, currentVisibility);
-  }
-  if (action === "create-link") return isShareVisibilityAllowed(state, "link");
-  if (action === "set-domain") return isShareVisibilityAllowed(state, "domain");
-  return isShareVisibilityAllowed(state, "invited");
+  return true;
 }
 
 export function canChangeCloudBackupPreference(
-  policyAllowsBackup: boolean,
-  backupCurrentlyEnabled: boolean
+  _policyAllowsBackup: boolean,
+  _backupCurrentlyEnabled: boolean
 ): boolean {
-  return policyAllowsBackup || backupCurrentlyEnabled;
+  return false;
 }
 
 export function isControlPanelViewAllowed(
-  view: string,
-  agentAllowed: boolean,
-  policyActionsAllowed: boolean
+  _view: string,
+  _agentAllowed: boolean,
+  _policyActionsAllowed: boolean
 ): boolean {
-  if (view === "chat") return agentAllowed;
-  if (view === "upload") return policyActionsAllowed;
   return true;
 }
 
-function policyModeHasAvailableProvider(
-  policy: OrgPolicy,
-  scope: PolicyScope,
-  mode: InferenceMode,
-  providerCatalog?: Pick<PolicySelectionCatalog, "byokProviders" | "enterpriseProviders">
-): boolean {
-  if (mode === "providers") {
-    return providerCatalog
-      ? providerCatalog.byokProviders.some((provider) =>
-          policy[scope].allowedByokProviders.includes(provider)
-        )
-      : policy[scope].allowedByokProviders.length > 0;
-  }
-  if (mode === "enterprise") {
-    const selectableProviders = providerCatalog?.enterpriseProviders ?? ["bedrock"];
-    return (
-      scope === "llm" &&
-      selectableProviders.some((provider) =>
-        policy.llm.allowedEnterpriseProviders.includes(provider)
-      )
-    );
-  }
-  return true;
-}
-
-/** Hide policy-denied modes while preserving the complete unmanaged catalog. */
-export function filterModeOptionsByPolicy<T extends { id: InferenceMode }>(
+export function filterModeOptionsByPolicy<T>(
   options: T[],
-  scope: PolicyScope,
-  state: PolicyDecisionSnapshot,
-  providerCatalog?: Pick<PolicySelectionCatalog, "byokProviders" | "enterpriseProviders">
+  _scope: PolicyScope,
+  _state: PolicyDecisionSnapshot,
+  _providerCatalog?: {
+    byokProviders: readonly string[];
+    enterpriseProviders?: readonly string[];
+  }
 ): T[] {
-  if (state.status === "idle" || state.status === "unmanaged") return options;
-  if (state.status !== "managed" || !state.policy) return [];
-  return options.filter(
-    (option) =>
-      isModeAllowedByPolicy(state, scope, option.id) &&
-      policyModeHasAvailableProvider(state.policy, scope, option.id, providerCatalog)
-  );
+  return options;
 }
 
-/** Return the first usable allowed mode only when a managed selection must change. */
-export function reconcilePolicyModeSelection<T extends { id: InferenceMode; disabled?: boolean }>(
-  options: T[],
-  scope: PolicyScope,
-  state: PolicyDecisionSnapshot,
-  selectedMode: InferenceMode,
-  providerCatalog?: Pick<PolicySelectionCatalog, "byokProviders" | "enterpriseProviders">
+export function reconcilePolicyModeSelection<T>(
+  _options: T[],
+  _scope: PolicyScope,
+  _state: PolicyDecisionSnapshot,
+  _selectedMode: InferenceMode,
+  _providerCatalog?: {
+    byokProviders: readonly string[];
+    enterpriseProviders?: readonly string[];
+  }
 ): InferenceMode | null {
-  if (state.status !== "managed") return null;
-  const allowedOptions = filterModeOptionsByPolicy(options, scope, state, providerCatalog);
-  if (allowedOptions.some((option) => option.id === selectedMode && !option.disabled)) return null;
-  return allowedOptions.find((option) => !option.disabled)?.id ?? null;
+  return null;
 }
 
-export function filterByokProviderOptionsByPolicy<T extends { id: string }>(
+export function filterByokProviderOptionsByPolicy<T>(
   options: T[],
-  scope: PolicyScope,
-  state: PolicyDecisionSnapshot
+  _scope: PolicyScope,
+  _state: PolicyDecisionSnapshot
 ): T[] {
-  if (state.status === "idle" || state.status === "unmanaged") return options;
-  if (state.status !== "managed" || !state.policy) return [];
-  return options.filter((option) => isProviderAllowedByPolicy(state, scope, option.id));
+  return options;
 }
 
-export function filterEnterpriseProviderOptionsByPolicy<T extends { id: string }>(
+export function filterEnterpriseProviderOptionsByPolicy<T>(
   options: T[],
-  state: PolicyDecisionSnapshot
+  _state: PolicyDecisionSnapshot
 ): T[] {
-  if (state.status === "idle" || state.status === "unmanaged") return options;
-  if (state.status !== "managed" || !state.policy) return [];
-  return options.filter((option) => isEnterpriseProviderAllowed(state, option.id));
+  return options;
 }
 
-/** Preserve legacy fallback writes only when no managed policy can be overwritten. */
-export function shouldPersistProviderFallback(
-  state: PolicyDecisionSnapshot,
-  isSignedIn: boolean
-): boolean {
-  return state.status === "unmanaged" || (state.status === "idle" && !isSignedIn);
+export function shouldPersistProviderFallback(_state: PolicyDecisionSnapshot): boolean {
+  return true;
 }
 
 export function reconcileProviderSelection<T extends { id: string; disabled?: boolean }>(
@@ -457,12 +248,7 @@ export function reconcileCloudProviderSelection({
     }
     return { provider: selected.id, model: selected.models[0].id };
   }
-  if (hasCustomUrl && customAllowed) {
-    return { provider: "custom", model: selectedModel || "whisper-1" };
-  }
-  const first = allowedProviders[0];
-  if (!first) {
-    return customAllowed ? { provider: "custom", model: selectedModel || "whisper-1" } : null;
-  }
-  return { provider: first.id, model: first.models?.[0]?.id ?? "" };
+  if (hasCustomUrl && customAllowed) return null;
+  const fallback = allowedProviders[0];
+  return fallback ? { provider: fallback.id, model: fallback.models?.[0]?.id ?? "" } : null;
 }

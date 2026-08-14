@@ -5,13 +5,11 @@ import {
   Download,
   RefreshCw,
   Loader2,
-  AlertTriangle,
   Zap,
   ChevronLeft,
   PanelLeftOpen,
   PanelLeftClose,
 } from "lucide-react";
-import UpgradePrompt from "./UpgradePrompt";
 import PostMigrationOnboarding from "./PostMigrationOnboarding";
 import { ConfirmDialog, AlertDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
@@ -19,10 +17,6 @@ import { useHotkey } from "../hooks/useHotkey";
 import { useToast } from "./ui/useToast";
 import { useUpdater } from "../hooks/useUpdater";
 import { useSettings } from "../hooks/useSettings";
-import { useAuth } from "../hooks/useAuth";
-import { useJoinableWorkspaces } from "../hooks/useJoinableWorkspaces";
-import { useUsage } from "../hooks/useUsage";
-import { decideUpsell } from "../lib/upsell";
 import { useCollapsibleSidebar } from "../hooks/useCollapsibleSidebar";
 import {
   useTranscriptions,
@@ -33,14 +27,6 @@ import {
   clearTranscriptions as clearStore,
 } from "../stores/transcriptionStore";
 import { getSettings, useSettingsStore } from "../stores/settingsStore";
-import { usePolicyStore } from "../stores/policyStore";
-import {
-  isAgentAllowed,
-  isControlPanelViewAllowed,
-  isPolicyActionAllowed,
-  isTranscriptionContextAllowed,
-  isUpdateRequiredByOrg,
-} from "../stores/policyRules";
 import {
   useIsMeetingMode,
   useIsNarrowWindow,
@@ -65,15 +51,7 @@ import { executeTranslationChain, shouldRunTranslateStep } from "../helpers/tran
 import { applyChineseScript, resolveChineseScriptTarget } from "../utils/chineseScript";
 import HistoryView from "./HistoryView";
 import BackgroundActionToastListener from "./notes/BackgroundActionToastListener";
-import SpaceSyncToastListener from "./notes/SpaceSyncToastListener";
-import { syncService } from "../services/SyncService.js";
 import logger from "../utils/logger";
-import AcceptInvitationModal from "./AcceptInvitationModal";
-import JoinYourTeamModal from "./JoinYourTeamModal";
-import {
-  consumePendingInvitationToken,
-  clearPendingInvitationToken,
-} from "../utils/pendingInvitationToken";
 
 const platform = getCachedPlatform();
 
@@ -87,11 +65,11 @@ const toggleIconClass =
   "text-foreground/60 group-hover:text-foreground/75 dark:text-foreground/50 dark:group-hover:text-foreground/65 transition-colors duration-150";
 
 const SettingsModal = React.lazy(() => import("./SettingsModal"));
-const ReferralModal = React.lazy(() => import("./ReferralModal"));
 const PersonalNotesView = React.lazy(() => import("./notes/PersonalNotesView"));
 const DictionaryView = React.lazy(() => import("./DictionaryView"));
-const UploadAudioView = React.lazy(() => import("./notes/UploadAudioView"));
 const IntegrationsView = React.lazy(() => import("./IntegrationsView"));
+const CalendarRemindersView = React.lazy(() => import("./CalendarRemindersView"));
+const AIReceptionistView = React.lazy(() => import("./AIReceptionistView"));
 const ChatView = React.lazy(() => import("./chat/ChatView"));
 const CommandSearch = React.lazy(() => import("./CommandSearch"));
 
@@ -105,25 +83,15 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const history = useTranscriptions();
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(!!initialSettingsSection);
-  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
   const [showPostMigration, setShowPostMigration] = useState(false);
-  const [limitData, setLimitData] = useState<{ wordsUsed: number; limit: number } | null>(null);
-  const hasShownUpgradePrompt = useRef(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     initialSettingsSection
   );
   const [aiCTADismissed, setAiCTADismissed] = useState(
     () => localStorage.getItem("aiCTADismissed") === "true"
   );
-  const [showReferrals, setShowReferrals] = useState(false);
-  const [invitationToken, setInvitationToken] = useState<string | null>(null);
-  const [invitationNotesEntry, setInvitationNotesEntry] = useState<{
-    workspaceId: string;
-    teamIds: string[];
-  } | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showDiscarded = useShowDiscarded();
-  const [showCloudMigrationBanner, setShowCloudMigrationBanner] = useState(false);
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
   const {
     collapsed: sidebarCollapsed,
@@ -155,7 +123,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const [gpuBannerDismissed, setGpuBannerDismissed] = useState(
     () => localStorage.getItem("gpuBannerDismissedUnified") === "true"
   );
-  const cloudMigrationProcessed = useRef(false);
   const updateReadyToastShown = useRef(false);
   const updateErrorToastShown = useRef<Error | null>(null);
   const { hotkey } = useHotkey();
@@ -165,22 +132,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     localTranscriptionProvider,
     useCleanupModel,
     setUseLocalWhisper,
-    setCloudTranscriptionMode,
   } = useSettings();
-  const { isSignedIn, isLoaded: authLoaded, user } = useAuth();
-  // Suppressed while a deep-linked invitation is open so the two never stack.
-  const {
-    joinable,
-    dismiss: dismissJoinable,
-    markRequested,
-  } = useJoinableWorkspaces(user?.id ?? null, isSignedIn && !invitationToken);
-  const usage = useUsage();
-  const upsell = decideUpsell({
-    authLoaded,
-    isSignedIn,
-    hasPaidAccess: usage?.hasPaidAccess ?? null,
-    isPastDue: usage?.isPastDue ?? false,
-  });
 
   const {
     status: updateStatus,
@@ -191,16 +143,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     installUpdate,
     error: updateError,
   } = useUpdater();
-
-  const agentAllowedByPolicy = usePolicyStore(isAgentAllowed);
-  const policyActionsAllowed = usePolicyStore((state) => isPolicyActionAllowed(state));
-  useEffect(() => {
-    if (!isControlPanelViewAllowed(activeView, agentAllowedByPolicy, policyActionsAllowed)) {
-      setActiveView("home");
-    }
-  }, [activeView, agentAllowedByPolicy, policyActionsAllowed]);
-  const updateRequiredByOrg = usePolicyStore(isUpdateRequiredByOrg);
-  const policyMinAppVersion = usePolicyStore((s) => s.policy?.minAppVersion ?? null);
 
   const {
     confirmDialog,
@@ -315,77 +257,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
       updateErrorToastShown.current = null;
     }
   }, [updateError, toast, t]);
-
-  useEffect(() => {
-    const dispose = window.electronAPI?.onLimitReached?.(
-      (data: { wordsUsed: number; limit: number }) => {
-        if (!hasShownUpgradePrompt.current) {
-          hasShownUpgradePrompt.current = true;
-          setLimitData(data);
-          setShowUpgradePrompt(true);
-        } else {
-          toast({
-            title: t("controlPanel.limit.weeklyTitle"),
-            description: t("controlPanel.limit.weeklyDescription"),
-            duration: 5000,
-          });
-        }
-      }
-    );
-
-    return () => {
-      dispose?.();
-    };
-  }, [toast, t]);
-
-  useEffect(() => {
-    if (!usage?.isPastDue) return;
-    if (sessionStorage.getItem("pastDueNotified")) return;
-    sessionStorage.setItem("pastDueNotified", "true");
-    toast({
-      title: t("controlPanel.billing.pastDueTitle"),
-      description: t("controlPanel.billing.pastDueDescription"),
-      variant: "destructive",
-      duration: 8000,
-    });
-  }, [usage?.isPastDue, toast, t]);
-
-  useEffect(() => {
-    const unsubscribe = window.electronAPI?.onWorkspaceInvitationToken?.((token) => {
-      setInvitationToken(token);
-      // Consume the main-process stash so a handled push isn't re-pulled on a
-      // later remount.
-      void window.electronAPI?.getPendingInvitationToken?.();
-    });
-    window.electronAPI?.getPendingInvitationToken?.().then((token) => {
-      if (token) setInvitationToken(token);
-    });
-    return () => unsubscribe?.();
-  }, []);
-
-  useEffect(() => {
-    // Also when signed out (the modal's "Sign in to accept" handles auth);
-    // isSignedIn stays in the deps so a stored token resurfaces after sign-in.
-    if (!authLoaded) return;
-    const pending = consumePendingInvitationToken();
-    if (pending) {
-      setInvitationToken(pending);
-      clearPendingInvitationToken();
-    }
-  }, [authLoaded, isSignedIn]);
-
-  useEffect(() => {
-    if (!authLoaded || !isSignedIn || cloudMigrationProcessed.current) return;
-    const isPending = localStorage.getItem("pendingCloudMigration") === "true";
-    const alreadyShown = localStorage.getItem("cloudMigrationShown") === "true";
-    if (!isPending || alreadyShown) return;
-
-    cloudMigrationProcessed.current = true;
-    setUseLocalWhisper(false);
-    setCloudTranscriptionMode("openwhispr");
-    localStorage.removeItem("pendingCloudMigration");
-    setShowCloudMigrationBanner(true);
-  }, [authLoaded, isSignedIn, setUseLocalWhisper, setCloudTranscriptionMode]);
 
   useEffect(() => {
     if (platform === "darwin" || gpuBannerDismissed) return;
@@ -525,7 +396,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             const result = await window.electronAPI.deleteTranscription(id);
             if (result.success) {
               removeFromStore(id);
-              syncService.requestSyncAll("manual");
             } else {
               showAlertDialog({
                 title: t("controlPanel.history.couldNotDeleteTitle"),
@@ -554,7 +424,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
           const result = await window.electronAPI.clearTranscriptions();
           if (result.success) {
             clearStore();
-            syncService.requestSyncAll("manual");
             toast({
               title: t("controlPanel.history.clearAllSuccess"),
               variant: "success",
@@ -601,10 +470,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     async (id: number, options?: { isRecover?: boolean }) => {
       try {
         const s = getSettings();
-        if (!isTranscriptionContextAllowed(usePolicyStore.getState(), s, "dictation")) {
-          toast({ title: t("common.managedByOrg"), variant: "default" });
-          return;
-        }
         const result = await window.electronAPI.retryTranscription(id, {
           useLocalWhisper: s.useLocalWhisper,
           localTranscriptionProvider: s.localTranscriptionProvider,
@@ -891,13 +756,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
         onOk={() => {}}
       />
 
-      <UpgradePrompt
-        open={showUpgradePrompt}
-        onOpenChange={setShowUpgradePrompt}
-        wordsUsed={limitData?.wordsUsed}
-        limit={limitData?.limit}
-      />
-
       <PostMigrationOnboarding
         open={showPostMigration}
         onOpenChange={setShowPostMigration}
@@ -916,29 +774,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
           />
         </Suspense>
       )}
-
-      {showReferrals && (
-        <Suspense fallback={null}>
-          <ReferralModal open={showReferrals} onOpenChange={setShowReferrals} />
-        </Suspense>
-      )}
-
-      <AcceptInvitationModal
-        token={invitationToken}
-        onClose={() => setInvitationToken(null)}
-        onAccepted={(entry) => {
-          setInvitationNotesEntry(entry);
-          setActiveView("personal-notes");
-        }}
-      />
-
-      <JoinYourTeamModal
-        joinable={joinable}
-        domain={user?.email?.split("@")[1] ?? null}
-        onDismiss={dismissJoinable}
-        onRequested={markRequested}
-        onJoined={() => setActiveView("personal-notes")}
-      />
 
       {showSearch && (
         <Suspense fallback={null}>
@@ -991,18 +826,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               setSettingsSection(undefined);
               setShowSettings(true);
             }}
-            onOpenReferrals={() => setShowReferrals(true)}
-            onUpgrade={() => {
-              setSettingsSection("plansBilling");
-              setShowSettings(true);
-            }}
-            isOverLimit={usage?.isOverLimit ?? false}
-            userName={user?.name}
-            userEmail={user?.email}
-            userImage={user?.image}
-            isSignedIn={isSignedIn}
-            authLoaded={authLoaded}
-            upsell={upsell}
             updateAction={
               !updateStatus.isDevelopment &&
               (updateStatus.updateAvailable ||
@@ -1051,59 +874,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             )}
           </div>
           <div className="flex-1 overflow-y-auto pt-1">
-            {updateRequiredByOrg && (
-              <div className="max-w-3xl mx-auto w-full mb-3">
-                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-3">
-                  <div className="flex items-start gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                      <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-amber-900 dark:text-amber-200 mb-0.5">
-                        {t("controlPanel.updateRequiredByOrg.title")}
-                      </p>
-                      <p className="text-xs text-amber-700 dark:text-amber-300/80">
-                        {t("controlPanel.updateRequiredByOrg.description", {
-                          version: policyMinAppVersion,
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            {usage?.isPastDue && activeView === "home" && (
-              <div className="max-w-3xl mx-auto w-full mb-3">
-                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-3">
-                  <div className="flex items-start gap-3">
-                    <div className="shrink-0 w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                      <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-amber-900 dark:text-amber-200 mb-0.5">
-                        {t("controlPanel.billing.pastDueTitle")}
-                      </p>
-                      <p className="text-xs text-amber-700 dark:text-amber-300/80 mb-2">
-                        {t("controlPanel.billing.bannerDescription", {
-                          limit: usage.limit.toLocaleString(),
-                        })}
-                      </p>
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => {
-                          setSettingsSection("account");
-                          setShowSettings(true);
-                        }}
-                      >
-                        {t("controlPanel.billing.updatePayment")}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
             {(gpuAccelAvailable.transcription || gpuAccelAvailable.intelligence) &&
               activeView === "home" &&
               !gpuBannerDismissed && (
@@ -1154,8 +924,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 history={history}
                 isLoading={isLoading}
                 hotkey={hotkey}
-                showCloudMigrationBanner={showCloudMigrationBanner}
-                setShowCloudMigrationBanner={setShowCloudMigrationBanner}
                 aiCTADismissed={aiCTADismissed}
                 setAiCTADismissed={setAiCTADismissed}
                 useCleanupModel={useCleanupModel}
@@ -1172,7 +940,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 }}
               />
             )}
-            {activeView === "chat" && agentAllowedByPolicy && (
+            {activeView === "chat" && (
               <Suspense fallback={null}>
                 <ChatView />
               </Suspense>
@@ -1187,8 +955,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   onOpenSearch={() => setShowSearch(true)}
                   meetingRecordingRequest={meetingRecordingRequest}
                   onMeetingRecordingRequestHandled={handleMeetingRecordingRequestHandled}
-                  invitationEntry={invitationNotesEntry}
-                  onInvitationEntryHandled={() => setInvitationNotesEntry(null)}
                 />
               </Suspense>
             )}
@@ -1197,30 +963,19 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 <DictionaryView />
               </Suspense>
             )}
-            {activeView === "upload" && policyActionsAllowed && (
+            {activeView === "calendar-reminders" && (
               <Suspense fallback={null}>
-                <UploadAudioView
-                  onNoteCreated={(noteId, folderId) => {
-                    setActiveNoteId(noteId);
-                    if (folderId) setActiveFolderId(folderId);
-                    setActiveView("personal-notes");
-                  }}
-                  onOpenSettings={(section) => {
-                    setSettingsSection(section);
-                    setShowSettings(true);
-                  }}
-                />
+                <CalendarRemindersView />
+              </Suspense>
+            )}
+            {activeView === "ai-receptionist" && (
+              <Suspense fallback={null}>
+                <AIReceptionistView />
               </Suspense>
             )}
             {activeView === "integrations" && (
               <Suspense fallback={null}>
-                <IntegrationsView
-                  isPaid={usage?.hasPaidAccessOptimistic ?? false}
-                  onUpgrade={() => {
-                    setSettingsSection("plansBilling");
-                    setShowSettings(true);
-                  }}
-                />
+                <IntegrationsView />
               </Suspense>
             )}
           </div>
@@ -1249,7 +1004,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
         )}
       </div>
       <BackgroundActionToastListener />
-      <SpaceSyncToastListener />
     </div>
   );
 }

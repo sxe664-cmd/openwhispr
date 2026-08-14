@@ -6,6 +6,7 @@ import { Toggle } from "../ui/toggle";
 import { cn } from "../lib/utils";
 import { MAX_SPEAKER_COUNT } from "../../constants/speakerDetection.json";
 import type { TranscriptSegment } from "../../stores/meetingRecordingStore";
+import type { MeetingContext } from "../../types/electron";
 import {
   isTranscriptSpeakerLocked,
   resolveSegmentSpeakerName,
@@ -569,6 +570,7 @@ interface MeetingTranscriptChatProps {
   selectedSegmentIds?: Set<string>;
   isRecording?: boolean;
   isDiarizing?: boolean;
+  meetingContext?: MeetingContext;
   sessionDiarizationEnabled?: boolean;
   sessionExpectedCount?: number;
   userTouchedStepper?: boolean;
@@ -608,6 +610,7 @@ export function MeetingTranscriptChat({
   onDismissSuggestion,
   onAttachSpeakerEmail,
   onToggleSelect,
+  meetingContext = "telehealth",
 }: MeetingTranscriptChatProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -675,10 +678,17 @@ export function MeetingTranscriptChat({
     if (mapped) return mapped.trim().toLowerCase() === t("notes.speaker.you").toLowerCase();
     if (segment.speaker === "you") return true;
     if (segment.speakerName) return false;
+    if (meetingContext === "in_person") return false;
     return segment.source === "mic";
   };
 
   const others = Math.max(0, sessionExpectedCount - 1);
+  const expectedPeopleLabel =
+    meetingContext === "in_person"
+      ? t("notes.meetingContext.peopleInRoom", { count: sessionExpectedCount })
+      : others === 0
+        ? t("notes.speaker.pill.justYou")
+        : t("notes.speaker.pill.othersInCall", { count: others });
 
   return (
     <div className="h-full relative">
@@ -694,7 +704,11 @@ export function MeetingTranscriptChat({
           )}
           <span>
             {isDiarizing
-              ? t("notes.speaker.pill.finalizing")
+              ? t(
+                  meetingContext === "in_person"
+                    ? "notes.meetingContext.processing"
+                    : "notes.speaker.pill.finalizing"
+                )
               : sessionDiarizationEnabled
                 ? others === 1 && !(participants && participants.length > 0) && !userTouchedStepper
                   ? t("notes.speaker.pill.defaultingHint")
@@ -703,11 +717,7 @@ export function MeetingTranscriptChat({
           </span>
           {!isDiarizing && sessionDiarizationEnabled && (
             <>
-              <span className="text-muted-foreground">
-                {others === 0
-                  ? t("notes.speaker.pill.justYou")
-                  : t("notes.speaker.pill.othersInCall", { count: others })}
-              </span>
+              <span className="text-muted-foreground">{expectedPeopleLabel}</span>
               <div className="flex items-center gap-0.5 rounded-md border border-border bg-surface-2/60">
                 <button
                   onClick={() => onSetSessionExpectedCount?.(sessionExpectedCount - 1)}
@@ -778,7 +788,7 @@ export function MeetingTranscriptChat({
             !matchedProfile.email &&
             !!onAttachSpeakerEmail;
 
-          const labelElement = hasSpeaker && (
+          const labelElement = hasSpeaker ? (
             <div className="flex items-center gap-1">
               <SpeakerLabel
                 speakerId={segment.speaker!}
@@ -801,7 +811,11 @@ export function MeetingTranscriptChat({
                 />
               )}
             </div>
-          );
+          ) : meetingContext === "in_person" ? (
+            <span className="text-[11px] font-medium text-muted-foreground/60">
+              {t("notes.speaker.unassigned")}
+            </span>
+          ) : null;
 
           return (
             <div
@@ -858,7 +872,12 @@ export function MeetingTranscriptChat({
         })}
 
         {[
-          { text: micPartial, source: "mic" as const, speakerLabel: undefined },
+          {
+            text: micPartial,
+            source: "mic" as const,
+            speakerLabel:
+              meetingContext === "in_person" ? t("notes.speaker.unassigned") : undefined,
+          },
           {
             text: systemPartial,
             source: "system" as const,

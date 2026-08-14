@@ -3,13 +3,6 @@ const crypto = require("crypto");
 const { shell } = require("electron");
 
 const OAUTH_TIMEOUT_MS = 120000;
-const DEFAULT_DESKTOP_CALLBACK_URL = "https://openwhispr.com/auth/desktop-callback";
-
-const PROTOCOL_BY_CHANNEL = {
-  development: "openwhispr-dev",
-  staging: "openwhispr-staging",
-  production: "openwhispr",
-};
 
 // Thrown by handleCallback to control the error code shown on the hosted
 // desktop-callback page (defaults to "server_error").
@@ -20,27 +13,13 @@ class OAuthFlowError extends Error {
   }
 }
 
-function getDesktopCallbackUrl() {
-  return process.env.VITE_OPENWHISPR_OAUTH_CALLBACK_URL || DEFAULT_DESKTOP_CALLBACK_URL;
-}
-
-function getProtocol() {
-  const channel = process.env.OPENWHISPR_CHANNEL || "production";
-  return PROTOCOL_BY_CHANNEL[channel] || PROTOCOL_BY_CHANNEL.production;
-}
-
-function buildCallbackRedirect(params) {
-  const url = new URL(getDesktopCallbackUrl());
-  url.searchParams.set("protocol", getProtocol());
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
-  return url.toString();
-}
-
-function redirect(res, params) {
-  res.writeHead(302, { Location: buildCallbackRedirect(params) });
-  res.end();
+function finishPage(res, message, isError = false) {
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(
+    `<html><body style="font-family:sans-serif;padding:2rem"><h3 style="color:${
+      isError ? "#b91c1c" : "#166534"
+    }">${message}</h3><p>You can close this tab and return to OpenWhispr.</p></body></html>`
+  );
 }
 
 // Runs a PKCE auth-code flow through an ephemeral 127.0.0.1 server:
@@ -48,11 +27,9 @@ function redirect(res, params) {
 // - handleCallback(code, redirectUri, codeVerifier) → resolves the flow result;
 //   called once with a state-validated code, throws (OAuthFlowError for a
 //   specific callback-page code) to reject.
-// - errorParam — query-param name for the hosted desktop-callback page
+// - errorParam — query-param name used to classify provider errors
 //   (e.g. "gcal_error"); the success param is derived from the same prefix.
-function runOAuthLoopbackFlow({ buildAuthUrl, handleCallback, errorParam }) {
-  const connectedParam = errorParam.replace(/_error$/, "_connected");
-
+function runOAuthLoopbackFlow({ buildAuthUrl, handleCallback, errorParam: _errorParam }) {
   return new Promise((resolve, reject) => {
     const codeVerifier = crypto.randomBytes(32).toString("base64url").slice(0, 43);
     const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
@@ -66,7 +43,7 @@ function runOAuthLoopbackFlow({ buildAuthUrl, handleCallback, errorParam }) {
         const error = url.searchParams.get("error");
 
         if (error) {
-          redirect(res, { [errorParam]: error });
+          finishPage(res, `Calendar authorization failed: ${error}`, true);
           cleanup();
           reject(new Error(`OAuth error: ${error}`));
           return;
@@ -81,11 +58,11 @@ function runOAuthLoopbackFlow({ buildAuthUrl, handleCallback, errorParam }) {
         const redirectUri = `http://127.0.0.1:${server.address().port}`;
         const result = await handleCallback(code, redirectUri, codeVerifier);
 
-        redirect(res, { [connectedParam]: "true" });
+        finishPage(res, "Calendar connected.");
         cleanup();
         resolve(result);
       } catch (err) {
-        redirect(res, { [errorParam]: err.redirectCode || "server_error" });
+        finishPage(res, `Calendar authorization failed: ${err.redirectCode || "server_error"}`, true);
         cleanup();
         reject(err);
       }
@@ -101,6 +78,7 @@ function runOAuthLoopbackFlow({ buildAuthUrl, handleCallback, errorParam }) {
     server.listen(0, "127.0.0.1", () => {
       const port = server.address().port;
       const redirectUri = `http://127.0.0.1:${port}`;
+      // The provider redirects back to this temporary local listener.
       shell.openExternal(buildAuthUrl(redirectUri, state, codeChallenge));
     });
 

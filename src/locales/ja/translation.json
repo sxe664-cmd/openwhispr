@@ -4,7 +4,7 @@
       "sectionTitle": "言語",
       "sectionDescription": "インターフェースと文字起こしの言語を個別に設定",
       "uiLabel": "インターフェース言語",
-      "uiDescription": "OpenWhispr のインターフェースで使用する言語を選択",
+      "uiDescription": "HIRA のインターフェースで使用する言語を選択",
       "transcriptionLabel": "文字起こし言語",
       "transcriptionDescription": "より正確な文字起こしのために話す言語を選択",
       "chineseScriptLabel": "中国語の字体（ディクテーション）",
@@ -39,12 +39,12 @@
     },
     "openControlPanel": "コントロールパネルを開く",
     "hideControlPanel": "コントロールパネルを非表示",
-    "quit": "OpenWhispr を終了",
-    "tooltip": "OpenWhispr - 音声ディクテーション"
+    "quit": "HIRA を終了",
+    "tooltip": "HIRA - 音声ディクテーション"
   },
   "menu": {
-    "appLabel": "OpenWhispr",
-    "quit": "OpenWhispr を終了",
+    "appLabel": "HIRA",
+    "quit": "HIRA を終了",
     "speech": "スピーチ",
     "settings": "設定...",
     "help": "ヘルプ",
@@ -63,8 +63,8 @@
       "message": "ブラウザでリンクを開けませんでした:\n{{url}}\n\nエラー: {{error}}"
     },
     "loadFailure": {
-      "title": "OpenWhispr の読み込みに失敗しました",
-      "message": "OpenWhispr の UI を読み込めませんでした。",
+      "title": "HIRA の読み込みに失敗しました",
+      "message": "HIRA の UI を読み込めませんでした。",
       "detail": {
         "window": "ウィンドウ: {{windowName}}",
         "error": "エラー {{errorCode}}: {{errorDescription}}",
@@ -75,17 +75,17 @@
   },
   "startup": {
     "error": {
-      "title": "OpenWhispr 起動エラー",
+      "title": "HIRA 起動エラー",
       "message": "アプリケーションの起動に失敗しました:\n\n{{error}}\n\nこの問題を報告してください。"
     },
     "globeHotkey": {
       "title": "Globe ホットキーが使用できません",
-      "message": "OpenWhispr は Globe キーのホットキーを有効にできませんでした。",
+      "message": "HIRA は Globe キーのホットキーを有効にできませんでした。",
       "details": {
         "unknown": "Globe リスナーの起動中に不明なエラーが発生しました。",
         "fallback": "Globe キーのショートカットは無効のままになります。既存のキーボードショートカットは引き続き使用できます。",
         "devHint": "`npm run compile:globe` を実行し、アプリを再ビルドしてリスナーバイナリを再生成してください。",
-        "reinstallHint": "OpenWhispr を再インストールするか、問題が解決しない場合はサポートにお問い合わせください。"
+        "reinstallHint": "HIRA を再インストールするか、問題が解決しない場合はサポートにお問い合わせください。"
       }
     }
   },
@@ -110,21 +110,6 @@
     "screenRecording": "このプラットフォームでは画面収録の設定を利用できません。",
     "loginItems": "ログイン項目の設定はこのプラットフォームでは利用できません。"
   },
-  "upgradePrompt": {
-    "paymentFailed": "お支払いを処理できませんでした",
-    "weeklyLimit": "週間の利用上限に達しました",
-    "pastDueDescription": "現在は無料プランをご利用中です。ご安心ください、週 {{limit}} ワードまで引き続きご利用いただけます。\nお支払い方法を更新して、無制限の Pro に戻しましょう。",
-    "limitDescription": "{{used}} / {{limit}} ワード使用済み。\n文字起こしは保存・貼り付けされました。",
-    "updatePayment": "お支払い方法を更新",
-    "updatePaymentDescription": "無制限の Pro 文字起こしに戻りましょう。",
-    "upgradeToPro": "Pro にアップグレード",
-    "upgradeDescription": "月額 $8 から無制限の文字起こしを。",
-    "useApiKey": "自分の API キーを使用",
-    "useApiKeyDescription": "自分のキーで無制限に利用できます。",
-    "switchToLocal": "ローカルに切り替え",
-    "switchToLocalDescription": "オフライン文字起こし。制限なし。",
-    "rollingWeeklyLimit": "週間利用上限（ローリング）"
-  },
   "windowControls": {
     "minimize": "最小化",
     "maximize": "最大化",
@@ -147,7 +132,6 @@
     "recommended": "推奨",
     "active": "有効",
     "managedByOrg": "組織によって管理されています",
-    "freeAccountRequired": "無料アカウントが必要です",
     "comingSoon": "近日公開",
     "cloud": "クラウド",
     "local": "ローカル",
@@ -206,14 +190,14 @@
       "accessibilityTitle": "アクセシビリティ",
       "accessibilityDescription": "完成したテキストを、今使っているアプリ（ドキュメント、メール、チャット）に直接入力します。",
       "testAndGrant": "テストして許可",
-      "requiredForApp": "OpenWhispr の動作に必要です",
+      "requiredForApp": "HIRA の動作に必要です",
       "microphoneRequired": "マイクへのアクセスが必要です",
       "openSystemSettings": "システム設定を開く",
       "systemAudioTitle": "システムオーディオ",
       "systemAudioDescription": "会議レコーダーが通話の相手側の音声（会議、講義、ポッドキャストなど）を聴けるようにします。後から設定で有効にできます。",
       "optional": "任意",
       "recommended": "推奨",
-      "accessibilityTroubleshooting": "システム設定 → アクセシビリティで、OpenWhisprのスイッチをオフにしてから再度オンにしてください。OpenWhisprがリストに表示されていない場合は、+ をクリックしてアプリケーションフォルダから追加してください。それでも解決しませんか？support@openwhispr.com までメールでお問い合わせください。"
+      "accessibilityTroubleshooting": "システム設定 → アクセシビリティで、HIRAのスイッチをオフにしてから再度オンにしてください。HIRAがリストに表示されていない場合は、+ をクリックしてアプリケーションフォルダから追加してください。それでも解決しませんか？santiagoespinozac73@gmail.com までメールでお問い合わせください。"
     },
     "transcription": {
       "title": "文字起こし設定",
@@ -249,7 +233,7 @@
       "optionalNote": "任意です。設定からいつでも追加・変更できます。"
     },
     "connectivity": {
-      "title": "このネットワークから OpenWhispr Cloud に接続できません",
+      "title": "このネットワークから HIRA Cloud に接続できません",
       "body": "{{cause}} ローカルエンジンに切り替えるか、続行して後でもう一度お試しください。",
       "useLocal": "ローカルエンジンを使う",
       "continue": "そのまま続行"
@@ -290,36 +274,22 @@
     "meeting": {
       "title": "会議メモ",
       "description": "会議を記録して要約します",
-      "autoDetect": "OpenWhispr は会議中であることを自動的に検出し、メモの開始を提案します。あなたの操作なしに録音されることはありません。",
+      "autoDetect": "HIRA は会議中であることを自動的に検出し、メモの開始を提案します。あなたの操作なしに録音されることはありません。",
       "hotkeyLabel": "会議ホットキー",
       "hotkeyHint": "任意 — 会議中に押すとすぐにメモを開始できます。"
     },
     "finish": {
       "title": "準備完了",
-      "cloudDescription": "OpenWhispr Cloud をご利用中です — 高速・高精度、データ保持なし、毎週 2,000 ワード無料。すべてを端末内で処理したい場合は、設定からローカル処理に切り替えられます。",
       "localDescription": "ローカル処理またはご自身の API キーで設定済みです。音声の処理方法はいつでも設定から変更できます。",
       "cleanupNote": "AI によるテキスト整形は適切な初期設定で動作します。設定からいつでも調整できます。",
       "openSettings": "設定を開く",
-      "skipForNow": "今はスキップ",
-      "corti": {
-        "title": "臨床文字起こしが目的とのことですね",
-        "description": "私たちは Corti と提携しています — 最高精度の臨床グレード音声認識で、HIPAA に準拠しています。",
-        "createAccount": "Corti アカウントを作成",
-        "creditBadge": "50ドルの無料クレジット",
-        "regionHint": "音声の処理場所を選べます — 米国または EU。",
-        "llmHint": "言語モデル機能も Corti モデルで実行されます。",
-        "useCorti": "Corti を使う",
-        "skip": "後で",
-        "step1": "corti.ai でアカウントを作成",
-        "step2": "Corti コンソールで API 認証情報を作成",
-        "step3": "Client ID と Secret を下に貼り付け"
-      }
+      "skipForNow": "今はスキップ"
     }
   },
   "streaming": {
     "errors": {
       "cloudUnreachable": {
-        "title": "OpenWhispr Cloud に接続できません",
+        "title": "HIRA Cloud に接続できません",
         "generic": "ネットワーク要求に失敗しました。接続を確認してください。",
         "dnsBlocked": "DNS が the server を解決できません — 広告ブロッカーやフィルターに遮断されている可能性があります。",
         "refused": "接続が拒否されました — ファイアウォールまたは VPN の可能性があります。",
@@ -332,7 +302,7 @@
   "controlPanel": {
     "updateRequiredByOrg": {
       "title": "アップデートが必要です",
-      "description": "組織では OpenWhispr {{version}} 以降が必要です。アプリを更新してください。"
+      "description": "組織では HIRA {{version}} 以降が必要です。アプリを更新してください。"
     },
     "update": {
       "readyTitle": "アップデートの準備完了",
@@ -340,7 +310,7 @@
       "problemTitle": "アップデートで問題が発生しました",
       "problemDescription": "アップデートを完了できませんでした。後でもう一度お試しください。",
       "installTitle": "アップデートをインストール",
-      "installDescription": "OpenWhispr はアップデートを適用するために再起動します。作業中のデータは保存されます。",
+      "installDescription": "HIRA はアップデートを適用するために再起動します。作業中のデータは保存されます。",
       "couldNotInstallTitle": "アップデートをインストールできませんでした",
       "couldNotInstallDescription": "問題が発生しました。もう一度お試しください。",
       "couldNotDownloadTitle": "アップデートをダウンロードできませんでした",
@@ -355,13 +325,7 @@
     },
     "accessibilityMissing": {
       "title": "アクセシビリティの許可が必要です",
-      "description": "OpenWhispr が正しく動作するにはアクセシビリティの許可が必要です。以下で有効にしてください。"
-    },
-    "billing": {
-      "pastDueTitle": "お支払いを処理できませんでした",
-      "pastDueDescription": "ご安心ください。現在は無料プランをご利用中です。設定からお支払い方法を更新して Pro に戻しましょう。",
-      "bannerDescription": "現在は無料プランをご利用中です。週 {{limit}} ワードまで利用できます。お支払い方法を更新して Pro に戻しましょう。",
-      "updatePayment": "お支払い方法を更新"
+      "description": "HIRA が正しく動作するにはアクセシビリティの許可が必要です。以下で有効にしてください。"
     },
     "history": {
       "couldNotLoadTitle": "履歴を読み込めませんでした",
@@ -420,11 +384,6 @@
       },
       "retryTranslationMode": "翻訳モード"
     },
-    "cloudMigration": {
-      "title": "OpenWhispr Cloud へようこそ",
-      "description": "より高速で正確な文字起こしのために OpenWhispr Cloud に切り替えました。以前の設定は保存されています。設定からいつでも戻せます。",
-      "viewSettings": "設定を表示"
-    },
     "aiCta": {
       "title": "AI で文字起こしを向上させましょう",
       "description": "話しながら文法、句読点、書式を自動的に修正します。",
@@ -443,10 +402,8 @@
     "mode": {
       "cloud": "クラウド",
       "local": "ローカル",
-      "enterprise": "エンタープライズ",
       "localDescription": "デバイス上で動作。完全なプライバシー保護、オフライン対応。",
-      "cloudDescription": "API 経由の高度なモデル。高速・高機能、インターネット接続が必要。",
-      "enterpriseDescription": "組織のクラウド認証情報を使用します。"
+      "cloudDescription": "API 経由の高度なモデル。高速・高機能、インターネット接続が必要。"
     },
     "custom": {
       "endpointWithProtocol": "プロトコルを含む完全なベース URL を入力してください（例: https://server/v1）。",
@@ -600,7 +557,7 @@
         "description": "録音の一部を文字起こしできませんでした。"
       },
       "errorDescriptions": {
-        "sessionExpired": "OpenWhispr Cloud のセッションが利用できません。「設定」から再度サインインしてください。",
+        "sessionExpired": "HIRA Cloud のセッションが利用できません。「設定」から再度サインインしてください。",
         "offline": "オフラインです。クラウド文字起こしにはインターネット接続が必要です。",
         "dailyLimitReached": "本日の文字起こし上限に達しました。明日もう一度お試しいただくか、プランをアップグレードしてください。",
         "providerRateLimited": "文字起こしプロバイダーがリクエストを制限しました。しばらく待ってからもう一度お試しください。",
@@ -619,8 +576,8 @@
         "notAppliedTitle": "選択範囲の編集を適用できませんでした",
         "changed": "処理中に選択したテキストまたは対象アプリが変更されました。置換は行われていません。",
         "expired": "選択範囲の編集が期限切れになりました。テキストを選択し直して再試行してください。",
-        "pasteFailed": "OpenWhispr は編集を生成しましたが、選択したテキストを置換できませんでした。",
-        "unavailable": "OpenWhispr は選択したテキストを安全に読み取れませんでした。アクセシビリティまたは入力自動化の権限を確認してください。",
+        "pasteFailed": "HIRA は編集を生成しましたが、選択したテキストを置換できませんでした。",
+        "unavailable": "HIRA は選択したテキストを安全に読み取れませんでした。アクセシビリティまたは入力自動化の権限を確認してください。",
         "tooLarge": "選択範囲が大きすぎます。6,000文字以内を選択してください。",
         "reasoningFailed": "AI は選択範囲の編集を完了できませんでした。元のテキストは変更されていません。"
       }
@@ -695,7 +652,7 @@
       "micErrors": {
         "accessFailed": "マイクへのアクセスに失敗しました。もう一度お試しください。",
         "noMicrophones": "マイクが検出されませんでした。{{settingsPath}} でマイクを接続または選択してください。",
-        "permissionDenied": "権限が拒否されました。{{privacyPath}} を開いて OpenWhispr を許可してください。",
+        "permissionDenied": "権限が拒否されました。{{privacyPath}} を開いて HIRA を許可してください。",
         "couldNotStart": "選択したマイクを開始できませんでした。{{settingsPath}} で入力デバイスを選択してから、テストを再実行してください。",
         "noActiveInput": "アクティブな音声入力が見つかりませんでした。{{settingsPath}} でマイクを選択してください。",
         "unknown": "マイクへのアクセスに失敗しました: {{error}}。別の入力デバイスを選択してもう一度お試しください。",
@@ -724,8 +681,8 @@
         "accessibilityNeeded": "テキストの自動貼り付けを有効にするには、システム設定でアクセシビリティの権限を許可してください。",
         "windowsReady": "Windows では自動貼り付けに特別な権限は必要ありません。準備完了です！",
         "linuxReadyWithMethod": "{{method}} を使用した自動貼り付けが利用可能です。準備完了です！",
-        "waylandClipboardMode": "この Wayland セッションでは自動貼り付けが利用できません。OpenWhispr はテキストをクリップボードにコピーしますので、Ctrl+V で貼り付けてください。",
-        "optionalPasteTool": "自動貼り付けには {{tool}} をインストールしてください:\n\n{{installCmd}}{{waylandNote}}\n\nインストールしなくても OpenWhispr は使用できます。テキストがクリップボードにコピーされるので、Ctrl+V で貼り付けてください。"
+        "waylandClipboardMode": "この Wayland セッションでは自動貼り付けが利用できません。HIRA はテキストをクリップボードにコピーしますので、Ctrl+V で貼り付けてください。",
+        "optionalPasteTool": "自動貼り付けには {{tool}} をインストールしてください:\n\n{{installCmd}}{{waylandNote}}\n\nインストールしなくても HIRA は使用できます。テキストがクリップボードにコピーされるので、Ctrl+V で貼り付けてください。"
       },
       "alerts": {
         "accessibilityNeeded": "アクセシビリティの権限が必要です！システム設定で許可してください。"
@@ -738,7 +695,7 @@
         "defaultPasteTool": "xdotool",
         "xdotoolXwayland": "xdotool（XWayland アプリ）"
       },
-      "accessibilityTestText": "OpenWhispr アクセシビリティテスト",
+      "accessibilityTestText": "HIRA アクセシビリティテスト",
       "warning": {
         "messages": {
           "macos": "サウンド設定で入力デバイスを確認してください",
@@ -750,80 +707,57 @@
       }
     }
   },
-  "auth": {
-    "cloudNotConfigured": "クラウド未設定",
-    "sessionExpired": "セッションの有効期限が切れました",
-    "common": {
-      "back": "戻る",
-      "continue": "続ける",
-      "or": "または"
-    },
-    "emailStep": {
-      "continueWithEmail": "メールで続ける",
-      "continueWithoutAccount": "アカウントなしで続ける",
-      "emailPlaceholder": "you@example.com"
-    },
-    "errors": {
-      "accountExistsSignIn": "このメールアドレスのアカウントは既に存在します。サインインしてください。",
-      "accountNotFoundCreate": "このメールアドレスのアカウントが見つかりません。アカウントを作成してください。",
-      "authNotConfigured": "認証が設定されていません",
-      "createAccountFailed": "アカウントの作成に失敗しました",
-      "failedProviderSignIn": "{{provider}} でのサインインに失敗しました",
-      "failedUserCheck": "ユーザーアカウントの確認に失敗しました",
-      "generic": "問題が発生しました。もう一度お試しください。",
-      "invalidCredentials": "メールアドレスまたはパスワードが正しくありません",
-      "plusAliasUnsupported": "「+」を含むメールエイリアスはサポートされていません"
-    },
-    "getStarted": "はじめる",
-    "legal": {
-      "and": "および",
-      "prefix": "続行すると、",
-      "privacy": "プライバシーポリシー",
-      "suffix": "に同意したことになります",
-      "terms": "利用規約"
-    },
-    "passwordForm": {
-      "createAccount": "アカウントを作成",
-      "createAccountButton": "アカウントを作成",
-      "createAccountLink": "アカウントを作成",
-      "createPasswordPlaceholder": "パスワードを作成",
-      "creatingAccount": "アカウント作成中...",
-      "enterPasswordPlaceholder": "パスワードを入力",
-      "forgotPassword": "パスワードをお忘れですか？",
-      "fullNamePlaceholder": "氏名",
-      "haveAccount": "既にアカウントをお持ちですか？",
-      "newHere": "初めてですか？",
-      "passwordMinLength": "パスワードは 8 文字以上にしてください",
-      "signIn": "サインイン",
-      "signInLink": "サインイン",
-      "signingIn": "サインイン中...",
-      "welcomeBack": "おかえりなさい"
-    },
-    "signedIn": {
-      "ready": "準備完了",
-      "welcomeBack": "おかえりなさい",
-      "welcomeBackName": "おかえりなさい、{{name}} さん"
-    },
-    "sso": {
-      "continueWithSSO": "SSO でサインイン",
-      "emailRequired": "SSO を使用するには勤務先のメールアドレスを入力してください。",
-      "failed": "シングルサインオンに失敗しました。もう一度お試しください。",
-      "companySignInTitle": "会社のサインインを使用",
-      "requiredDescription": "{{domain}} では OpenWhispr に SSO が必須です。",
-      "availableDescription": "{{domain}} のアカウントは会社の SSO に対応しています。",
-      "useEmailInstead": "メールアドレスとパスワードを使用"
-    },
-    "social": {
-      "completeInBrowser": "ブラウザでサインインを完了してください",
-      "continueWithApple": "Apple で続ける",
-      "continueWithGoogle": "Google で続ける",
-      "continueWithMicrosoft": "Microsoft で続ける",
-      "protocolUnavailable": "ブラウザでのサインインを利用できません — システムの「既定のアプリ」設定で openwhispr:// プロトコルを再登録してください。"
-    },
-    "welcomeSubtitle": "音声でどこでもディクテーション",
-    "welcomeTitle": "OpenWhispr へようこそ"
-  },
   "cleanupPrompt": "クリーンアップ",
+  "encounters": {
+    "title": "Encounters",
+    "subtitle": "Your scheduled, active, and completed encounters",
+    "quickDictation": "Quick dictation",
+    "upcoming": "Upcoming encounters",
+    "noUpcoming": "No upcoming encounters",
+    "cached": "Cached",
+    "untitled": "Untitled encounter",
+    "attendees": "{{count}} attendees",
+    "refresh": "Refresh encounters",
+    "starting": "Starting…",
+    "joinAndStart": "Join & start",
+    "openCalendarAndStart": "Open calendar & start",
+    "startEncounter": "Start encounter",
+    "openNote": "Open note",
+    "startError": "Unable to start this encounter.",
+    "openError": "Unable to open this encounter note.",
+    "emptyTitle": "No encounters yet",
+    "emptyDescription": "Calendar encounters will appear here when they are available. Cached encounters remain usable offline.",
+    "inProgress": "In progress",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+    "noneInProgress": "No encounters in progress.",
+    "noneCompleted": "No completed encounters yet.",
+    "noneCancelled": "No cancelled encounters.",
+    "cachedDescription": "Showing cached encounters. Calendar updates are temporarily unavailable.",
+    "syncingDescription": "Updating calendar encounters. Cached encounters remain available.",
+    "lastSynced": "Last synced {{time}}.",
+    "status": {
+      "scheduled": "Scheduled",
+      "in_progress": "In progress",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    },
+    "context": {
+      "inPerson": "In person",
+      "telehealth": "Telehealth"
+    },
+    "patient": {
+      "linked": "患者フォルダーにリンク済み",
+      "review": "患者の確認が必要"
+    },
+    "sync": {
+      "ready": "Calendar ready",
+      "syncing": "Syncing",
+      "stale": "Cached",
+      "unavailable": "Offline",
+      "error": "Unavailable"
+    }
+  },
   "developerSection": {
     "currentLogFile": "現在のログファイル",
     "debugMode": {
@@ -890,41 +824,10 @@
     }
   },
   "dictionarySuffix": "辞書サフィックス",
-  "emailVerification": {
-    "checkEmailDescription": "確認リンクを送信しました",
-    "checkEmailTitle": "メールを確認してください",
-    "errors": {
-      "resendFailed": "メールを再送信できませんでした。もう一度お試しください。",
-      "serverUnreachable": "サーバーに接続できませんでした。接続を確認してもう一度お試しください。"
-    },
-    "resendButton": "確認メールを再送信",
-    "resendIn": "{{seconds}} 秒後に再送信可能",
-    "verifiedDescription": "アカウントの設定が完了しました。",
-    "verifiedTitle": "メール確認完了",
-    "waiting": "確認を待っています...",
-    "backToSignIn": "サインインに戻る"
-  },
   "errorBoundary": {
     "description": "予期しないエラーが発生しました。再読み込みしてもう一度お試しください。",
     "reload": "再読み込み",
     "title": "問題が発生しました"
-  },
-  "forgotPassword": {
-    "back": "戻る",
-    "backToSignIn": "サインインに戻る",
-    "emailPlaceholder": "メールアドレスを入力",
-    "goBack": "戻る",
-    "notConfigured": "認証がまだ設定されていません。",
-    "sendResetLink": "リセットリンクを送信",
-    "sending": "送信中...",
-    "subtitle": "メールアドレスを入力するとリセットリンクを送信します",
-    "success": {
-      "description": "パスワードリセットリンクを送信しました",
-      "help": "メールが届きませんか？迷惑メールフォルダを確認するか、もう一度お試しください。",
-      "title": "メールを確認してください",
-      "tryAnother": "別のメールアドレスで試す"
-    },
-    "title": "パスワードをリセット"
   },
   "actionPrompt": "アクションプロンプト",
   "hotkeyGuidance": {
@@ -1041,10 +944,10 @@
     "recheckChecking": "確認中...",
     "title": "自動貼り付け",
     "usingMethodPrefix": "使用中:",
-    "waylandClipboardDescription": "この Wayland セッションでは自動貼り付けが利用できません。OpenWhispr はテキストをクリップボードにコピーしますので、Ctrl+V で手動で貼り付けてください。",
+    "waylandClipboardDescription": "この Wayland セッションでは自動貼り付けが利用できません。HIRA はテキストをクリップボードにコピーしますので、Ctrl+V で手動で貼り付けてください。",
     "waylandClipboardTitle": "Wayland でのクリップボードモード",
     "windowsReady": "Windows は自動貼り付けに標準対応しています。設定は不要です！",
-    "withoutToolPrefix": "このツールがない場合、OpenWhispr はテキストをクリップボードにコピーします。Ctrl+V で手動で貼り付けてください。",
+    "withoutToolPrefix": "このツールがない場合、HIRA はテキストをクリップボードにコピーします。Ctrl+V で手動で貼り付けてください。",
     "xwaylandAppsOnly": "自動貼り付けは XWayland アプリのみで動作します"
   },
   "promptStudio": {
@@ -1094,7 +997,6 @@
       "none": "なし",
       "outputLabel": "出力",
       "processing": "処理中...",
-      "openwhisprCloud": "OpenWhispr Cloud",
       "providerLabel": "プロバイダー",
       "run": "テスト実行",
       "customEndpoint": "カスタムエンドポイント",
@@ -1115,20 +1017,11 @@
   "settingsModal": {
     "managedByOrg": "一部の設定は組織によって管理されています。",
     "groups": {
-      "account": "アカウント",
       "app": "アプリ",
       "aiModels": "AIモデル",
       "system": "システム"
     },
     "sections": {
-      "account": {
-        "description": "プロフィールとサインイン",
-        "label": "アカウント"
-      },
-      "plansBilling": {
-        "description": "プラン、使用状況、請求",
-        "label": "プランと請求"
-      },
       "general": {
         "description": "外観、サウンド、起動設定",
         "label": "環境設定"
@@ -1146,263 +1039,17 @@
         "label": "言語モデル"
       },
       "privacyData": {
-        "description": "プライバシー、権限、分析",
+        "description": "プライバシーと権限",
         "label": "プライバシーとデータ"
       },
       "system": {
         "description": "更新、ストレージ、開発者ツール",
         "label": "システム"
-      },
-      "workspace": {
-        "description": "メンバー、チームスペース、API キー",
-        "label": "ワークスペース"
       }
     },
     "title": "設定"
   },
   "settingsPage": {
-    "unifiedBilling": {
-      "workspaceTitle": "ワークスペースの請求",
-      "workspaceDescription": "各ワークスペースには独自のプラン、シート、請求管理者があります。",
-      "billableSeat": "あなたのシートは課金対象です",
-      "nonBillableSeat": "管理者専用アクセス · 有料シートなし",
-      "managedBy": "請求は {{owner}} が管理しています。",
-      "addSeat": "シートを追加",
-      "seatUpdated_one": "ワークスペースの容量を {{count}} シートに更新しました",
-      "seatUpdated_other": "ワークスペースの容量を {{count}} シートに更新しました",
-      "seatUpdateFailed": "ワークスペースのシートを更新できませんでした",
-      "businessWorkspaceOnly": "ワークスペースで利用可能",
-      "personalPlanTitle": "個人プラン",
-      "providedBy": "個人プラン: Free · 有料アクセスは {{workspaces}} から提供",
-      "confirmSeats": {
-        "title": "ワークスペースのシートを追加しますか？",
-        "description_one": "{{workspace}} を {{count}} シートに拡張します。Stripe が日割りで請求します。",
-        "description_other": "{{workspace}} を {{count}} シートに拡張します。Stripe が日割りで請求します。",
-        "newCapacity": "新しい容量",
-        "chargeToday": "本日の請求額",
-        "confirm": "シートを追加"
-      }
-    },
-    "account": {
-      "badges": {
-        "free": "無料",
-        "limitReached": "上限到達",
-        "pastDue": "支払い遅延",
-        "pro": "Pro",
-        "business": "Business",
-        "trial": "トライアル"
-      },
-      "billing": {
-        "couldNotOpenDescription": "請求ページを開く際に問題が発生しました。もう一度お試しください。",
-        "couldNotOpenTitle": "請求を開けませんでした",
-        "manageBilling": "請求を管理",
-        "opening": "開いています...",
-        "updatePaymentMethod": "お支払い方法を更新",
-        "contactOwnerTitle": "ワークスペースのオーナーにご連絡ください",
-        "contactOwnerDescription": "このワークスペースの請求を更新できるのはオーナーのみです。"
-      },
-      "checkout": {
-        "couldNotOpenDescription": "購入ページを開く際に問題が発生しました。もう一度お試しください。",
-        "couldNotOpenTitle": "購入ページを開けませんでした",
-        "opening": "開いています...",
-        "upgradeToPro": "Pro にアップグレード"
-      },
-      "disabled": "無効",
-      "featuresDisabled": "アカウント機能が無効です",
-      "featuresDisabledDescription": ".env ファイルで VITE_AUTH_URL を設定してアカウント機能を有効にしてください。",
-      "notConfigured": "認証が設定されていません",
-      "notSignedIn": "サインインしていません",
-      "notSignedInDescription": "アカウントを作成してプレミアム機能をアンロックしましょう。",
-      "offline": "オフライン",
-      "pastDue": {
-        "description": "現在は無料プランをご利用中です。お支払い方法を更新して Pro に戻しましょう。",
-        "title": "お支払いを処理できませんでした"
-      },
-      "planDescriptions": {
-        "freeUsage": "今週 {{used}} / {{limit}} ワード使用済み",
-        "nextBilling": "次の請求日: {{date}}",
-        "pastDue": "今週 {{used}} / {{limit}} 無料ワード使用済み - お支払い方法を更新して Pro を復元",
-        "trial": "残り {{days}} 日 - 無制限の文字起こし",
-        "unlimited": "無制限"
-      },
-      "planLabels": {
-        "free": "無料",
-        "pro": "Pro",
-        "business": "Business",
-        "trial": "トライアル"
-      },
-      "pricing": {
-        "title": "プラン",
-        "billedYearly": "年払い",
-        "free": {
-          "name": "Free",
-          "price": "$0",
-          "period": "永久",
-          "features": [
-            "## OpenWhispr Cloud",
-            "週2,000ワードの文字起こし",
-            "月5時間の会議録音",
-            "## 永久無料",
-            "無制限のローカルAIモデル",
-            "独自のAPIキーで無制限のクラウド文字起こし",
-            "100以上の言語に対応",
-            "カスタム辞書",
-            "データ保持なし",
-            "コミュニティサポート"
-          ]
-        },
-        "pro": {
-          "name": "Pro",
-          "monthlyPrice": "$8",
-          "monthlyPeriod": "/月",
-          "annualPrice": "$80",
-          "annualPeriod": "/年",
-          "annualEquivalent": "$6.67",
-          "includesPrefix": "Free の全機能 +",
-          "features": [
-            "無制限のクラウド文字起こし",
-            "月20時間の会議録音",
-            "デバイス間の同期",
-            "公開リンクでノートを共有",
-            "個人APIアクセス",
-            "すべてのアプリでMCP統合",
-            "モバイルアプリ（iOS 近日公開）",
-            "メールサポート"
-          ],
-          "cta": "始める",
-          "switchToAnnual": "年払いに切り替え"
-        },
-        "business": {
-          "name": "Business",
-          "monthlyPrice": "$16",
-          "monthlyPeriod": "/月",
-          "annualPrice": "$160",
-          "annualPeriod": "/年",
-          "annualEquivalent": "$13.33",
-          "includesPrefix": "Pro の全機能 +",
-          "badge": "一番人気",
-          "features": [
-            "共有ノートのためのチームスペース",
-            "ワークスペースのロールとメンバー管理",
-            "無制限の会議録音",
-            "エージェントモード",
-            "データとチャット",
-            "優先サポート"
-          ],
-          "cta": "始める",
-          "switchToAnnual": "年払いに切り替え"
-        },
-        "enterprise": {
-          "name": "Enterprise",
-          "price": "カスタム",
-          "subtitle": "高度なセキュリティとサポート向け",
-          "includesPrefix": "Business の全機能 +",
-          "features": [
-            "管理されたAPIクレジット",
-            "デバイス間のクラウド同期",
-            "チーム機能と管理",
-            "SSO とコンプライアンス",
-            "専任サポート"
-          ],
-          "cta": "営業に問い合わせる"
-        },
-        "currentPlan": "現在のプラン",
-        "coveredByWorkspace": "ワークスペースのプランに含まれています",
-        "upgrade": "アップグレード",
-        "downgrade": "ダウングレード",
-        "planSwitched": "プランが正常に更新されました",
-        "confirmSwitch": {
-          "title": "プラン変更の確認",
-          "description": "{{plan}}（{{interval}}）に変更",
-          "monthly": "月額",
-          "yearly": "年額",
-          "chargeToday": "本日のご請求",
-          "accountCredit": "アカウントクレジット",
-          "newPrice": "新しい料金",
-          "nextBilling": "次回請求日",
-          "mo": "mo",
-          "yr": "yr",
-          "cancel": "キャンセル",
-          "confirm": "確認"
-        }
-      },
-      "rollingWeeklyLimit": "週間利用上限（ローリング）",
-      "signOut": {
-        "failedDescription": "サインアウト中に問題が発生しました。もう一度お試しください。",
-        "failedTitle": "サインアウトできませんでした",
-        "signOut": "サインアウト",
-        "signingOut": "サインアウト中..."
-      },
-      "signedIn": "サインイン済み",
-      "signedOutPlans": {
-        "button": "無料アカウントを作成"
-      },
-      "title": "アカウント",
-      "toasts": {
-        "approachingLimit": {
-          "description": "今週 {{used}} / {{limit}} 無料ワードを使用しました。Pro にアップグレードして無制限にご利用ください。",
-          "title": "週間利用上限に近づいています"
-        }
-      },
-      "trialCta": {
-        "button": "無料アカウントを作成",
-        "description": "無制限の文字起こし、優先処理など。",
-        "title": "Pro を 7 日間無料でお試し"
-      },
-      "user": "ユーザー",
-      "wordsRemaining": "残り {{remaining}}",
-      "deleteAccount": {
-        "label": "アカウントを削除",
-        "labelDescription": "アカウント、すべてのクラウドデータ、ローカルデータを完全に削除します。この操作は元に戻せません。",
-        "button": "アカウントを削除",
-        "deleting": "削除中...",
-        "title": "アカウントを削除しますか？",
-        "description": "OpenWhispr アカウント、すべてのクラウド同期ノート、すべてのローカルデータ（文字起こし、音声録音、ダウンロード済みモデル、カレンダー接続、設定を含む）が完全に削除されます。この操作は元に戻せません。",
-        "confirmText": "すべて削除",
-        "successTitle": "アカウントが削除されました",
-        "successDescription": "アカウントとすべてのデータが削除されました。アプリが再読み込みされます。",
-        "failedTitle": "削除に失敗しました",
-        "failedDescription": "アカウントの削除中にエラーが発生しました。ローカルデータが部分的に削除された可能性があります。もう一度お試しください。"
-      },
-      "profile": {
-        "name": {
-          "label": "表示名",
-          "placeholder": "お名前",
-          "save": "保存",
-          "saving": "保存中...",
-          "saved": "表示名を更新しました",
-          "error": "名前を更新できませんでした"
-        },
-        "password": {
-          "label": "パスワード",
-          "description": "サインインに使用するパスワードを変更します。",
-          "change": "パスワードを変更",
-          "dialogTitle": "パスワードを変更",
-          "dialogDescription": "現在のパスワードを入力し、新しいパスワードを設定してください。",
-          "currentLabel": "現在のパスワード",
-          "newLabel": "新しいパスワード",
-          "confirmLabel": "新しいパスワード（確認）",
-          "minLength": "パスワードは 8 文字以上にしてください",
-          "mismatch": "パスワードが一致しません",
-          "revokeOthers": "他のデバイスでサインアウト",
-          "submit": "パスワードを更新",
-          "saving": "更新中...",
-          "cancel": "キャンセル",
-          "saved": "パスワードを更新しました"
-        },
-        "errors": {
-          "invalidPassword": "現在のパスワードが正しくありません。",
-          "passwordTooShort": "パスワードは 8 文字以上にしてください。",
-          "passwordTooLong": "パスワードが長すぎます。",
-          "noPassword": "このアカウントにはパスワードが設定されていません。",
-          "generic": "問題が発生しました。もう一度お試しください。"
-        }
-      },
-      "planUnavailable": {
-        "title": "プランを取得できません",
-        "description": "現在プランを読み込めませんでした。ご利用の権限は変わりません。"
-      }
-    },
     "agentConfig": {
       "agentName": "エージェント名",
       "description": "ディクテーション中に直接呼びかけられるよう、AI アシスタントに名前を付けましょう",
@@ -1431,25 +1078,15 @@
       "enableTextCleanup": "テキスト補正を有効にする",
       "enableTextCleanupDescription": "AI がフィラーワードを除去し、文法と句読点を整える",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "クラウドプロバイダー",
         "local": "ローカル",
         "selfHosted": "セルフホスト",
-        "openwhisprDesc": "信頼できる精度。設定不要。",
         "providersDesc": "自分のAPIキーを使用。",
         "localDesc": "端末上のモデル。完全プライベート。",
-        "selfHostedDesc": "自前サーバーをネットワーク上に。",
-        "enterprise": "エンタープライズ",
-        "enterpriseDesc": "組織のクラウドアカウントを使用 (AWS, Azure, GCP)。"
+        "selfHostedDesc": "自前サーバーをネットワーク上に。"
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "信頼できる精度。設定不要。",
       "title": "AI テキスト補正",
       "toasts": {
-        "switchedCloud": {
-          "description": "テキスト補正に OpenWhispr のクラウドサービスを使用します。",
-          "title": "OpenWhispr Cloud に切り替えました"
-        },
         "switchedCustom": {
           "description": "独自のプロバイダーと API キーを設定してください。",
           "title": "カスタム設定に切り替えました"
@@ -1465,20 +1102,7 @@
         "switchedSelfHosted": {
           "title": "セルフホスト",
           "description": "独自のサーバーを使用します。"
-        },
-        "switchedEnterprise": {
-          "title": "エンタープライズ",
-          "description": "組織のクラウドアカウントを使用しています。"
         }
-      },
-      "managedEnterprise": {
-        "errorTitle": "マネージド エンタープライズ AI に対応が必要です",
-        "title": "組織によって管理されています",
-        "description": "サインインすると短期間のアクセスが自動的に付与されます。クラウドキーや CLI の設定は不要です。",
-        "usePersonalSetup": "個人の設定を使用",
-        "availableTitle": "組織の設定が利用できます",
-        "availableDescription": "認証情報を管理せずに {{provider}} を使用できます。",
-        "useManaged": "マネージドを使用"
       }
     },
     "developer": {
@@ -1536,7 +1160,7 @@
       "appearance": {
         "auto": "自動",
         "dark": "ダーク",
-        "description": "OpenWhispr の外観を設定",
+        "description": "HIRA の外観を設定",
         "light": "ライト",
         "theme": "テーマ",
         "themeDescription": "ライト、ダーク、またはシステムに合わせる",
@@ -1564,8 +1188,8 @@
         "linuxPttSetupDescription": "キーボード入力デバイスへのアクセス権が必要です。",
         "linuxPttSetupNote": "コマンド実行後、ログアウトして再度ログインしてください。",
         "hyprlandConfigWriteWarningTitle": "Hyprland のキーバインドは永続化されません",
-        "hyprlandConfigWriteWarningDescription": "OpenWhispr は {{path}} に書き込めないため、Hyprland の設定を再読み込みするとキーバインドは維持されません。ファイルが存在し、書き込み可能であることを確認してください。",
-        "hyprlandUnbindDescription": "Hyprland では、OpenWhispr が選択したショートカットを使用します。同じキーの組み合わせを使う既存の Hyprland バインドは、OpenWhispr がショートカットを登録すると解除されます。"
+        "hyprlandConfigWriteWarningDescription": "HIRA は {{path}} に書き込めないため、Hyprland の設定を再読み込みするとキーバインドは維持されません。ファイルが存在し、書き込み可能であることを確認してください。",
+        "hyprlandUnbindDescription": "Hyprland では、HIRA が選択したショートカットを使用します。同じキーの組み合わせを使う既存の Hyprland バインドは、HIRA がショートカットを登録すると解除されます。"
       },
       "meetingHotkey": {
         "title": "ミーティングモードホットキー",
@@ -1591,7 +1215,7 @@
       },
       "notifications": {
         "title": "通知",
-        "description": "OpenWhispr が表示できる通知を設定します",
+        "description": "HIRA が表示できる通知を設定します",
         "disableAll": "すべての通知を無効にする",
         "disableAllDescription": "エラーメッセージ以外をすべて消音にする",
         "meetingDetection": "会議の検出",
@@ -1610,14 +1234,14 @@
       },
       "startup": {
         "launchAtLogin": "ログイン時に起動",
-        "launchAtLoginDescription": "ログイン時に OpenWhispr をバックグラウンドで起動します",
+        "launchAtLoginDescription": "ログイン時に HIRA をバックグラウンドで起動します",
         "title": "起動設定",
-        "description": "OpenWhispr の起動時の動作を制御",
+        "description": "HIRA の起動時の動作を制御",
         "startMinimized": "最小化で起動",
         "startMinimizedDescription": "コントロールパネルウィンドウを表示せずに起動",
         "needsApproval": {
           "title": "システム設定での許可が必要です",
-          "description": "macOS は OpenWhispr をログイン項目として登録しましたが、「ログイン項目」での許可を待っています。",
+          "description": "macOS は HIRA をログイン項目として登録しましたが、「ログイン項目」での許可を待っています。",
           "action": "ログイン項目を開く"
         }
       },
@@ -1663,7 +1287,7 @@
           "group": {
             "step1Title": "ユーザーを input グループに追加",
             "step2Title": "ログアウトして再ログイン",
-            "step2Desc": "グループの変更は新しいセッションでのみ有効になります。デスクトップからログアウトし、再ログインしてから OpenWhispr を開き直してください。"
+            "step2Desc": "グループの変更は新しいセッションでのみ有効になります。デスクトップからログアウトし、再ログインしてから HIRA を開き直してください。"
           },
           "service": {
             "step1Title": "サービスディレクトリを作成",
@@ -1687,7 +1311,7 @@
           "manualTitle": "設定に以下を追加してください",
           "manualDesc": "ご自身で設定してからリビルドしてください。",
           "flakeTitle": "flakeからインストールする場合",
-          "flakeDesc": "flakeからOpenWhisprをインストールする場合、programs.openwhispr.enableを有効にするとydotool、uinputモジュール、グループのメンバーシップが自動で設定されます。",
+          "flakeDesc": "flakeからHIRAをインストールする場合、programs.openwhispr.enableを有効にするとydotool、uinputモジュール、グループのメンバーシップが自動で設定されます。",
           "rebuildNote": "sudo nixos-rebuild switchを実行し、グループの変更と/dev/uinputのルールを反映させるためにログアウト後に再ログインしてください。<you>はあなたのユーザー名に置き換えてください。"
         }
       },
@@ -1720,7 +1344,7 @@
           },
           "installUpdate": {
             "confirmText": "インストールして再起動",
-            "description": "OpenWhispr はアップデートを適用するために再起動します。",
+            "description": "HIRA はアップデートを適用するために再起動します。",
             "title": "アップデートをインストール"
           },
           "noUpdates": {
@@ -1755,13 +1379,13 @@
     "permissions": {
       "accessibilityDescription": "文字起こし後の自動貼り付けに必要",
       "accessibilityTitle": "アクセシビリティ",
-      "description": "OpenWhispr の正常動作に必要なシステム権限をテスト・管理",
+      "description": "HIRA の正常動作に必要なシステム権限をテスト・管理",
       "microphoneDescription": "ディクテーションと文字起こしのためにあなたの声を録音します",
       "microphoneTitle": "マイク",
       "resetAccessibility": {
-        "description": "OpenWhispr をアクセシビリティの権限から削除します。システム設定 > プライバシーとセキュリティ > アクセシビリティ で再度許可する必要があります。",
+        "description": "HIRA をアクセシビリティの権限から削除します。システム設定 > プライバシーとセキュリティ > アクセシビリティ で再度許可する必要があります。",
         "label": "アクセシビリティの権限をリセット",
-        "rowDescription": "アプリの再インストールや再ビルド後の問題を修正するために、システム設定で OpenWhispr を削除してから再追加",
+        "rowDescription": "アプリの再インストールや再ビルド後の問題を修正するために、システム設定で HIRA を削除してから再追加",
         "title": "アクセシビリティの権限をリセット"
       },
       "optional": "任意",
@@ -1775,15 +1399,8 @@
       "troubleshootingTitle": "トラブルシューティング"
     },
     "privacy": {
-      "cloudBackup": "クラウドバックアップ",
-      "cloudBackupDescription": "文字起こしとノートをクラウドにバックアップして、すべてのデバイスからシームレスにアクセスできます。",
-      "cloudBackupTeamCaveat": "チームスペース内のノートと共有したノートは、この設定に関係なく常に同期されます。",
-      "cloudNotesMigration": "ノートをバックアップ中… {{done}} / {{total}}",
-      "cloudNotesMigrationDone": "すべてのノートがバックアップされました",
       "description": "デバイスからのデータ送信を管理します。初期設定ではすべてオフです。",
       "title": "プライバシー",
-      "usageAnalytics": "使用状況の分析",
-      "usageAnalyticsDescription": "匿名のパフォーマンスデータを共有して OpenWhispr の改善にご協力ください。文字起こしの内容は送信されません。タイミングとエラーデータのみです。",
       "dataRetention": "データ保持",
       "dataRetentionDescription": "文字起こしと音声を履歴にローカル保存します。無効にすると、文字起こしは貼り付けられますが保存されません。",
       "transcriptRetention": "文字起こしの保持",
@@ -1791,7 +1408,6 @@
       "transcriptRetentionForever": "無期限",
       "hoursAgo": "{{count}}時間前",
       "justNow": "たった今",
-      "lastSynced": "最終同期 {{time}}",
       "minutesAgo": "{{count}}分前",
       "audioRetention": "音声の保持",
       "audioRetentionDescription": "再文字起こしやダウンロードのために音声録音をローカルに保存します。ファイルは保持期間が過ぎると自動的に削除されます。",
@@ -1839,25 +1455,17 @@
     "transcription": {
       "customSetup": "カスタム設定",
       "customSetupDescription": "独自のプロバイダーと API キーを使用。",
-      "description": "OpenWhispr の音声文字起こし方法を選択",
+      "description": "HIRA の音声文字起こし方法を選択",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "クラウドプロバイダー",
         "local": "ローカル",
         "selfHosted": "セルフホスト",
-        "openwhisprDesc": "信頼できる精度。設定不要。",
         "providersDesc": "自分のAPIキーを使用。",
         "localDesc": "端末上のモデル。完全プライベート。",
         "selfHostedDesc": "自前サーバーをネットワーク上に。"
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "信頼できる精度。設定不要。",
       "title": "音声テキスト変換",
       "toasts": {
-        "switchedCloud": {
-          "description": "文字起こしに OpenWhispr のクラウドサービスを使用します。",
-          "title": "OpenWhispr Cloud に切り替えました"
-        },
         "switchedCustom": {
           "description": "独自のプロバイダーと API キーを設定してください。",
           "title": "カスタム設定に切り替えました"
@@ -1942,204 +1550,6 @@
       "endpointUrl": "エンドポイント URL",
       "serverUrl": "サーバー URL",
       "apiKeyOptional": "API キー（任意）"
-    },
-    "workspace": {
-      "title": "ワークスペース",
-      "description": "チームメイトとのコラボレーション、ノートの共有、ワークスペースへのアクセス管理を一括で行えます。",
-      "empty": {
-        "title": "最初のワークスペースを作成",
-        "description": "ワークスペースでは、チームメイトとのコラボレーションやノートの共有ができます。",
-        "create": "ワークスペースを作成"
-      },
-      "loadError": {
-        "title": "ワークスペースを読み込めませんでした",
-        "description": "接続を確認して、もう一度お試しください。",
-        "retry": "再試行"
-      },
-      "tab": {
-        "general": "一般",
-        "members": "メンバー",
-        "teams": "チーム",
-        "developer": "開発者"
-      },
-      "role": {
-        "owner": "オーナー",
-        "admin": "管理者",
-        "member": "メンバー"
-      },
-      "general": {
-        "nameLabel": "ワークスペース名",
-        "slugLabel": "短縮名",
-        "slugHint": "URL や招待リンクに使用されます。小文字の英字、数字、ハイフンのみ使用できます。",
-        "slugInvalid": "小文字の英字、数字、ハイフンのみ使用できます。",
-        "saved": "ワークスペースを更新しました",
-        "dangerTitle": "ワークスペースを削除",
-        "dangerDescription": "共有されているノート、フォルダ、連携がすべて削除されます。この操作は取り消せません。",
-        "delete": "ワークスペースを削除",
-        "confirmTitle": "{{name}} を削除しますか？",
-        "confirmDescription": "サブスクリプションがキャンセルされ、ワークスペースのすべてのデータが完全に削除されます。",
-        "deleting": "削除中…",
-        "deleted": "ワークスペースを削除しました",
-        "leaveTitle": "ワークスペースから退出",
-        "leaveDescription": "このワークスペースと共有ノートにアクセスできなくなります。",
-        "leave": "ワークスペースから退出",
-        "leaving": "退出中…",
-        "leaveConfirm": {
-          "title": "{{name}} から退出しますか？",
-          "description": "すぐにアクセスできなくなります。管理者が再度招待できます。"
-        },
-        "left": "{{name}} から退出しました"
-      },
-      "members": {
-        "title": "メンバー",
-        "description": "{{seats}} シート中 {{count}} シートを使用中。",
-        "invite": "招待",
-        "empty": "まだメンバーがいません。",
-        "loadError": "メンバーを読み込めませんでした。",
-        "roleUpdated": "役割を更新しました",
-        "removed": "{{name}} を削除しました",
-        "promote": "管理者にする",
-        "demote": "メンバーにする",
-        "transferOwnership": "オーナー権限を譲渡",
-        "remove": "ワークスペースから削除",
-        "removeConfirm": {
-          "title": "このメンバーを削除しますか？",
-          "description": "{{name}} はすぐに {{workspace}} にアクセスできなくなります。"
-        },
-        "transferConfirm": {
-          "title": "オーナー権限を譲渡しますか？",
-          "description": "{{name}} が {{workspace}} のオーナーになります。あなたの役割は管理者に変わり、元に戻せるのは新しいオーナーのみです。"
-        }
-      },
-      "joinRequests": {
-        "title": "参加リクエスト",
-        "approve": "承認",
-        "deny": "却下",
-        "approved": "{{name}} がワークスペースに参加しました",
-        "denied": "リクエストを却下しました",
-        "errorTitle": "リクエストを更新できませんでした"
-      },
-      "teams": {
-        "title": "チーム",
-        "description": "チームスペースへのアクセスを付与するワークスペースメンバーのグループ。",
-        "new": "新しいチーム",
-        "empty": "チームはまだありません。",
-        "createFirst": "最初のチームを作成",
-        "addMembersLabel": "メンバーを追加",
-        "createTitle": "チームを作成",
-        "nameLabel": "チーム名",
-        "memberCount_one": "{{count}}人のメンバー",
-        "memberCount_other": "{{count}}人のメンバー",
-        "membersButton": "メンバー",
-        "grantsAccessToSpaces_one": "{{count}} 件のスペースへのアクセスを付与しています",
-        "grantsAccessToSpaces_other": "{{count}} 件のスペースへのアクセスを付与しています",
-        "couldNotCreate": "チームを作成できませんでした",
-        "created": "{{team}} を作成しました",
-        "deleted": "{{team}} を削除しました",
-        "deleteConfirmTitle": "{{team}} を削除しますか？",
-        "deleteConfirmDescription": "チームをアーカイブします。このチームが付与していたアクセスは失われます。",
-        "deleteConfirmSpaceAccess_one": "このチームは {{count}} 件のスペースへのアクセスを付与しています。メンバーはそのアクセスを失います。",
-        "deleteConfirmSpaceAccess_other": "このチームは {{count}} 件のスペースへのアクセスを付与しています。メンバーはそのアクセスを失います。",
-        "members": {
-          "title": "{{team}} のメンバー",
-          "removeConfirm": "{{name}} を {{team}} から外しますか？",
-          "leave": "チームから退出",
-          "leftTeam": "{{team}} から退出しました",
-          "leaveConfirm": "{{team}} から退出しますか？",
-          "leaveConfirmDescription": "他のチームに含まれていない限り、このチームが付与するスペースへのアクセスを失います。"
-        }
-      },
-      "invites": {
-        "title": "保留中の招待",
-        "expiresIn_one": "有効期限まであと{{count}}日",
-        "expiresIn_other": "有効期限まであと{{count}}日",
-        "expired": "期限切れ",
-        "loadError": "招待を読み込めませんでした。",
-        "resend": "再送信",
-        "resending": "再送信中…",
-        "revoke": "取り消す",
-        "resent": "招待を再送信しました",
-        "resentNoEmail": "招待を更新しましたが、メールを配信できませんでした。",
-        "revoked": "招待を取り消しました",
-        "revokeFailed": "招待を取り消せませんでした",
-        "revokeConfirm": {
-          "title": "この招待を取り消しますか？",
-          "description": "{{email}} への招待リンクが無効になります。"
-        }
-      },
-      "billing": {
-        "plan": "プラン",
-        "seats": "シート",
-        "ownerOnly": "サブスクリプションを管理できるのはワークスペースのオーナーのみです。",
-        "nextInvoice": "次回の請求",
-        "manageStripe": "Stripe で管理",
-        "startSubscription": "サブスクリプションを開始",
-        "planLabel": {
-          "business": "Business",
-          "pro": "Pro",
-          "free": "Free",
-          "enterprise": "Enterprise"
-        },
-        "status": {
-          "active": "有効",
-          "trialing": "トライアル中",
-          "past_due": "支払い期限超過",
-          "canceled": "キャンセル済み",
-          "incomplete": "未完了",
-          "unpaid": "未払い"
-        }
-      },
-      "developer": {
-        "title": "API キー",
-        "description": "このワークスペースに限定されたプログラムからのアクセス。",
-        "empty": "まだ API キーがありません。このワークスペースと連携するには作成してください。",
-        "loadError": "APIキーを読み込めませんでした。",
-        "new": "新規キー",
-        "create": "キーを作成",
-        "createTitle": "API キーを作成",
-        "createDescription": "このキーに必要な権限を選択してください。いつでも取り消せます。",
-        "nameLabel": "キー名",
-        "namePlaceholder": "本番環境の連携",
-        "revoke": "キーを取り消す",
-        "revoked": "キー {{name}} を取り消しました",
-        "lastUsed": "最終使用: {{date}}",
-        "neverUsed": "未使用",
-        "keyCreatedTitle": "API キーを作成しました",
-        "keyCreatedDescription": "このキーを今すぐコピーしてください。後で再表示することはできません。",
-        "revokeConfirm": {
-          "title": "このキーを取り消しますか？",
-          "description": "{{name}} はすぐに使用できなくなります。このキーを使用している連携は失敗するようになります。"
-        },
-        "scopes": {
-          "notes": {
-            "title": "ノート",
-            "read": "ノートの読み取り",
-            "write": "ノートの書き込み"
-          },
-          "folders": {
-            "title": "フォルダ",
-            "read": "フォルダの読み取り",
-            "write": "フォルダの書き込み"
-          },
-          "transcriptions": {
-            "title": "文字起こし",
-            "read": "文字起こしの読み取り"
-          },
-          "members": {
-            "title": "メンバー",
-            "read": "メンバーの読み取り",
-            "write": "メンバーの管理"
-          },
-          "billing": {
-            "title": "請求",
-            "read": "請求の読み取り"
-          },
-          "full": {
-            "title": "フルアクセス",
-            "admin": "ワークスペース管理者"
-          }
-        }
-      }
     }
   },
   "models": {
@@ -2288,11 +1698,9 @@
     },
     "spaces": {
       "privateSpaces": "プライベートスペース",
-      "teamSpaces": "チームスペース",
       "personal": "個人",
       "privateTooltip": "パーソナルスペースはあなただけが見られます",
       "newSpace": "新しいチームスペース",
-      "newSpaceInWorkspace": "{{workspace}} に新しいチームスペース",
       "createTitle": "チームスペースを作成",
       "createDescription": "ワークスペース内の共有エリアで、1つ以上のチームがアクセスできます。",
       "nameLabel": "名前",
@@ -2307,7 +1715,6 @@
       "deleteSpace": "スペースを削除",
       "deleteConfirmTitle": "スペースを削除しますか？",
       "deleteConfirmDescription": "{{space}}とそのすべてのフォルダとノートがこのデバイスから完全に削除されます。",
-      "deleteConfirmTeamDescription": "{{space}} を全員に対して削除します。チームは残りますが、メンバーはすべてのフォルダーとノートへのアクセスを失います。",
       "deleteTypeName": "確認のため {{space}} と入力してください",
       "couldNotDelete": "スペースを削除できませんでした",
       "deleted": "{{space}} を削除しました",
@@ -2321,14 +1728,12 @@
       "confirmMoveIn": "{{space}}の全員がこのノートを表示・編集できるようになります。ノートは後からチームスペースの外に移動できません。",
       "confirmMoveInFolder": "{{space}}の全員がこのフォルダとそのノートを表示・編集できるようになります。フォルダとノートは後からチームスペースの外に移動できません。",
       "cantMoveOut": "ノートはチームスペースの外に移動できません。",
-      "cantMoveTeammate": "ノートを別のスペースに移動できるのは、所有者またはワークスペースの管理者のみです。",
       "moved": "「{{title}}」を{{target}}に移動しました",
       "couldNotMove": "フォルダを移動できませんでした",
       "couldNotMoveNote": "ノートを移動できませんでした",
       "folderNameTaken": "「{{name}}」を移動できませんでした。同じ名前のフォルダが既に存在します",
       "undo": "元に戻す",
       "emptySpace": "まだノートがありません。ここのノートは{{space}}の全員に表示されます。",
-      "emptyTeamHint": "共有されたスペースはここに表示されます。",
       "noteCount_one": "{{count}} 件のノート",
       "noteCount_other": "{{count}} 件のノート",
       "accessRevoked": "{{space}} へのアクセス権がなくなりました",
@@ -2341,73 +1746,37 @@
       "conflictBanner": "このノートには新しいバージョンがあります。",
       "conflictRefresh": "更新",
       "conflictKeep": "編集を続ける",
-      "editedBy": "{{name}} が編集 · {{time}}",
-      "members": {
-        "addPeopleToTeam": "{{team}} にメンバーを追加",
-        "addedToTeam": "{{name}} を {{team}} に追加しました",
-        "removedFromTeam": "{{name}} を {{team}} から削除しました",
-        "roleUpdated": "役割を更新しました",
-        "you": "自分",
-        "addFailed": "{{total}}人中{{failed}}人を追加できませんでした",
-        "searchPlaceholder": "メンバーを検索…",
-        "noResults": "メンバーが見つかりません",
-        "roleAdmin": "管理者",
-        "roleMember": "メンバー",
-        "remove": "削除",
-        "removeConfirm": "{{name}} を {{space}} から削除しますか？",
-        "removeConfirmDescription": "このスペースのすべてのノートにアクセスできなくなります。",
-        "inviteFooter": "{{email}} をワークスペースに招待…",
-        "empty": "まだ誰も追加されていません"
-      },
-      "invitedTo_one": "{{count}} 件のチームスペースに参加します",
-      "invitedTo_other": "{{count}} 件のチームスペースに参加します",
-      "teamsMembers": {
-        "menu": "チームとメンバー…",
-        "title": "{{space}} のチームとメンバー",
-        "noTeams": "このスペースにアクセスできるチームはまだありません。ワークスペース管理者のみが閲覧できます。",
-        "addTeamLabel": "このスペースにチームを追加",
-        "chooseTeam": "チームを選択…",
-        "teamAdded": "{{team}} を {{space}} に追加しました",
-        "teamRemoved": "{{team}} を {{space}} から削除しました",
-        "removeTeamFromSpace": "スペースから外す",
-        "removeTeamConfirm": "{{team}} を {{space}} から外しますか？",
-        "removeTeamConfirmDescription": "他の割り当て済みチームに含まれていない限り、そのメンバーはこのスペースへのアクセスを失います。",
-        "lastTeamWarning": "このスペースにアクセスできる唯一のチームです。外すと、ワークスペース管理者のみがアクセスを保持します。",
-        "affectsOtherSpaces_one": "{{team}} への変更は、このチームがアクセスできる他 {{count}} 件のスペースにも適用されます。",
-        "affectsOtherSpaces_other": "{{team}} への変更は、このチームがアクセスできる他 {{count}} 件のスペースにも適用されます。",
-        "accessLabel": "スペースへのアクセス",
-        "accessAdmin": "管理者",
-        "accessMember": "メンバー",
-        "accessChanged": "{{team}} のアクセスを更新しました",
-        "accessHint": "{{team}} の管理者は、アクセスが「管理者」に設定されている場合のみこのスペースを管理できます。"
-      },
-      "teams": {
-        "assignLabel": "チーム",
-        "newTeam": "新しいチーム",
-        "newTeamNameLabel": "チーム名",
-        "loadError": "チームを読み込めませんでした。"
-      }
+      "editedBy": "{{name}} が編集 · {{time}}"
     },
     "structureIntro": {
       "title": "ノートの保存場所",
-      "description": "OpenWhispr は個人的な考えと共同作業を分け、適切な人だけがノートを見られるようにします。",
+      "description": "HIRA は個人的な考えと共同作業を分け、適切な人だけがノートを見られるようにします。",
       "personal": {
         "title": "個人スペース",
         "description": "ここのフォルダーとノートは自分だけが見ることができます。"
-      },
-      "workspace": {
-        "title": "ワークスペース",
-        "description": "ワークスペースのメンバー、役割、チームスペースをまとめて管理します。"
-      },
-      "teamSpace": {
-        "title": "チームスペース",
-        "description": "ワークスペース内の共有エリア。1つ以上のチームがアクセスを付与します。"
       },
       "contents": "各スペースにはフォルダーとノートを作成できます。",
       "done": "了解",
       "reopen": "スペースの構成を確認"
     },
     "editor": {
+      "clinicalOutputs": {
+        "summary": "Summary",
+        "soap": "SOAP",
+        "loading": "Loading clinical notes...",
+        "recording": "Recording encounter...",
+        "processingTranscript": "Processing transcript...",
+        "separatingSpeakers": "Separating speakers...",
+        "generatingNotes": "Generating clinical notes...",
+        "ready": "Ready",
+        "stale": "Transcript changed — regenerate notes",
+        "failed": "Generation failed",
+        "failedDescription": "Clinical notes could not be generated. Your transcript is saved; try again.",
+        "empty": "Clinical notes will appear here after the encounter is processed.",
+        "unavailable": "Encounter output is unavailable.",
+        "retry": "Retry",
+        "regenerate": "Regenerate"
+      },
       "transcribe": "文字起こし",
       "staleIndicator": "強化後にコンテンツが変更されました",
       "live": "ライブ",
@@ -2514,7 +1883,6 @@
       "newNote": "新規ノート",
       "untitled": "無題",
       "untitledNote": "無題のノート",
-      "shared": "共有中",
       "timeNow": "たった今",
       "minutesAgo": "{{count}}分前",
       "hoursAgo": "{{count}}時間前",
@@ -2528,7 +1896,6 @@
       "dropToUpload": "ドロップしてアップロード",
       "transcribe": "文字起こし",
       "cancel": "キャンセル",
-      "transcribingCloud": "クラウドで文字起こし中...",
       "transcribingLocal": "ローカルで文字起こし中...",
       "transcribingProvider": "{{provider}} で文字起こし中...",
       "cancelTranscription": "文字起こしをキャンセル",
@@ -2543,7 +1910,6 @@
       "newFolder": "新しいフォルダ",
       "folderName": "フォルダ名",
       "create": "作成",
-      "openwhisprCloud": "OpenWhispr Cloud",
       "custom": "カスタム",
       "selectFolder": "フォルダを選択",
       "transcriptionFailed": "文字起こしに失敗しました",
@@ -2555,15 +1921,9 @@
       "fileTooLarge": "このファイルは 500 MB の制限を超えています。",
       "largeFileNote": "大容量ファイルは分割され、並列で文字起こしされます。",
       "chunkProgress": "パート {{completed}} / {{total}} を文字起こし中...",
-      "paidPlanRequired": "25 MB を超えるファイルのクラウド文字起こしには有料プランが必要です。大容量ファイルは OpenWhispr Cloud で信頼性の高い高品質な結果を得られます。",
+      "paidPlanRequired": "25 MB を超えるファイルのクラウド文字起こしには有料プランが必要です。大容量ファイルは HIRA Cloud で信頼性の高い高品質な結果を得られます。",
       "byokTooLarge": "サードパーティの API キーは 25 MB までのファイルのみ対応しています。",
-      "byokTooLargeDetail": "25 MB を超えるファイルは、OpenWhispr Cloud が分割・並列処理・結合を行います。サードパーティの制限に依存せず、信頼性の高い結果が得られます。",
-      "byokTooLargeNeedsAccount": "アカウントを作成し、有料プランにアップグレードすると、OpenWhispr Cloud でより大きなファイルを文字起こしできます。",
-      "byokTooLargeNeedsUpgrade": "有料プランにアップグレードすると、OpenWhispr Cloud でより大きなファイルを文字起こしできます。",
-      "switchToCloudForLargeFiles": "このファイルを文字起こしするには OpenWhispr Cloud に切り替えてください。",
-      "createAccount": "アカウント作成",
-      "upgrade": "アップグレード",
-      "switchToCloud": "OpenWhispr Cloud",
+      "byokTooLargeDetail": "25 MB を超えるファイルは、HIRA Cloud が分割・並列処理・結合を行います。サードパーティの制限に依存せず、信頼性の高い結果が得られます。",
       "orDivider": "または",
       "urlPlaceholder": "YouTubeまたは音声URLを貼り付け",
       "urlDownloading": "音声をダウンロード中...",
@@ -2634,8 +1994,7 @@
       }
     },
     "realtimeBanner": {
-      "message": "Pro でリアルタイム文字起こしが利用可能",
-      "upgrade": "アップグレード"
+      "message": "Pro でリアルタイム文字起こしが利用可能"
     },
     "enhance": {
       "title": "強化エラー"
@@ -2644,6 +2003,7 @@
       "you": "あなた",
       "them": "相手",
       "unknown": "不明な話者",
+      "unassigned": "未割り当ての話者",
       "label": "話者 {{n}}",
       "identifyingSpeakers": "話者を識別中...",
       "liveAccuracyHint": "話者を識別中です。通話終了後にラベルの精度が向上します。",
@@ -2683,9 +2043,20 @@
       "save": "保存",
       "cancel": "キャンセル"
     },
+    "meetingContext": {
+      "label": "Meeting type",
+      "inPerson": "In-person",
+      "telehealth": "Telehealth",
+      "inPersonDescription": "Shared room microphone. Speakers are separated after recording.",
+      "telehealthDescription": "Microphone and computer audio. Remote speakers may be labeled live.",
+      "processing": "Separating speakers locally…",
+      "peopleInRoom_one": "{{count}} person in room",
+      "peopleInRoom_other": "{{count}} people in room",
+      "speakerSeparationFailedTitle": "Speaker separation unavailable",
+      "speakerSeparationFailed": "Your transcript was saved, but speaker separation could not finish: {{error}}"
+    },
     "overview": {
       "subtitle": {
-        "team": "このスペースの全員がノートを閲覧できます。",
         "private": "このノートはあなただけが閲覧できます。"
       },
       "meta": {
@@ -2696,11 +2067,9 @@
       },
       "banner": {
         "title": {
-          "team": "チームスペース",
           "private": "プライベートスペース"
         },
         "body": {
-          "team": "会議のノートをチームと共有しましょう。ユーザーインタビュー、営業の通話、チームミーティングを追加して、全員が最新情報を把握できます。",
           "private": "会議のノート、アイデア、下書きを一か所にまとめて、このスペースの内容について何でも質問できます。"
         },
         "dismiss": "閉じる"
@@ -2713,7 +2082,6 @@
           "inFlight": "進行中のプロジェクトを表示"
         }
       },
-      "invite": "招待",
       "list": {
         "empty": "まだノートがありません"
       },
@@ -2728,7 +2096,7 @@
     "clearAll": "すべてクリア",
     "clearTitle": "辞書をクリアしますか？",
     "clearDescription": "カスタム辞書のすべての単語が削除されます。この操作は元に戻せません。",
-    "addPlaceholder": "カンマ区切りで単語を追加 — OpenWhispr、Supabase、ARR など",
+    "addPlaceholder": "カンマ区切りで単語を追加 — HIRA、Supabase、ARR など",
     "add": "追加",
     "importWords": "単語をインポート",
     "importPlaceholder": "カンマまたは改行区切りの単語を貼り付け...",
@@ -2757,7 +2125,7 @@
       "duplicate": "このトリガーのスニペットは既に存在します",
       "emptyTitle": "同じことを言うのは",
       "emptyTitleAccent": "一度だけ",
-      "emptyDescription": "トリガーワードを話すと、OpenWhisprが保存した内容に置き換えます。URL、自己紹介、署名、プロンプトなど。",
+      "emptyDescription": "トリガーワードを話すと、HIRAが保存した内容に置き換えます。URL、自己紹介、署名、プロンプトなど。",
       "new": "新規スニペット",
       "examples": {
         "linkedinTrigger": "私のLinkedIn",
@@ -2777,78 +2145,6 @@
     "importList": "リストをインポート",
     "agentDefault": "デフォルトで追加済み"
   },
-  "referral": {
-    "title": "紹介して特典をゲット",
-    "subtitle": "1か月あげて、1か月もらおう。",
-    "modalTitle": "友達を紹介",
-    "tabs": {
-      "refer": "紹介する",
-      "pastInvites": "過去の招待"
-    },
-    "howItWorks": {
-      "shareLink": "招待リンクを共有",
-      "theySignUp": "相手が登録すると",
-      "freeMonthOfPro": "Pro の無料 1 か月",
-      "youGet": "あなたも",
-      "freeMonth": "無料 1 か月",
-      "whenTheyDictate": "を獲得（相手が 2,000 語ディクテーションした時点で）"
-    },
-    "inviteLink": {
-      "title": "招待リンク",
-      "copy": "コピー",
-      "copied": "コピーしました"
-    },
-    "sendInvites": {
-      "title": "招待を送信",
-      "placeholder": "friend@example.com",
-      "send": "送信",
-      "sending": "送信中"
-    },
-    "stats": {
-      "referred": "紹介済み",
-      "converted": "登録済み",
-      "monthsEarned": "獲得した月数"
-    },
-    "status": {
-      "converted": "登録済み",
-      "opened": "開封済み",
-      "failed": "失敗",
-      "sent": "送信済み"
-    },
-    "friends": {
-      "title": "フレンド",
-      "completed": "完了",
-      "sentInvites": "送信済みの招待"
-    },
-    "empty": {
-      "title": "まだ招待を送信していません",
-      "description": "リンクを共有するか招待を送信して始めましょう"
-    },
-    "toasts": {
-      "copiedTitle": "コピーしました！",
-      "copiedDescription": "紹介リンクをクリップボードにコピーしました",
-      "copyFailedTitle": "コピーに失敗しました",
-      "copyFailedDescription": "リンクをクリップボードにコピーできませんでした",
-      "invalidEmailTitle": "無効なメールアドレス",
-      "invalidEmailDescription": "有効なメールアドレスを入力してください",
-      "inviteSentTitle": "招待を送信しました！",
-      "inviteSentDescription": "{{email}} に招待を送信しました",
-      "sendFailedTitle": "送信に失敗しました",
-      "sendFailedDescription": "招待の送信に失敗しました。もう一度お試しください。"
-    },
-    "errors": {
-      "unableToLoad": "紹介データを読み込めませんでした",
-      "unableToLoadStats": "紹介統計を読み込めませんでした。後でもう一度お試しください。"
-    },
-    "tryAgain": "再試行",
-    "card": {
-      "brand": "OpenWhispr",
-      "signalId": "Signal ID",
-      "audioSignature": "あなたの音声シグネチャー",
-      "stop": "停止",
-      "playSignal": "シグナルを再生"
-    }
-  },
   "sidebar": {
     "home": "ホーム",
     "notes": "ノート",
@@ -2859,9 +2155,6 @@
     "support": "サポート",
     "limitReached": "週間の利用上限に達しました",
     "limitReachedDescription": "Pro にアップグレードして無制限の文字起こしをご利用ください。",
-    "viewPlans": "プランを見る",
-    "upgradeTitle": "Pro にアップグレード",
-    "upgradeDescription": "無制限の文字起こしと最新の AI モデルをご利用いただけます。",
     "learnMore": "詳しく見る",
     "integrations": "連携",
     "defaultUser": "ユーザー",
@@ -2899,7 +2192,7 @@
     "submitBug": "バグを報告"
   },
   "postMigration": {
-    "title": "OpenWhispr へおかえりなさい",
+    "title": "HIRA へおかえりなさい",
     "description": "ノートと設定は以前のバージョンから引き継がれています。ただし macOS はこれを新しいアプリとして扱うため、いくつかの権限を改めて付与していただく必要があります。",
     "done": "完了",
     "remindLater": "後で通知"
@@ -2941,7 +2234,7 @@
       "undo": "元に戻す",
       "accessibilityMissing": {
         "title": "アクセシビリティの許可が必要です",
-        "description": "OpenWhispr がホットキーの検出とテキストの貼り付けを行うには、アクセシビリティの許可が必要です。コントロールパネルで有効にしてください。"
+        "description": "HIRA がホットキーの検出とテキストの貼り付けを行うには、アクセシビリティの許可が必要です。コントロールパネルで有効にしてください。"
       },
       "gpuFallback": {
         "title": "GPU アクセラレーションを利用できません",
@@ -2982,19 +2275,15 @@
       "visionModelDescription": "スクリーンショット付きのコマンドを、画像対応の別モデルに振り分けます。",
       "permissionTitle": "画面収録",
       "permissionDescription": "画面をキャプチャするには macOS の画面収録の許可が必要です。",
-      "relaunchHint": "画面収録の許可は OpenWhispr の実行中に付与されました。スクリーンショットのキャプチャを開始するには、OpenWhispr を終了して再度開いてください。"
+      "relaunchHint": "画面収録の許可は HIRA の実行中に付与されました。スクリーンショットのキャプチャを開始するには、HIRA を終了して再度開いてください。"
     },
     "modes": {
-      "openwhispr": "OpenWhispr Cloud",
-      "openwhisprDesc": "OpenWhispr が管理するエージェントを使用。API キーは不要です。",
       "providers": "自分の API キーを使用",
       "providersDesc": "自分の API キーで OpenAI、Anthropic、Gemini、Groq に接続します。",
       "local": "ローカル",
       "localDesc": "端末上でローカル LLM を実行。完全プライベート。",
       "selfHosted": "セルフホスト",
-      "selfHostedDesc": "セルフホストの OpenAI 互換エンドポイントを指定します。",
-      "enterprise": "エンタープライズ",
-      "enterpriseDesc": "AWS Bedrock、Azure OpenAI、Google Vertex を使用します。"
+      "selfHostedDesc": "セルフホストの OpenAI 互換エンドポイントを指定します。"
     },
     "prompt": {
       "title": "エージェントプロンプト",
@@ -3011,19 +2300,13 @@
       "systemPromptDescription": "エージェントへのカスタム指示",
       "systemPromptPlaceholder": "カスタムシステムプロンプトを入力...",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "クラウドプロバイダー",
         "local": "ローカル",
         "selfHosted": "セルフホスト",
-        "openwhisprDesc": "信頼できる精度。設定不要。",
         "providersDesc": "独自のAPIキーを使用。",
         "localDesc": "デバイス上のモデル。完全プライベート。",
-        "selfHostedDesc": "ネットワーク上の自分のサーバー。",
-        "enterprise": "エンタープライズ",
-        "enterpriseDesc": "組織のクラウドアカウントを使用 (AWS, Azure, GCP)。"
+        "selfHostedDesc": "ネットワーク上の自分のサーバー。"
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "信頼できる精度。設定不要。",
       "customSetup": "カスタム設定 (BYOK)",
       "customSetupDescription": "自分のAPIキーを使用してお好みのモデルを選択する"
     },
@@ -3091,7 +2374,7 @@
       "disconnectConfirm": "{{email}} を切断しますか？",
       "disconnectDescription": "このカレンダーからの会議メモは記録されなくなります。",
       "systemAudioRequired": "システムオーディオの権限が必要です",
-      "systemAudioDescription": "会議を文字起こしするには、OpenWhispr に他の参加者の音声を録音するためのシステムオーディオの権限が必要です。画面を録画することはありません。システム設定に移動して有効にします。",
+      "systemAudioDescription": "会議を文字起こしするには、HIRA に他の参加者の音声を録音するためのシステムオーディオの権限が必要です。画面を録画することはありません。システム設定に移動して有効にします。",
       "openSettings": "システム設定を開く",
       "connectFailed": "接続に失敗しました",
       "connectFailedDescription": "Google Calendar への接続中にエラーが発生しました。もう一度お試しください。"
@@ -3121,10 +2404,10 @@
       "disconnectConfirm": "Apple カレンダーを切断しますか？",
       "disconnectDescription": "Apple カレンダーからの会議メモは記録されなくなります。",
       "permissionDenied": "カレンダーへのアクセスが必要です",
-      "permissionDeniedDescription": "会議を検出するには、OpenWhispr にカレンダーへのアクセスが必要です。システム設定の「プライバシーとセキュリティ」→「カレンダー」で OpenWhispr を有効にしてください。",
+      "permissionDeniedDescription": "会議を検出するには、HIRA にカレンダーへのアクセスが必要です。システム設定の「プライバシーとセキュリティ」→「カレンダー」で HIRA を有効にしてください。",
       "openSettings": "システム設定を開く",
       "connectFailed": "接続に失敗しました",
-      "connectFailedDescription": "Calendar.app への接続中にエラーが発生しました。OpenWhispr を再起動してもう一度お試しください。"
+      "connectFailedDescription": "Calendar.app への接続中にエラーが発生しました。HIRA を再起動してもう一度お試しください。"
     },
     "sections": {
       "calendar": "カレンダー",
@@ -3137,19 +2420,17 @@
       "description": "プログラムからのアクセス用にAPIキーを管理",
       "proRequired": "APIを利用するには有料プランへのアップグレードが必要です",
       "manage": "キーを管理",
-      "viewPlans": "プランを表示",
       "dialogTitle": "APIキー"
     },
     "mcp": {
       "title": "メモをAIツールに持ち込みましょう",
       "description": "Claude、ChatGPT、Cursor内でメモを使ってチャット、検索、作業ができます。",
-      "step1": "AIツールで、公開URLを使用してOpenWhispr MCPを追加します",
+      "step1": "AIツールで、公開URLを使用してHIRA MCPを追加します",
       "step2": "上のセクションで必要なスコープを持つAPIキーを作成します。",
       "step3": "キーを Authorization ヘッダーとして貼り付けて接続します。",
       "learnMore": "詳細",
-      "viewPlans": "プランを表示",
       "copyUrl": "MCP URLをコピー",
-      "proRequired": "OpenWhispr を Claude、ChatGPT、Cursor に接続するには、有料プランへのアップグレードが必要です。",
+      "proRequired": "HIRA を Claude、ChatGPT、Cursor に接続するには、有料プランへのアップグレードが必要です。",
       "copied": "コピーしました"
     },
     "cli": {
@@ -3159,16 +2440,10 @@
       "learnMore": "ドキュメントを読む",
       "copyDocsLink": "ドキュメントリンクをコピー",
       "docsLinkCopied": "ドキュメントリンクをコピーしました",
-      "viewPlans": "プランを表示",
       "local": {
         "label": "ローカル",
         "freeBadge": "無料",
-        "description": "ローカルのメモに直接アクセスできます。ログインや API キーは不要 — OpenWhispr の起動中に利用できます。"
-      },
-      "cloud": {
-        "label": "クラウド",
-        "description": "API キーを使ってデバイス間で同期します。",
-        "proRequired": "クラウドモードで CLI を利用するには有料プランへのアップグレードが必要です。"
+        "description": "ローカルのメモに直接アクセスできます。ログインや API キーは不要 — HIRA の起動中に利用できます。"
       }
     },
     "plan": {
@@ -3179,12 +2454,11 @@
       "essential": "Essential",
       "essentialLimit": "月20回の会議",
       "pro": "Pro",
-      "proLimit": "無制限",
-      "upgrade": "アップグレード"
+      "proLimit": "無制限"
     },
     "notABot": {
-      "title": "OpenWhispr はミーティング録音ツールであり、ボットではありません",
-      "description": "OpenWhispr はシステムから直接オーディオをキャプチャします — 参加者としてミーティングに参加することはありません。カレンダーを接続して、通常通りノートを取るだけです。"
+      "title": "HIRA はミーティング録音ツールであり、ボットではありません",
+      "description": "HIRA はシステムから直接オーディオをキャプチャします — 参加者としてミーティングに参加することはありません。カレンダーを接続して、通常通りノートを取るだけです。"
     }
   },
   "calendar": {
@@ -3202,7 +2476,6 @@
     "disconnect": "切断",
     "disconnecting": "切断中...",
     "sync": "同期",
-    "syncing": "同期中...",
     "calendarsTitle": "カレンダー",
     "upcomingTitle": "今後の予定",
     "noUpcoming": "今後の予定はありません",
@@ -3224,7 +2497,7 @@
     "signInDescription": "アカウントを作成またはログインして、会議を録音・文字起こしできます。",
     "connectCalendar": "カレンダーを接続",
     "connectCalendarDescription": "Google カレンダーを連携して、今後のミーティングを確認し、自動的にノートを記録します。",
-    "notABot": "OpenWhispr はシステムオーディオで録音します — ボットとしてミーティングに参加することはありません。",
+    "notABot": "HIRA はシステムオーディオで録音します — ボットとしてミーティングに参加することはありません。",
     "connectCalendarButton": "カレンダーを接続"
   },
   "notesView": {
@@ -3249,54 +2522,7 @@
     "deleteNote": "ノートを削除",
     "deleteConfirmTitle": "ノートを削除しますか？",
     "deleteConfirmDescription": "このノートは完全に削除され、復元できません。",
-    "deleteConfirm": "削除",
-    "share": {
-      "button": "共有",
-      "dialog": {
-        "title": "ノートを共有",
-        "description": "メールで招待するか、このノートへのリンクを共有します。",
-        "searchPlaceholder": "ユーザー、フォルダー、メールを検索",
-        "noResults": "一致する結果が見つかりません",
-        "emailLabel": "ユーザー、フォルダー、メール",
-        "shareButton": "共有",
-        "createLink": "リンクを作成",
-        "copyLink": "リンクをコピー",
-        "copied": "コピーしました",
-        "owner": "オーナー",
-        "editor": "編集可能",
-        "viewer": "閲覧可能",
-        "teamAudience": "このチームスペースの全員",
-        "pending": "保留中",
-        "accepted": "アクセス権あり",
-        "resend": "招待を再送信",
-        "revoke": "削除",
-        "invitationActions": "招待の操作",
-        "resendSent": "招待を送信しました",
-        "resendThrottled": "招待を送信したばかりです。1分ほど待ってからお試しください。",
-        "syncPrompt": "共有すると、このノートのコピーが OpenWhispr クラウドに保存されます。共有相手を選ぶまでは、あなた以外は閲覧できません。",
-        "syncAndShare": "ノートを同期",
-        "visibility": {
-          "label": "公開範囲",
-          "private": "非公開",
-          "privateOption": "非公開 — 自分のみ",
-          "link": "リンクを持つ全員",
-          "domain": "{{domain}} の全員（リンクを持つ人）",
-          "invited": "招待された人のみ"
-        },
-        "error": {
-          "invalidEmail": "有効なメールアドレスを入力してください",
-          "alreadyInvited": "{{email}} はすでに招待されています",
-          "inviteFailed": "招待を送信できませんでした。もう一度お試しください。",
-          "visibilityFailed": "共有設定を更新できませんでした。もう一度お試しください。",
-          "copyFailed": "リンクをコピーできませんでした。もう一度お試しください。",
-          "revokeFailed": "招待を削除できませんでした。もう一度お試しください。",
-          "resendFailed": "招待を再送信できませんでした。もう一度お試しください。",
-          "syncFailed": "このノートを同期できませんでした。もう一度お試しください。",
-          "loadFailed": "共有設定を読み込めませんでした",
-          "retry": "再試行"
-        }
-      }
-    }
+    "deleteConfirm": "削除"
   },
   "commandSearch": {
     "allSpaces": "すべてのスペース",
@@ -3318,62 +2544,14 @@
     }
   },
   "updateNotification": {
-    "title": "OpenWhispr のアップデートあり",
+    "title": "HIRA のアップデートあり",
     "body": "バージョン {{version}} がダウンロード可能です",
     "cta": "今すぐ更新"
   },
   "permissionsGate": {
     "title": "権限が必要です",
-    "description": "OpenWhispr がこのコンピュータで動作するために、いくつかの権限が必要です。",
+    "description": "HIRA がこのコンピュータで動作するために、いくつかの権限が必要です。",
     "continue": "続行"
-  },
-  "apiKeysSection": {
-    "title": "APIキー",
-    "description": "アカウントへのプログラムアクセス用のキーを管理",
-    "docsLink": "APIドキュメント",
-    "empty": "APIキーはまだありません",
-    "createButton": "キーを作成",
-    "create": {
-      "title": "APIキーを作成",
-      "nameLabel": "キー名",
-      "namePlaceholder": "例: マイインテグレーション",
-      "scopesLabel": "権限",
-      "expiryLabel": "有効期限",
-      "expiryOptions": {
-        "never": "無期限",
-        "30days": "30日間",
-        "60days": "60日間",
-        "90days": "90日間",
-        "1year": "1年"
-      },
-      "submit": "作成",
-      "cancel": "キャンセル"
-    },
-    "created": {
-      "title": "キーが作成されました",
-      "warning": "このキーを今すぐコピーしてください。再度表示されることはありません。",
-      "copied": "コピー済み",
-      "copyButton": "クリップボードにコピー",
-      "done": "完了"
-    },
-    "scopes": {
-      "notesRead": "ノートの読み取り",
-      "notesWrite": "ノートの作成と編集",
-      "transcriptionsRead": "文字起こしの読み取り"
-    },
-    "revoke": {
-      "button": "取り消し",
-      "confirm": "このAPIキーを取り消しますか？このキーを使用しているインテグレーションは機能しなくなります。",
-      "success": "APIキーが取り消されました"
-    },
-    "neverUsed": "未使用",
-    "lastUsed": "{{time}}に使用",
-    "maxKeysReached": "キーの上限（{{max}}個）に達しました",
-    "errors": {
-      "loadFailed": "APIキーを読み込めませんでした",
-      "createFailed": "APIキーを作成できませんでした",
-      "revokeFailed": "APIキーを取り消せませんでした"
-    }
   },
   "embeddedChat": {
     "askPlaceholder": "何でも聞いてください...",
@@ -3401,83 +2579,6 @@
       "others": "他の人"
     },
     "missingAudio": "[音声欠落 {{from}}-{{to}}]"
-  },
-  "workspaces": {
-    "switcher": {
-      "workspaces": "ワークスペース",
-      "create": "ワークスペースを作成…"
-    },
-    "create": {
-      "title": "ワークスペースを作成",
-      "description": "ワークスペースには組織のメンバーと請求がまとまります。その中に共有ノート用のチームスペースを作成できます。",
-      "nameLabel": "ワークスペース名",
-      "namePlaceholder": "Acme Corp",
-      "freePlanNote": "新しいワークスペースは Free プランで始まります。チームスペースにはワークスペースのプランが必要です。",
-      "submit": "ワークスペースを作成",
-      "submitting": "作成中…",
-      "errorTitle": "ワークスペースを作成できませんでした"
-    },
-    "created": {
-      "title": "ワークスペースを作成しました",
-      "description": "{{name}} のオーナーになりました。"
-    },
-    "invite": {
-      "title": "{{workspace}} に招待",
-      "description": "メールアドレスでチームメイトを追加します。参加用のリンクが送信されます。",
-      "emailLabel": "メールアドレス",
-      "emailPlaceholder": "teammate@example.com",
-      "roleLabel": "役割",
-      "seatUsage": "{{seats}} シート中 {{used}} シートを使用中",
-      "seatCost": "承諾されるとプランに 1 席追加され、日割りの見積額 {{amount}} が請求されます。",
-      "submit": "招待を送信",
-      "submitting": "送信中…",
-      "sentTitle": "招待を送信しました",
-      "sentDescription": "{{email}} に招待を送信しました。",
-      "sentNoEmailTitle": "招待を作成しましたが、メールは送信されませんでした",
-      "sentNoEmailDescription": "{{email}} を招待しましたが、メールを配信できませんでした。後で再送信するか、別の方法で招待リンクを共有してください。",
-      "errorTitle": "招待を送信できませんでした",
-      "role": {
-        "admin": "管理者",
-        "member": "メンバー"
-      },
-      "roleDescription": {
-        "admin": "メンバーと請求を管理できます",
-        "member": "ワークスペースを利用できます"
-      }
-    },
-    "join": {
-      "title": "チームに参加",
-      "domainTitle": "あなたのチームはすでに OpenWhispr にいます",
-      "description": "これらのワークスペースに、あなたと同じメールドメインのメンバーがいます。",
-      "invitedDescription": "ワークスペースに招待されています。",
-      "invitedBy": "{{inviter}} が {{role}} として招待しました",
-      "memberCount_one": "メンバー {{count}} 人",
-      "memberCount_other": "メンバー {{count}} 人",
-      "join": "参加",
-      "requestErrorTitle": "リクエストを送信できませんでした",
-      "requestedDescription": "{{workspace}} の管理者が確認します。",
-      "requestedTitle": "リクエストを送信しました",
-      "requested": "リクエスト済み",
-      "request": "参加をリクエスト",
-      "notNow": "後で",
-      "successTitle": "参加しました",
-      "successDescription": "{{workspace}} のメンバーになりました。",
-      "errorTitle": "参加できませんでした"
-    },
-    "accept": {
-      "title": "ワークスペースに参加",
-      "description": "{{inviter}} さんから、{{workspace}} に{{role}}として参加するよう招待されています。",
-      "loading": "招待を読み込み中…",
-      "accept": "招待を承諾",
-      "accepting": "承諾中…",
-      "signInToAccept": "サインインして承諾",
-      "switchAccount": "アカウントを切り替える",
-      "successTitle": "参加しました",
-      "successDescription": "{{name}} のメンバーになりました。設定 → ワークスペースで管理できます。",
-      "errorTitle": "招待を承諾できませんでした",
-      "sentTo": "{{email}} に送信された招待です",
-      "wrongAccount": "この招待は {{email}} 宛てに送信されました。現在 {{current}} でサインインしています。"
-    }
   },
   "dictationTranslation": {
     "title": "音声入力翻訳",

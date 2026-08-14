@@ -1,6 +1,6 @@
 # Assets Directory
 
-This directory contains app icons and other assets for OpenWhispr.
+This directory contains HIRA branding and the packaged application icons.
 
 ## Required Icons
 
@@ -9,6 +9,11 @@ For proper app packaging, you'll need the following icon files:
 - `icon.icns` - macOS icon (1024x1024 recommended)
 - `icon.ico` - Windows icon (256x256 recommended)
 - `icon.png` - Linux icon (512x512 recommended)
+
+## HIRA Branding
+
+- `hira-logo.png` - the complete HIRA Restorative Wellness Center logo for larger surfaces
+- `hira-mark.png` - the compact HIRA mark used by loading, notification, tray, and app-icon surfaces
 
 ## Icon Specifications
 

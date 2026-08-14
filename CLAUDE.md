@@ -131,9 +131,9 @@ OpenWhispr is an Electron-based desktop dictation application that uses whisper.
   - Linux: Event-driven via `pactl subscribe` (PulseAudio source-output events)
   - All platforms: Graceful fallback to polling if native approach fails
 - **processListCache.js**: Shared singleton process list cache (5s TTL, `ps-list` npm)
-- **googleCalendarManager.js**: Google Calendar sync (REST, OAuth via `googleCalendarOAuth.js`)
-  - 10s socket timeout on API requests
-  - Incremental sync via `syncToken`; full re-sync on 410 prunes stale events (note-linked rows retained)
+- **receptionistCalendarBridge.js**: AIReceptionist-owned Google Calendar projection
+  - One-way, allowlisted calendar feed into local SQLite
+  - Single-flight refresh with stale-cache fallback; OpenWhispr does not own Google OAuth or REST calls
 - **microsoftCalendarManager.js**: Microsoft Calendar sync via Graph API (OAuth via `microsoftCalendarOAuth.js`)
   - `calendarView/delta` incremental sync over a 14-day window; delta token discarded after 7 days (Graph delta links never roll their window forward)
   - Full re-sync (410 or expired token) prunes stale events like Google

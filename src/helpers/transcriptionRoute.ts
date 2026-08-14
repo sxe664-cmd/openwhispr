@@ -1,7 +1,7 @@
 // Single source of truth for batch speech-to-text routing across dictation,
 // retry, and upload. Callers resolve their scope's settings into the flat base
-// names and handle the OpenWhispr-cloud pipeline upstream; streaming provider
-// selection is a live-recorder concern and stays in audioManager.
+// names; streaming provider selection is a live-recorder concern and stays in
+// audioManager.
 //
 // Loaded by the renderer and the main process alike (main uses dynamic import):
 // erasable TypeScript syntax only, explicit import extensions, no store imports.
@@ -17,10 +17,6 @@ import {
   isSelfHostedTranscription,
   resolveSelfHostedTranscriptionModel,
 } from "./selfHostedTranscription.js";
-import {
-  isTranscriptionSelectionAllowed,
-  type PolicyDecisionSnapshot,
-} from "../stores/policyRules.ts";
 import {
   isTinfoilInferenceUrl,
   TINFOIL_PROXY_REQUIRED_ERROR,
@@ -49,7 +45,6 @@ export interface TranscriptionRouteInput {
   /** Policy-EFFECTIVE, scope-resolved snapshot — the resolver never re-maps selections. */
   settings: TranscriptionRouteSettings;
   /** Optional fail-closed floor; renderer callers pass the policy store state, main-process callers omit it. */
-  policy?: PolicyDecisionSnapshot | null;
   /** Provider registry, for the Tinfoil-host guard. Renderer passes ModelRegistry, main the raw JSON. */
   providers?: readonly TranscriptionProviderBaseUrl[];
   request?: {
@@ -149,14 +144,7 @@ function buildBatchEndpoint(rawUrl: string, base: string, model: string | null):
   return buildAzureTranscriptionUrl(rawUrl, model || "") || fallback;
 }
 
-function customEndpointError(managed: boolean): TranscriptionRoute {
-  if (managed) {
-    return error(
-      "Transcription is restricted by your organization.",
-      "POLICY_RESTRICTED",
-      "common.policyTranscriptionRestricted"
-    );
-  }
+function customEndpointError(): TranscriptionRoute {
   return error(
     "Custom transcription endpoint is invalid or unsupported",
     "CUSTOM_ENDPOINT_INVALID",
@@ -166,28 +154,10 @@ function customEndpointError(managed: boolean): TranscriptionRoute {
 
 export function resolveTranscriptionRoute({
   settings,
-  policy,
   providers = [],
   request,
 }: TranscriptionRouteInput): TranscriptionRoute {
   const s = settings || {};
-  const managed = policy?.status === "managed";
-
-  // Fail-closed floor only: callers pass policy-effective settings, so a
-  // disallowed selection here means the policy layer was bypassed upstream.
-  if (
-    managed &&
-    !isTranscriptionSelectionAllowed(policy!, {
-      mode: (s.transcriptionMode || (s.useLocalWhisper ? "local" : "providers")) as never,
-      provider: s.cloudTranscriptionProvider || "",
-    })
-  ) {
-    return error(
-      "Transcription is restricted by your organization.",
-      "POLICY_RESTRICTED",
-      "common.policyTranscriptionRestricted"
-    );
-  }
 
   const language =
     request?.effectiveLanguage ??
@@ -266,7 +236,7 @@ export function resolveTranscriptionRoute({
       !base ||
       !isSecureHttpEndpoint(base)
     ) {
-      return customEndpointError(managed);
+      return customEndpointError();
     }
     if (isTinfoilInferenceUrl(base, providers)) {
       return error(TINFOIL_PROXY_REQUIRED_ERROR);

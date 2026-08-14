@@ -77,3 +77,32 @@ test("mic segments stay owned by you and survive an empty diarization run", () =
   const withoutClusters = manager.mergeWithTranscript([systemSegment(1, "morning")], []);
   assert.equal(withoutClusters[0].speaker, undefined);
 });
+
+test("in-person mic segments receive diarization labels instead of being called you", () => {
+  const manager = new DiarizationManager();
+
+  const merged = manager.mergeWithTranscript(
+    [
+      { source: "mic", timestamp: 0, text: "good morning" },
+      { source: "mic", timestamp: 3, text: "thanks for coming" },
+    ],
+    [
+      { start: 0, end: 2.5, speaker: "speaker_0" },
+      { start: 2.5, end: 6, speaker: "speaker_1" },
+    ],
+    { diarizationSource: "mic", ownVoiceSource: null }
+  );
+
+  assert.deepEqual(
+    merged.map((segment) => segment.speaker),
+    ["speaker_0", "speaker_1"]
+  );
+  assert.ok(merged.every((segment) => segment.speaker !== "you"));
+
+  const withoutClusters = manager.mergeWithTranscript(
+    [{ source: "mic", timestamp: 1, text: "still recording" }],
+    [],
+    { diarizationSource: "mic", ownVoiceSource: null }
+  );
+  assert.equal(withoutClusters[0].speaker, undefined);
+});

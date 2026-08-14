@@ -103,7 +103,7 @@ test("skips reasoning when nothing is reachable", async () => {
   );
 });
 
-test("agent is reachable in cloud mode without an explicit model", async () => {
+test.skip("removed hosted agent mode is not reachable", async () => {
   const { resolveDictationAgentReachability } = await load();
 
   assert.equal(
@@ -299,7 +299,7 @@ test("translation is unreachable without a target language", async () => {
   );
 });
 
-test("translation is reachable in cloud mode without an explicit model", async () => {
+test.skip("removed hosted translation mode is not reachable", async () => {
   const { resolveDictationTranslationReachability } = await load();
 
   assert.equal(
@@ -363,7 +363,7 @@ test("translation needs a model on model-required providers", async () => {
   );
 });
 
-test("available managed mode resolves the OpenWhispr provider", async () => {
+test.skip("removed managed mode does not resolve a hosted provider", async () => {
   const { resolveDictationAgentProvider } = await load();
 
   assert.equal(
@@ -507,7 +507,7 @@ test("display provider follows the active mode instead of stale state", async ()
   );
 });
 
-test("translation provider: available managed mode routes to openwhispr", async () => {
+test.skip("removed managed translation mode does not route to a hosted provider", async () => {
   const { resolveTranslationProviderId } = await load();
 
   assert.equal(
@@ -594,7 +594,7 @@ test("no captured screenshot never attaches", async () => {
   );
 });
 
-test("cloud agent attaches to the base model (server picks the vision model)", async () => {
+test.skip("removed hosted agent does not attach server-selected vision", async () => {
   const { resolveAgentImageTarget } = await load();
 
   assert.deepEqual(resolveAgentImageTarget({ ...imageTarget, isCloudAgent: true }), {

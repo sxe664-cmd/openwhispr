@@ -1,0 +1,31 @@
+mode: production
+contacts:
+- recipient_id: booking-7erbe84qd8soi5tmnsrt3fi1b4
+  display_name: Caller
+  email: null
+  phone: 561-405-5898
+  preferred_channels:
+  - email
+  - sms
+  sms_consent_status: opted_in
+  match_keys:
+  - 561-405-5898
+  - 5pdks9ib07918jfjc7p5f44ako
+  - booking-5pdks9ib07918jfjc7p5f44ako
+  consent_source: ai_booking_sms_opt_in
+  consent_timestamp: '2026-08-08T16:32:54.471472-04:00'
+- recipient_id: calendar-primary-7erbe84qd8soi5tmnsrt3fi1b4
+  display_name: 'Appointment: Caller'
+  email: null
+  phone: '+15614055898'
+  preferred_channels:
+  - email
+  - sms
+  sms_consent_status: opted_in
+  match_keys:
+  - '+15614055898'
+  - 7erbe84qd8soi5tmnsrt3fi1b4
+  - 7erbe84qd8soi5tmnsrt3fi1b4@google.com
+  - primary:7erbe84qd8soi5tmnsrt3fi1b4
+  - primary:7erbe84qd8soi5tmnsrt3fi1b4@google.com
+  phone_source: calendar_description:labeled

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { Cloud, Key, Cpu, Network } from "lucide-react";
+import { Key, Cpu, Network } from "lucide-react";
 import { TRANSCRIPTION_POLICY_PROVIDER_IDS, useSettingsStore } from "../../stores/settingsStore";
 import { usePolicyModeOptions } from "../../hooks/usePolicy";
 import { InferenceModeSelector } from "../ui/SettingsSection";
@@ -8,14 +8,10 @@ import type { InferenceModeOption } from "../ui/SettingsSection";
 import TranscriptionModelPicker from "../TranscriptionModelPicker";
 import SelfHostedPanel from "../SelfHostedPanel";
 import type { InferenceMode } from "../../types/electron";
-import { useStartOnboarding } from "../../hooks/useStartOnboarding";
 
 export function UploadTranscriptionPanel() {
   const { t } = useTranslation();
-  const startOnboarding = useStartOnboarding();
-
   const {
-    isSignedIn,
     uploadTranscriptionMode,
     setUploadTranscriptionMode,
     setUploadUseLocalWhisper,
@@ -44,14 +40,6 @@ export function UploadTranscriptionPanel() {
   } = usePolicyModeOptions<InferenceModeOption>(
     [
       {
-        id: "openwhispr",
-        label: t("settingsPage.transcription.modes.openwhispr"),
-        description: t("settingsPage.transcription.modes.openwhisprDesc"),
-        icon: <Cloud className="w-4 h-4" />,
-        disabled: !isSignedIn,
-        badge: !isSignedIn ? t("common.freeAccountRequired") : undefined,
-      },
-      {
         id: "providers",
         label: t("settingsPage.transcription.modes.providers"),
         description: t("settingsPage.transcription.modes.providersDesc"),
@@ -76,14 +64,10 @@ export function UploadTranscriptionPanel() {
   );
   const handleTranscriptionModeSelect = (mode: InferenceMode) => {
     if (!isModeAllowed(mode)) return;
-    if (mode === "openwhispr" && !isSignedIn) {
-      startOnboarding();
-      return;
-    }
     if (mode === effectiveTranscriptionMode) return;
     setUploadTranscriptionMode(mode);
     setUploadUseLocalWhisper(mode === "local");
-    setUploadCloudTranscriptionMode(mode === "openwhispr" ? "openwhispr" : "byok");
+    setUploadCloudTranscriptionMode("byok");
   };
 
   const handleLocalTranscriptionModelSelect = useCallback(

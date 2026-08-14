@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { getSettings, selectResolvedMeetingTranscription } from "./settingsStore";
-import { useStreamingProvidersStore } from "./streamingProvidersStore";
 import { getStreamingTranscriptionProviders } from "../models/ModelRegistry";
 import { resolveMeetingTranscriptionOptions } from "../helpers/meetingTranscriptionRouting";
 import { isBuiltInMicrophone } from "../utils/audioDeviceUtils";
@@ -14,7 +13,14 @@ import {
   resolveInitialSpeakerCountOverride,
   resolveParticipantSpeakerCountSync,
 } from "../utils/participants";
-import type { NoteItem, SystemAudioAccessResult, SystemAudioStrategy } from "../types/electron";
+import type {
+  MeetingContext,
+  MeetingDiarizationStatus,
+  NoteItem,
+  SystemAudioAccessResult,
+  SystemAudioStrategy,
+} from "../types/electron";
+import { normalizeMeetingContext } from "../types/electron";
 import type { CalendarAttendee } from "../types/calendar";
 import {
   DEFAULT_SYSTEM_AUDIO_ACCESS,
@@ -27,8 +33,6 @@ import {
   MAX_SPEAKER_COUNT,
 } from "../constants/speakerDetection.json";
 import logger from "../utils/logger";
-import { isTranscriptionContextAllowed } from "./policyRules";
-import { usePolicyStore } from "./policyStore";
 import {
   lockTranscriptSpeaker,
   mergeTranscriptSegments,
@@ -78,6 +82,7 @@ interface MeetingRecordingState {
   recordingNoteId: number | null;
   recordingNoteTitle: string | null;
   recordingFolderId: number | null;
+  meetingContext: MeetingContext;
   segments: TranscriptSegment[];
   transcript: string;
   micPartial: string;
@@ -85,6 +90,9 @@ interface MeetingRecordingState {
   systemPartialSpeakerId: string | null;
   systemPartialSpeakerName: string | null;
   diarizationSessionId: string | null;
+  diarizationStatus: MeetingDiarizationStatus;
+  diarizationError: string | null;
+  diarizationErrorNonce: number;
   /** Latest diarization result published for UI mirroring; consumed (nulled) by the editor that applies it. */
   completedDiarization: { noteId: number; segments: TranscriptSegment[] } | null;
   sessionDiarizationEnabled: boolean;
@@ -145,7 +153,6 @@ const getMeetingTranscriptionOptions = () => {
     selectedProvider: resolved.cloudTranscriptionProvider,
     selectedModel: resolved.cloudTranscriptionModel,
     byokProviders: getStreamingTranscriptionProviders(),
-    managedProviders: useStreamingProvidersStore.getState().providers,
     cortiEnvironment: state.cortiEnvironment,
     cortiTenant: state.cortiTenant,
     keyterms: (state.customDictionary ?? []).filter(Boolean),
@@ -417,6 +424,7 @@ let systemProcessor: AudioWorkletNode | null = null;
 let systemStream: MediaStream | null = null;
 let isRecordingFlag = false;
 let isStartingFlag = false;
+let startingNoteId: number | null = null;
 let isPrepared = false;
 let segmentsRefValue: TranscriptSegment[] = [];
 let preparePromise: Promise<void> | null = null;
@@ -434,6 +442,7 @@ export const useMeetingRecordingStore = create<MeetingRecordingState>()(() => ({
   recordingNoteId: null,
   recordingNoteTitle: null,
   recordingFolderId: null,
+  meetingContext: "telehealth",
   segments: [],
   transcript: "",
   micPartial: "",
@@ -441,6 +450,9 @@ export const useMeetingRecordingStore = create<MeetingRecordingState>()(() => ({
   systemPartialSpeakerId: null,
   systemPartialSpeakerName: null,
   diarizationSessionId: null,
+  diarizationStatus: "idle",
+  diarizationError: null,
+  diarizationErrorNonce: 0,
   completedDiarization: null,
   sessionDiarizationEnabled:
     (getSettings() as { speakerDiarizationEnabled?: boolean }).speakerDiarizationEnabled ?? true,
@@ -701,20 +713,22 @@ async function cleanup(): Promise<void> {
   isPrepared = false;
   isRecordingFlag = false;
   isStartingFlag = false;
+  startingNoteId = null;
 }
 
-export async function prepareTranscription(): Promise<void> {
+export async function prepareTranscription(context: MeetingContext = "telehealth"): Promise<void> {
+  if (normalizeMeetingContext(context) === "in_person") return;
   if (isPrepared || isRecordingFlag || isStartingFlag) return;
-  if (!isTranscriptionContextAllowed(usePolicyStore.getState(), getSettings(), "meeting")) return;
   if (preparePromise) return preparePromise;
 
   logger.info("Meeting transcription preparing (pre-warming WebSockets)...", {}, "meeting");
 
   const promise = (async () => {
     try {
-      const result = await window.electronAPI?.meetingTranscriptionPrepare?.(
-        getMeetingTranscriptionOptions()
-      );
+      const result = await window.electronAPI?.meetingTranscriptionPrepare?.({
+        ...getMeetingTranscriptionOptions(),
+        meetingContext: normalizeMeetingContext(context),
+      });
 
       if (result?.success) {
         isPrepared = true;
@@ -749,16 +763,18 @@ export interface StartRecordingArgs {
   diarizationEnabled?: boolean | null;
   expectedCount?: number | null;
   expectedCountIsExplicit?: boolean;
+  meetingContext?: MeetingContext;
 }
 
 export async function startRecording(args: StartRecordingArgs): Promise<boolean> {
-  if (isRecordingFlag || isStartingFlag) return true;
-  if (!isTranscriptionContextAllowed(usePolicyStore.getState(), getSettings(), "meeting")) {
-    logger.warn("Meeting recording blocked by workspace policy", {}, "meeting");
-    reportMeetingError("policyRestricted");
+  if (isRecordingFlag || isStartingFlag) {
+    const activeNoteId = useMeetingRecordingStore.getState().recordingNoteId ?? startingNoteId;
+    if (activeNoteId === args.noteId) return true;
+    reportMeetingError("Another encounter is already recording.");
     return false;
   }
   isStartingFlag = true;
+  startingNoteId = args.noteId;
 
   const initialEnabled =
     args.diarizationEnabled ??
@@ -768,9 +784,13 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     1,
     Math.min(MAX_SPEAKER_COUNT, args.expectedCount ?? DEFAULT_EXPECTED_SPEAKER_COUNT)
   );
+  const meetingContext = normalizeMeetingContext(args.meetingContext);
 
   const systemAudioAccessPromise =
-    window.electronAPI?.checkSystemAudioAccess?.() ?? Promise.resolve(DEFAULT_SYSTEM_AUDIO_ACCESS);
+    meetingContext === "in_person"
+      ? Promise.resolve({ ...DEFAULT_SYSTEM_AUDIO_ACCESS, mode: "unsupported" as const })
+      : (window.electronAPI?.checkSystemAudioAccess?.() ??
+        Promise.resolve(DEFAULT_SYSTEM_AUDIO_ACCESS));
 
   logger.info("Meeting transcription starting...", {}, "meeting");
   const seed = args.seedSegments ?? [];
@@ -797,6 +817,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     recordingNoteId: args.noteId,
     recordingNoteTitle: args.noteTitle,
     recordingFolderId: args.folderId,
+    meetingContext,
     sessionDiarizationEnabled: initialEnabled,
     sessionExpectedCount: initialCount,
     userTouchedStepper: resolveInitialSpeakerCountOverride(
@@ -810,6 +831,8 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     systemPartialSpeakerId: null,
     systemPartialSpeakerName: null,
     diarizationSessionId: null,
+    diarizationStatus: initialEnabled ? "queued" : "skipped",
+    diarizationError: null,
     completedDiarization: null,
     error: null,
     micCaptureStatus: "inactive",
@@ -833,6 +856,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       window.electronAPI?.meetingTranscriptionStart?.({
         ...getMeetingTranscriptionOptions(),
         noteId: args.noteId ?? null,
+        meetingContext,
       }),
       getMeetingMicConstraints().then(async (constraints) => {
         try {
@@ -880,6 +904,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       stopMediaStream(micResult);
       stopMediaStream(systemCaptureResult.stream);
       isStartingFlag = false;
+      startingNoteId = null;
       return true;
     }
 
@@ -897,16 +922,28 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       stopMediaStream(systemCaptureResult.stream);
       isRecordingFlag = false;
       isStartingFlag = false;
-      return true;
+      startingNoteId = null;
+      return false;
     }
 
-    const systemAudioMode = startResult.systemAudioMode || initialSystemAudioAccess.mode;
-    const systemAudioStrategy = startResult.systemAudioStrategy || initialSystemAudioStrategy;
-    systemCaptureResult = await ensureRendererSystemAudioCapture({
-      initialDisplayCaptureStrategy,
-      systemAudioStrategy,
-      systemCaptureResult,
-    });
+    const systemAudioMode =
+      meetingContext === "in_person"
+        ? ("unsupported" as const)
+        : startResult.systemAudioMode || initialSystemAudioAccess.mode;
+    const systemAudioStrategy =
+      meetingContext === "in_person"
+        ? ("unsupported" as const)
+        : startResult.systemAudioStrategy || initialSystemAudioStrategy;
+    if (meetingContext === "in_person") {
+      stopMediaStream(systemCaptureResult.stream);
+      systemCaptureResult = { stream: null, error: null };
+    } else {
+      systemCaptureResult = await ensureRendererSystemAudioCapture({
+        initialDisplayCaptureStrategy,
+        systemAudioStrategy,
+        systemCaptureResult,
+      });
+    }
     const systemAudioHandledInMain =
       systemAudioMode !== "unsupported" && !isRendererSystemAudioStrategy(systemAudioStrategy);
     if (systemAudioHandledInMain && systemCaptureResult.stream) {
@@ -922,16 +959,19 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     if (!micResult && !systemCaptureResult.stream && !systemAudioHandledInMain) {
       logger.error("Meeting transcription has no available audio source", {}, "meeting");
       reportMeetingError(
-        systemAudioMode === "unsupported"
-          ? "No microphone is available and system audio capture is unsupported on this device."
-          : systemCaptureError?.message ||
+        meetingContext === "in_person"
+          ? "No microphone is available for this in-person recording."
+          : systemAudioMode === "unsupported"
+            ? "No microphone is available and system audio capture is unsupported on this device."
+            : systemCaptureError?.message ||
               "No microphone is available and system audio capture could not be started.",
         { isRecording: false, isTranscribing: false }
       );
       await window.electronAPI?.meetingTranscriptionStop?.();
       isRecordingFlag = false;
       isStartingFlag = false;
-      return true;
+      startingNoteId = null;
+      return false;
     }
 
     const segmentCleanup = window.electronAPI?.onMeetingTranscriptionSegment?.(
@@ -1264,6 +1304,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     }
 
     isStartingFlag = false;
+    startingNoteId = null;
     socketReady = true;
 
     for (const chunk of pendingMicChunks) {
@@ -1301,8 +1342,9 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     });
     isRecordingFlag = false;
     isStartingFlag = false;
+    startingNoteId = null;
     await cleanup();
-    return true;
+    return false;
   }
 }
 
@@ -1317,7 +1359,6 @@ export async function stopRecording(): Promise<StopRecordingResult> {
 
   isRecordingFlag = false;
   isStartingFlag = false;
-  useMeetingRecordingStore.setState({ isRecording: false, isTranscribing: false });
 
   await cleanup();
 
@@ -1326,12 +1367,30 @@ export async function stopRecording(): Promise<StopRecordingResult> {
     const result = await window.electronAPI?.meetingTranscriptionStop?.();
     if (result?.diarizationSessionId) {
       diarizationSessionId = result.diarizationSessionId;
-      useMeetingRecordingStore.setState({ diarizationSessionId });
+      useMeetingRecordingStore.setState({ diarizationSessionId, diarizationStatus: "processing" });
     }
     if (result?.success && result.transcript) {
       useMeetingRecordingStore.setState({ transcript: result.transcript });
     } else if (result?.error) {
       reportMeetingError(result.error);
+      useMeetingRecordingStore.setState({ diarizationStatus: "failed" });
+    }
+
+    if (result?.success) {
+      const state = useMeetingRecordingStore.getState();
+      const transcript =
+        state.segments.length > 0
+          ? serializeTranscriptSegments(state.segments)
+          : result.transcript ?? state.transcript;
+      if (state.recordingNoteId != null) {
+        const completed = await window.electronAPI?.completeEncounterRecording?.(
+          state.recordingNoteId,
+          transcript
+        );
+        if (completed && !completed.success) {
+          reportMeetingError(completed.error || "The final transcript could not be saved.");
+        }
+      }
     }
   } catch (err) {
     reportMeetingError((err as Error).message);
@@ -1339,6 +1398,8 @@ export async function stopRecording(): Promise<StopRecordingResult> {
   }
 
   useMeetingRecordingStore.setState({
+    isRecording: false,
+    isTranscribing: false,
     micPartial: "",
     systemPartial: "",
     systemPartialSpeakerId: null,
@@ -1413,8 +1474,84 @@ if (typeof window !== "undefined") {
         }
       };
 
+      const persistFallback = async (segments: TranscriptSegment[]) => {
+        let persisted: NoteItem | null | undefined;
+        try {
+          persisted = await window.electronAPI?.getNote?.(targetNoteId);
+        } catch (error) {
+          logger.error(
+            "Diarization fallback could not read its note",
+            { noteId: targetNoteId, error: (error as Error).message },
+            "meeting"
+          );
+        }
+        if (!persisted || persisted.deleted_at) return segments;
+
+        const existing = selectBaseSegments({
+          persistedSegments: persisted.transcript
+            ? parseTranscriptSegments(persisted.transcript)
+            : null,
+          liveSegments,
+          recordingNoteId,
+          targetNoteId,
+        });
+        const preserved = mergeTranscriptSegments(
+          existing,
+          segments.map((segment, index) => ({
+            ...segment,
+            id: segment.id || `fallback-${index}`,
+          }))
+        );
+        try {
+          await window.electronAPI?.updateNote?.(targetNoteId, {
+            transcript: serializeTranscriptSegments(preserved),
+          });
+        } catch (error) {
+          logger.error(
+            "Diarization fallback could not persist its note",
+            { noteId: targetNoteId, error: (error as Error).message },
+            "meeting"
+          );
+        }
+        return preserved;
+      };
+
       if (!data?.segments?.length) {
-        publish([]);
+        if (isCurrentSession) {
+          useMeetingRecordingStore.setState({
+            diarizationStatus:
+              data.status === "failed"
+                ? "failed"
+                : data.status === "skipped"
+                  ? "skipped"
+                  : "completed",
+            ...(data.status === "failed" && data.error
+              ? {
+                  diarizationError: data.error,
+                  diarizationErrorNonce:
+                    useMeetingRecordingStore.getState().diarizationErrorNonce + 1,
+                }
+              : {}),
+          });
+        }
+        publish(await persistFallback([]));
+        return;
+      }
+
+      if (data.status === "failed" || data.status === "skipped") {
+        if (isCurrentSession) {
+          useMeetingRecordingStore.setState({
+            diarizationStatus: data.status,
+            ...(data.status === "failed" && data.error
+              ? {
+                  diarizationError: data.error,
+                  diarizationErrorNonce:
+                    useMeetingRecordingStore.getState().diarizationErrorNonce + 1,
+                }
+              : {}),
+          });
+        }
+        publish(await persistFallback(data.segments));
         return;
       }
 
@@ -1460,10 +1597,20 @@ if (typeof window !== "undefined") {
           transcript: serializeTranscriptSegments(enriched),
         });
       } catch (error) {
+        if (isCurrentSession) {
+          useMeetingRecordingStore.setState((state) => ({
+            diarizationStatus: "failed",
+            diarizationError: (error as Error).message,
+            diarizationErrorNonce: state.diarizationErrorNonce + 1,
+          }));
+        }
         publish([]);
         throw error;
       }
       publish(enriched);
+      if (isCurrentSession) {
+        useMeetingRecordingStore.setState({ diarizationStatus: "completed" });
+      }
 
       if (data.speakerEmbeddings) {
         await window.electronAPI?.saveNoteSpeakerEmbeddings?.(targetNoteId, data.speakerEmbeddings);

@@ -7,11 +7,7 @@ import {
   shouldShowIntro,
 } from "../../../lib/versionedIntro";
 
-interface OverviewExplainerBannerProps {
-  kind: "team" | "private";
-}
-
-export function OverviewExplainerBanner({ kind }: OverviewExplainerBannerProps) {
+export function OverviewExplainerBanner() {
   const { t } = useTranslation();
   const [visible, setVisible] = useState(() =>
     shouldShowIntro(localStorage, CONTAINER_OVERVIEW_INTRO)
@@ -32,10 +28,10 @@ export function OverviewExplainerBanner({ kind }: OverviewExplainerBannerProps) 
         <X size={12} />
       </button>
       <p className="text-xs font-medium text-foreground/80 mb-0.5">
-        {t(`notes.overview.banner.title.${kind}`)}
+        {t("notes.overview.banner.title.private")}
       </p>
       <p className="text-xs text-foreground/55 dark:text-foreground/45 max-w-lg pr-6">
-        {t(`notes.overview.banner.body.${kind}`)}
+        {t("notes.overview.banner.body.private")}
       </p>
     </div>
   );

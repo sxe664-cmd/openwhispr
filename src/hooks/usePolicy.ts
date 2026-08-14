@@ -12,7 +12,7 @@ import {
   type TranscriptionPolicyContext,
 } from "../stores/policyRules";
 import type { InferenceMode } from "../types/electron";
-import type { PolicyScope } from "../types/policy";
+import type { PolicyScope } from "../stores/policyRules";
 
 /** The minimal reactive snapshot consumed by the pure policy rules. */
 export function usePolicySnapshot(): PolicyDecisionSnapshot {

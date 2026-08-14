@@ -39,7 +39,7 @@ const WINDOW_SIZES = {
 const MAIN_WINDOW_CONFIG = {
   width: WINDOW_SIZES.BASE.width,
   height: WINDOW_SIZES.BASE.height,
-  title: "Voice Recorder",
+  title: "Hira Console Voice Recorder",
   webPreferences: {
     preload: path.join(__dirname, "..", "..", "preload.js"),
     nodeIntegration: false,
@@ -74,13 +74,13 @@ const CONTROL_PANEL_CONFIG = {
     sandbox: false,
     // webSecurity: false disables same-origin policy. Required because in
     // production the renderer loads from a file:// origin but makes
-    // cross-origin fetch calls to Better Auth, Gemini, OpenAI, and Groq APIs
+    // cross-origin fetch calls used by optional BYOK providers
     // directly from the browser. These would be blocked by CORS otherwise.
     webSecurity: false,
     spellcheck: false,
     backgroundThrottling: false,
   },
-  title: "Control Panel",
+  title: "Hira Console",
   resizable: true,
   show: false,
   frame: false,

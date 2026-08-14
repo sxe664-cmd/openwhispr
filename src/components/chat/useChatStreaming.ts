@@ -3,11 +3,7 @@ import { useTranslation } from "react-i18next";
 import ReasoningService, { type AgentStreamChunk } from "../../services/ReasoningService";
 import { isEnterpriseProvider } from "../../models/ModelRegistry";
 import { getSettings, selectResolvedLLMConfig } from "../../stores/settingsStore";
-import {
-  isAgentAllowed,
-  isLlmSelectionAllowed,
-  isWebSearchAllowed,
-} from "../../stores/policyRules";
+import { isAgentAllowed, isLlmSelectionAllowed } from "../../stores/policyRules";
 import { usePolicyStore } from "../../stores/policyStore";
 import { getAgentSystemPrompt } from "../../config/prompts";
 import { createToolRegistry } from "../../services/tools";
@@ -111,14 +107,9 @@ export function useChatStreaming({
     async (userText: string, allMessages: Message[]) => {
       const settings = getSettings();
       const chatConfig = selectResolvedLLMConfig(settings, "chatIntelligence");
-      const chatAgentMode = chatConfig.mode || "openwhispr";
+      const chatAgentMode = chatConfig.mode || "local";
       const policyState = usePolicyStore.getState();
-      const policyProvider =
-        chatAgentMode === "openwhispr"
-          ? "openwhispr"
-          : chatAgentMode === "local"
-            ? "local"
-            : chatConfig.provider;
+      const policyProvider = chatAgentMode === "local" ? "local" : chatConfig.provider;
       if (
         !isAgentAllowed(policyState) ||
         !isLlmSelectionAllowed(policyState, { mode: chatAgentMode, provider: policyProvider })
@@ -135,8 +126,7 @@ export function useChatStreaming({
       }
 
       setAgentState("thinking");
-      const isCloudAgent = chatAgentMode === "openwhispr" && settings.isSignedIn;
-      const isLanAgent = chatAgentMode === "self-hosted" && !!chatConfig.remoteUrl;
+        const isLanAgent = chatAgentMode === "self-hosted" && !!chatConfig.remoteUrl;
       const isCustomAgent = chatAgentMode === "providers" && chatConfig.provider === "custom";
       const isLocalProvider =
         !isEnterpriseProvider(chatConfig.provider) &&
@@ -152,7 +142,7 @@ export function useChatStreaming({
         ].includes(chatConfig.provider);
       const localModelCanUseTool =
         isLocalProvider && estimateModelSizeB(chatConfig.model) >= LOCAL_TOOL_MIN_PARAMS_B;
-      const supportsTools = isCloudAgent || !isLocalProvider || localModelCanUseTool;
+      const supportsTools = !isLocalProvider || localModelCanUseTool;
 
       const scope = searchScopeRef.current;
       let registry: ToolRegistry | null = null;
@@ -162,17 +152,13 @@ export function useChatStreaming({
         // so any connected provider enables it.
         const calendarConnected =
           settings.gcalConnected || settings.mcalConnected || settings.appleCalendarConnected;
-        const webSearchEnabled = isWebSearchAllowed(usePolicyStore.getState());
-        const cacheKey = `${settings.isSignedIn}-${calendarConnected}-${settings.cloudBackupEnabled}-${scopeKey}-${webSearchEnabled}`;
+        const cacheKey = `${calendarConnected}-${scopeKey}`;
         if (toolRegistryRef.current?.key === cacheKey) {
           registry = toolRegistryRef.current.registry;
         } else {
           registry = createToolRegistry({
-            isSignedIn: settings.isSignedIn,
             calendarConnected,
-            cloudBackupEnabled: settings.cloudBackupEnabled,
             searchScope: scope,
-            webSearchEnabled,
           });
           toolRegistryRef.current = { key: cacheKey, registry };
         }
@@ -201,65 +187,22 @@ export function useChatStreaming({
         let fullContent = "";
         let stream: AsyncGenerator<AgentStreamChunk>;
 
-        if (isCloudAgent) {
-          const executeToolCall = registry
-            ? async (name: string, argsJson: string) => {
-                const tool = registry.get(name);
-                if (!tool)
-                  return {
-                    data: `Unknown tool: ${name}`,
-                    displayText: t("agentMode.tools.unknownTool", { name }),
-                  };
-                let args: Record<string, unknown>;
-                try {
-                  args = JSON.parse(argsJson);
-                } catch {
-                  return {
-                    data: `Invalid tool arguments for ${name}`,
-                    displayText: t("agentMode.tools.invalidArgs", { name }),
-                  };
-                }
-                const result = await tool.execute(args);
-                const data = result.success
-                  ? typeof result.data === "string"
-                    ? result.data
-                    : JSON.stringify(result.data)
-                  : result.displayText;
-                const metadata =
-                  result.success && result.data && typeof result.data === "object"
-                    ? (result.data as Record<string, unknown> | Array<Record<string, unknown>>)
-                    : undefined;
-                return { data, displayText: result.displayText, metadata };
-              }
-            : undefined;
-
-          stream = ReasoningService.processTextStreamingCloud(llmMessages, {
+        const aiTools = registry?.toAISDKFormat();
+        stream = ReasoningService.processTextStreamingAI(
+          llmMessages,
+          chatConfig.model,
+          chatConfig.provider,
+          {
             systemPrompt,
-            tools: registry?.getAll().map((t) => ({
-              name: t.name,
-              description: t.description,
-              parameters: t.parameters,
-            })),
-            executeToolCall,
-          });
-        } else {
-          const aiTools = registry?.toAISDKFormat();
-          stream = ReasoningService.processTextStreamingAI(
-            llmMessages,
-            chatConfig.model,
-            chatConfig.provider,
-            {
-              systemPrompt,
-              inferenceScope: "chatIntelligence",
-              lanUrl: isLanAgent ? chatConfig.remoteUrl : undefined,
-              baseUrl: isCustomAgent ? chatConfig.cloudBaseUrl || undefined : undefined,
-              customApiKey:
-                isCustomAgent || isLanAgent ? chatConfig.customApiKey || undefined : undefined,
-              disableThinking: chatConfig.disableThinking,
-            },
-            aiTools
-          );
-        }
+            inferenceScope: "chatIntelligence",
+            lanUrl: isLanAgent ? chatConfig.remoteUrl : undefined,
+            baseUrl: isCustomAgent ? chatConfig.cloudBaseUrl || undefined : undefined,
+            customApiKey:
+              isCustomAgent || isLanAgent ? chatConfig.customApiKey || undefined : undefined,
+            disableThinking: chatConfig.disableThinking,
+          },
+          aiTools
+        );
 
         for await (const chunk of stream) {
           if (!mountedRef.current) {

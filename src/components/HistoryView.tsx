@@ -1,14 +1,13 @@
 import { Fragment, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
-import { Loader2, Sparkles, Cloud, X, Mic, Trash2, Archive } from "lucide-react";
+import { Loader2, Sparkles, X, Mic, Trash2, Archive } from "lucide-react";
 import TranscriptionItem from "./ui/TranscriptionItem";
 import type { TranscriptionItem as TranscriptionItemType } from "../types/electron";
 import { formatHotkeyLabel, parseHotkeyList } from "../utils/hotkeys";
 import { formatDateGroup } from "../utils/dateFormatting";
 import { cn } from "./lib/utils";
-import { useUpcomingEvents } from "../hooks/useUpcomingEvents";
-import UpcomingMeetings from "./UpcomingMeetings";
+import EncounterHomeView from "./EncounterHomeView";
 import { useSettingsStore } from "../stores/settingsStore";
 import { effectiveLocalHistoryEnabled } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
@@ -17,8 +16,6 @@ interface HistoryViewProps {
   history: TranscriptionItemType[];
   isLoading: boolean;
   hotkey: string;
-  showCloudMigrationBanner: boolean;
-  setShowCloudMigrationBanner: (show: boolean) => void;
   aiCTADismissed: boolean;
   setAiCTADismissed: (dismissed: boolean) => void;
   useCleanupModel: boolean;
@@ -36,8 +33,6 @@ export default function HistoryView({
   history,
   isLoading,
   hotkey,
-  showCloudMigrationBanner,
-  setShowCloudMigrationBanner,
   aiCTADismissed,
   setAiCTADismissed,
   useCleanupModel,
@@ -55,8 +50,6 @@ export default function HistoryView({
   const dataRetentionEnabled = usePolicyStore((policyState) =>
     effectiveLocalHistoryEnabled(policyState, personalDataRetentionEnabled)
   );
-  const { events, isLoading: eventsLoading, isConnected } = useUpcomingEvents();
-
   const groupedHistory = useMemo(() => {
     if (history.length === 0) return [];
 
@@ -93,48 +86,15 @@ export default function HistoryView({
 
   return (
     <div className="px-4 pt-4 pb-6">
-      <div className={cn("mx-auto", isConnected ? "max-w-5xl" : "max-w-3xl")}>
+      <div className="mx-auto max-w-5xl">
+        <EncounterHomeView />
+        <div className="mb-3 flex items-center gap-1.5">
+          <Mic size={12} className="text-muted-foreground" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t("encounters.quickDictation")}
+          </span>
+        </div>
         {history.length === 0 && <div className="mb-2 flex justify-end">{discardedToggle}</div>}
-        {showCloudMigrationBanner && (
-          <div className="mb-3 relative rounded-lg border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3">
-            <button
-              onClick={() => {
-                setShowCloudMigrationBanner(false);
-                localStorage.setItem("cloudMigrationShown", "true");
-              }}
-              aria-label={t("common.close")}
-              className="absolute top-2 right-2 p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-            >
-              <X size={14} />
-            </button>
-            <div className="flex items-start gap-3 pr-6">
-              <div className="shrink-0 w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/20 flex items-center justify-center">
-                <Cloud size={16} className="text-primary" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-foreground mb-0.5">
-                  {t("controlPanel.cloudMigration.title")}
-                </p>
-                <p className="text-xs text-muted-foreground mb-2">
-                  {t("controlPanel.cloudMigration.description")}
-                </p>
-                <Button
-                  variant="default"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    setShowCloudMigrationBanner(false);
-                    localStorage.setItem("cloudMigrationShown", "true");
-                    onOpenSettings("transcription");
-                  }}
-                >
-                  {t("controlPanel.cloudMigration.viewSettings")}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {!useCleanupModel && !aiCTADismissed && (
           <div className="mb-3 relative rounded-lg border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3">
             <button
@@ -171,16 +131,8 @@ export default function HistoryView({
           </div>
         )}
 
-        <div className={cn(isConnected ? "flex gap-6" : "")}>
-          <div className={cn("min-w-0", isConnected ? "flex-1" : "w-full")}>
-            {isConnected && (
-              <div className="flex items-center gap-1.5 pb-2.5">
-                <Mic size={12} className="text-muted-foreground" />
-                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
-                  {t("upcoming.transcriptions")}
-                </span>
-              </div>
-            )}
+        <div>
+          <div className="min-w-0 w-full">
             {!dataRetentionEnabled && (
               <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10 px-3.5 py-2.5 flex items-center gap-2.5">
                 <span className="text-amber-600 dark:text-amber-400 shrink-0 text-sm">⊘</span>
@@ -340,13 +292,6 @@ export default function HistoryView({
             )}
           </div>
 
-          {isConnected && (
-            <div className="w-64 shrink-0 hidden sm:block">
-              <div className="sticky top-4">
-                <UpcomingMeetings events={events} isLoading={eventsLoading} />
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

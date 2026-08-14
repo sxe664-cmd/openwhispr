@@ -1,16 +1,13 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import App from "./App.jsx";
-import AuthenticationStep from "./components/AuthenticationStep.tsx";
 import MeetingNotificationOverlay from "./components/MeetingNotificationOverlay.tsx";
 import TranscriptionPreviewOverlay from "./components/TranscriptionPreviewOverlay.tsx";
 import UpdateNotificationOverlay from "./components/UpdateNotificationOverlay.tsx";
-import WindowControls from "./components/WindowControls.tsx";
-import { Card, CardContent } from "./components/ui/card.tsx";
-import { useAuth } from "./hooks/useAuth";
 import { useTheme } from "./hooks/useTheme";
-import { usePolicyStore } from "./stores/policyStore";
 import { isControlPanelWindow } from "./utils/windowContext.ts";
+import { runLocalOnlyMigration } from "./helpers/localOnlyMigration";
+import { BrandLogo } from "./components/ui/BrandLogo.tsx";
 
 const ControlPanel = React.lazy(() => import("./components/ControlPanel.tsx"));
 const OnboardingFlow = React.lazy(() => import("./components/OnboardingFlow.tsx"));
@@ -36,24 +33,17 @@ export default function AppRouter() {
 }
 
 function MainApp() {
-  const { isSignedIn, isGracePeriodOnly, isLoaded: authLoaded } = useAuth();
-  const policyStatus = usePolicyStore((state) => state.status);
-  const policyResolved =
-    !isSignedIn ||
-    policyStatus === "managed" ||
-    policyStatus === "unmanaged" ||
-    policyStatus === "error";
-  const isWaitingForPolicyStart = isSignedIn && !policyResolved;
-  const autoSyncReady = authLoaded && policyResolved;
-
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [needsReauth, setNeedsReauth] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [postOnboardingSettingsSection, setPostOnboardingSettingsSection] = useState(undefined);
 
   const isAgentPanel = window.location.search.includes("agent=true");
   const isControlPanel = !isAgentPanel && isControlPanelWindow();
   const isDictationPanel = !isControlPanel && !isAgentPanel;
+
+  useEffect(() => {
+    runLocalOnlyMigration();
+  }, []);
 
   useEffect(() => {
     if (isAgentPanel) {
@@ -65,64 +55,32 @@ function MainApp() {
         import("./components/OnboardingFlow.tsx").catch(() => {});
       }
     }
-
-    // Sync starts only after auth settles, so a new bearer token cannot touch
-    // the previous account's rows while validation is still running. A failed
-    // (guest/offline) resolution also counts as settled: canSync() then no-ops
-    // because no validated auth context exists.
-    if (!isAgentPanel && autoSyncReady) {
-      import("./services/SyncService.js")
-        .then(({ syncService }) => syncService.startAutoSync())
-        .catch(() => {});
-    }
-  }, [autoSyncReady, isAgentPanel, isControlPanel]);
+  }, [isAgentPanel, isControlPanel]);
 
   useEffect(() => {
-    if (!authLoaded) return;
-
     const onboardingCompleted = localStorage.getItem("onboardingCompleted") === "true";
-    const authSkipped =
-      localStorage.getItem("authenticationSkipped") === "true" ||
-      localStorage.getItem("skipAuth") === "true";
     const onboardingInProgress = localStorage.getItem("onboardingCurrentStep") !== null;
-    const isReturningUser =
-      !onboardingCompleted && isSignedIn && !isGracePeriodOnly && !onboardingInProgress;
 
-    if (isReturningUser) {
-      localStorage.setItem("onboardingCompleted", "true");
+    if (isControlPanel && !onboardingCompleted && !onboardingInProgress) {
+      setShowOnboarding(true);
     }
 
-    const resolved = localStorage.getItem("onboardingCompleted") === "true";
-
-    if (isControlPanel) {
-      if (!resolved) {
-        setShowOnboarding(true);
-      } else if (!isSignedIn && !authSkipped) {
-        setNeedsReauth(true);
-      }
-    }
-
-    if (isDictationPanel && !resolved) {
-      // Keep the dictation overlay hidden during onboarding — OnboardingFlow
-      // shows it explicitly when the user reaches the activation step.
+    if (isDictationPanel && !onboardingCompleted) {
       window.electronAPI?.hideWindow?.();
     }
 
     setIsLoading(false);
-  }, [authLoaded, isControlPanel, isDictationPanel, isGracePeriodOnly, isSignedIn]);
+  }, [isControlPanel, isDictationPanel]);
 
   const handleOnboardingComplete = (options) => {
     if (options?.openSettings) {
-      setPostOnboardingSettingsSection("transcription");
+      setPostOnboardingSettingsSection("speechToText");
     }
     setShowOnboarding(false);
     localStorage.setItem("onboardingCompleted", "true");
   };
 
-  // The agent waits for auth resolution so account policy can fail closed;
-  // guests still render once the signed-out state resolves.
   if (isAgentPanel) {
-    if (!authLoaded || isWaitingForPolicyStart) return <LoadingFallback />;
     return (
       <Suspense fallback={<LoadingFallback />}>
         <AgentOverlay />
@@ -130,10 +88,7 @@ function MainApp() {
     );
   }
 
-  // isLoading clears once the onboarding effect has run, which itself waits
-  // for authLoaded — and authLoaded terminates even when the session cannot
-  // resolve (guest/offline presents as signed out).
-  if (isLoading || isWaitingForPolicyStart) {
+  if (isLoading) {
     return <LoadingFallback />;
   }
 
@@ -142,43 +97,6 @@ function MainApp() {
       <Suspense fallback={<LoadingFallback />}>
         <OnboardingFlow onComplete={handleOnboardingComplete} />
       </Suspense>
-    );
-  }
-
-  if (isControlPanel && needsReauth) {
-    return (
-      <div
-        className="h-screen flex flex-col bg-background"
-        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
-      >
-        <div
-          className="flex items-center justify-end w-full h-10 shrink-0"
-          style={{ WebkitAppRegion: "drag" }}
-        >
-          {window.electronAPI?.getPlatform?.() !== "darwin" && (
-            <div className="pr-1" style={{ WebkitAppRegion: "no-drag" }}>
-              <WindowControls />
-            </div>
-          )}
-        </div>
-        <div className="flex-1 px-6 overflow-y-auto flex items-center">
-          <div className="w-full max-w-sm mx-auto">
-            <Card className="bg-card/90 backdrop-blur-2xl border border-border/50 dark:border-white/5 shadow-lg rounded-xl overflow-hidden">
-              <CardContent className="p-6">
-                <AuthenticationStep
-                  onContinueWithoutAccount={() => {
-                    localStorage.setItem("authenticationSkipped", "true");
-                    localStorage.setItem("skipAuth", "true");
-                    setNeedsReauth(false);
-                  }}
-                  onAuthComplete={() => setNeedsReauth(false)}
-                  onNeedsVerification={() => {}}
-                />
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -198,17 +116,10 @@ function LoadingFallback({ message }) {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="flex flex-col items-center gap-4 animate-[scale-in_300ms_ease-out]">
-        <svg
-          viewBox="0 0 1024 1024"
+        <BrandLogo
           className="w-12 h-12 drop-shadow-[0_2px_8px_rgba(37,99,235,0.18)] dark:drop-shadow-[0_2px_12px_rgba(100,149,237,0.25)]"
-          aria-label="OpenWhispr"
-        >
-          <rect width="1024" height="1024" rx="241" fill="#2056DF" />
-          <circle cx="512" cy="512" r="314" fill="#2056DF" stroke="white" strokeWidth="74" />
-          <path d="M512 383V641" stroke="white" strokeWidth="74" strokeLinecap="round" />
-          <path d="M627 457V568" stroke="white" strokeWidth="74" strokeLinecap="round" />
-          <path d="M397 457V568" stroke="white" strokeWidth="74" strokeLinecap="round" />
-        </svg>
+          alt="HIRA"
+        />
         <div className="w-7 h-7 rounded-full border-[2.5px] border-transparent border-t-primary animate-[spinner-rotate_0.8s_cubic-bezier(0.4,0,0.2,1)_infinite] motion-reduce:animate-none motion-reduce:border-t-muted-foreground motion-reduce:opacity-50" />
         {fallbackMessage && (
           <p className="text-[13px] font-medium text-muted-foreground dark:text-foreground/60 tracking-[-0.01em]">

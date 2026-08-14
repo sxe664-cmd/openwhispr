@@ -48,6 +48,13 @@ test("returns null for missing event or links", async () => {
   assert.equal(getMeetingJoinUrl({}), null);
 });
 
+test("never treats a Calendar event page as a direct meeting URL", async () => {
+  const { getCalendarEventUrl, getMeetingJoinUrl } = await load();
+  const event = { hangout_link: "https://calendar.google.com/calendar/event?eid=abc", html_link: "https://calendar.google.com/calendar/event?eid=abc" };
+  assert.equal(getMeetingJoinUrl(event), null);
+  assert.equal(getCalendarEventUrl(event), "https://calendar.google.com/calendar/event?eid=abc");
+});
+
 test("extractMeetingUrl matches known meeting vendors", async () => {
   const { extractMeetingUrl } = await load();
   const urls = [

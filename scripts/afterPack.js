@@ -231,6 +231,28 @@ function verifyMeetingAecHelper(context) {
   }
 }
 
+function verifyAIReceptionistRuntime(context) {
+  const resourcesDir = resolveResourcesDir(context);
+  const runtimeRoot = path.join(resourcesDir, "ai-receptionist");
+  const pythonExecutable = context.electronPlatformName === "win32"
+    ? path.join(runtimeRoot, "python-runtime", "Scripts", "python.exe")
+    : path.join(runtimeRoot, "python-runtime", "bin", "python3");
+  const requiredPaths = [
+    path.join(runtimeRoot, "receptionist"),
+    pythonExecutable,
+    path.join(runtimeRoot, "dad-seed", ".env.local"),
+    path.join(runtimeRoot, "dad-seed", "config", "app.yaml"),
+  ];
+  const missing = requiredPaths.filter((filePath) => !fs.existsSync(filePath));
+  if (missing.length > 0) {
+    throw new Error(
+      `afterPack: AIReceptionist runtime is incomplete; missing ${missing.join(", ")}`
+    );
+  }
+
+  console.log("  afterPack: verified bundled AIReceptionist Python runtime and private seed");
+}
+
 function verifyUnpackedBinaries(context) {
   const unpackedDir = path.join(resolveResourcesDir(context), "app.asar.unpacked");
   const unpackedModulesDir = path.join(unpackedDir, "node_modules");
@@ -280,6 +302,7 @@ exports.default = async function (context) {
   stripOnnxruntimeBinaries(context);
   wrapLinuxBinary(context);
   verifyMeetingAecHelper(context);
+  verifyAIReceptionistRuntime(context);
   verifyUnpackedBinaries(context);
   registerMacResourceBinariesForSigning(context);
 };

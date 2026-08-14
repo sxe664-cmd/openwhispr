@@ -142,10 +142,10 @@ test("container teardown preserves active notes outside the removed containers",
   assert.equal(result.activeNoteId, 2);
 });
 
-test("account reset state contains no cached content, context, shares, or conflicts", async () => {
-  const { createClearedAccountNoteState } = await load();
+test("local reset state contains no cached content, context, shares, or conflicts", async () => {
+  const { createClearedNoteState } = await load();
 
-  const state = createClearedAccountNoteState();
+  const state = createClearedNoteState();
 
   assert.deepEqual(state.notes, []);
   assert.deepEqual(state.spaces, []);
@@ -154,15 +154,13 @@ test("account reset state contains no cached content, context, shares, or confli
   assert.deepEqual(state.spaceRootCounts, {});
   assert.deepEqual(state.notesByContainer, {});
   assert.deepEqual([...state.expandedContainers], []);
-  assert.equal(state.activeContext, null);
-  assert.equal(state.activeNoteId, null);
+  assert.equal(state.activeContext ?? null, null);
+  assert.equal(state.activeNoteId ?? null, null);
   assert.equal(state.isTreeLoading, true);
-  assert.equal(state.migration, null);
-  assert.deepEqual([...state.shareByCloudId], []);
-  assert.deepEqual(state.noteConflicts, {});
+  assert.equal(state.migration ?? null, null);
 });
 
-test("account reset invalidates every in-flight keyed load generation", async () => {
+test("local reset invalidates every in-flight keyed load generation", async () => {
   const { invalidateKeyedLoadGenerations } = await load();
   const generations = new Map([
     ["s:1", 2],

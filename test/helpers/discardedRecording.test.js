@@ -39,7 +39,7 @@ test("handles missing settings", async () => {
   assert.equal(shouldSaveDiscardedRecording(undefined, 3), false);
 });
 
-test("uses the policy-effective history setting without changing raw settings", async () => {
+test("ignores legacy policy state without changing raw settings", async () => {
   const { shouldSaveDiscardedRecording } = await load();
   const settings = { ...base };
   const policyState = {
@@ -53,6 +53,6 @@ test("uses the policy-effective history setting without changing raw settings", 
     },
   };
 
-  assert.equal(shouldSaveDiscardedRecording(settings, 3, policyState), false);
+  assert.equal(shouldSaveDiscardedRecording(settings, 3, policyState), true);
   assert.deepEqual(settings, base);
 });

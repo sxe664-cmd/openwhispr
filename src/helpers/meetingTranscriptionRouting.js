@@ -1,8 +1,3 @@
-const DEFAULT_MANAGED_PROVIDER = {
-  id: "openai",
-  models: [{ id: "gpt-4o-mini-transcribe", default: true }],
-};
-
 const resolveModel = (provider, selectedModel) =>
   provider.models.find((model) => model.id === selectedModel)?.id ??
   provider.models.find((model) => model.default)?.id ??
@@ -17,7 +12,6 @@ export function resolveMeetingTranscriptionOptions({
   selectedProvider,
   selectedModel,
   byokProviders,
-  managedProviders,
   cortiEnvironment,
   cortiTenant,
   keyterms,
@@ -34,19 +28,9 @@ export function resolveMeetingTranscriptionOptions({
     };
   }
 
-  if (transcriptionMode === "openwhispr") {
-    const provider = managedProviders?.[0] ?? DEFAULT_MANAGED_PROVIDER;
-    return {
-      provider: `${provider.id}-realtime`,
-      model: resolveModel(provider, selectedModel),
-      mode: "openwhispr",
-      language,
-    };
-  }
-
   if (transcriptionMode === "self-hosted") {
     throw new Error(
-      "Self-hosted realtime transcription is not supported for Note Recording. Choose Local or Cloud Providers."
+      "Self-hosted realtime transcription is not supported for Note Recording. Choose Local or BYOK Providers."
     );
   }
 

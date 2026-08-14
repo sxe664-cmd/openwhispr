@@ -4,7 +4,7 @@
       "sectionTitle": "Idioma",
       "sectionDescription": "Defina separadamente os idiomas da interface e da transcrição",
       "uiLabel": "Idioma da interface",
-      "uiDescription": "Escolha o idioma usado na interface do OpenWhispr",
+      "uiDescription": "Escolha o idioma usado na interface do HIRA",
       "transcriptionLabel": "Idioma de transcrição",
       "transcriptionDescription": "Escolha o idioma que você fala para maior precisão",
       "chineseScriptLabel": "Escrita chinesa (ditado)",
@@ -39,12 +39,12 @@
     },
     "openControlPanel": "Abrir painel de controle",
     "hideControlPanel": "Ocultar painel de controle",
-    "quit": "Sair do OpenWhispr",
-    "tooltip": "OpenWhispr - Ditado por voz"
+    "quit": "Sair do HIRA",
+    "tooltip": "HIRA - Ditado por voz"
   },
   "menu": {
-    "appLabel": "OpenWhispr",
-    "quit": "Sair do OpenWhispr",
+    "appLabel": "HIRA",
+    "quit": "Sair do HIRA",
     "speech": "Fala",
     "settings": "Configurações...",
     "help": "Ajuda",
@@ -63,8 +63,8 @@
       "message": "Falha ao abrir o link no navegador:\n{{url}}\n\nErro: {{error}}"
     },
     "loadFailure": {
-      "title": "OpenWhispr falhou ao carregar",
-      "message": "OpenWhispr não conseguiu carregar a interface.",
+      "title": "HIRA falhou ao carregar",
+      "message": "HIRA não conseguiu carregar a interface.",
       "detail": {
         "window": "Janela: {{windowName}}",
         "error": "Erro {{errorCode}}: {{errorDescription}}",
@@ -75,17 +75,17 @@
   },
   "startup": {
     "error": {
-      "title": "Erro de inicialização do OpenWhispr",
+      "title": "Erro de inicialização do HIRA",
       "message": "Falha ao iniciar o aplicativo:\n\n{{error}}\n\nPor favor, reporte este problema."
     },
     "globeHotkey": {
       "title": "Atalho Globe indisponível",
-      "message": "OpenWhispr não conseguiu ativar o atalho da tecla Globe.",
+      "message": "HIRA não conseguiu ativar o atalho da tecla Globe.",
       "details": {
         "unknown": "Erro desconhecido ao iniciar o listener da tecla Globe.",
         "fallback": "O atalho Globe permanecerá desativado; os atalhos existentes continuarão funcionando.",
         "devHint": "Execute `npm run compile:globe` e reconstrua o app para regenerar o binário.",
-        "reinstallHint": "Reinstale o OpenWhispr ou contate o suporte se o problema persistir."
+        "reinstallHint": "Reinstale o HIRA ou contate o suporte se o problema persistir."
       }
     }
   },
@@ -126,7 +126,6 @@
     "recommended": "Recomendado",
     "active": "Ativo",
     "managedByOrg": "Gerenciado pela sua organização",
-    "freeAccountRequired": "Conta gratuita necessária",
     "comingSoon": "Em breve",
     "cloud": "Nuvem",
     "local": "Local",
@@ -185,14 +184,14 @@
       "accessibilityTitle": "Acessibilidade",
       "accessibilityDescription": "Digita o texto final diretamente no aplicativo em que você estiver — documentos, e-mail, chat.",
       "testAndGrant": "Testar e conceder",
-      "requiredForApp": "Necessário para o OpenWhispr funcionar",
+      "requiredForApp": "Necessário para o HIRA funcionar",
       "microphoneRequired": "Acesso ao microfone necessário",
       "openSystemSettings": "Abrir Configurações do Sistema",
       "systemAudioTitle": "Áudio do Sistema",
       "systemAudioDescription": "Permite que o gravador de reuniões ouça o outro lado das suas chamadas — reuniões, aulas, podcasts. Você pode ativar depois nas Configurações.",
       "optional": "Opcional",
       "recommended": "Recomendado",
-      "accessibilityTroubleshooting": "Em Configurações do Sistema → Acessibilidade, desative o interruptor do OpenWhispr e ative-o novamente. Se o OpenWhispr não aparecer na lista, clique em + e adicione-o a partir da pasta Aplicativos. Ainda com problemas? Envie um e-mail para support@openwhispr.com."
+      "accessibilityTroubleshooting": "Em Configurações do Sistema → Acessibilidade, desative o interruptor do HIRA e ative-o novamente. Se o HIRA não aparecer na lista, clique em + e adicione-o a partir da pasta Aplicativos. Ainda com problemas? Envie um e-mail para santiagoespinozac73@gmail.com."
     },
     "transcription": {
       "title": "Configuração de transcrição",
@@ -228,7 +227,7 @@
       "optionalNote": "Opcional — você pode definir ou alterar a qualquer momento nas configurações."
     },
     "connectivity": {
-      "title": "Não conseguimos acessar o OpenWhispr Cloud nesta rede",
+      "title": "Não conseguimos acessar o HIRA Cloud nesta rede",
       "body": "{{cause}} Você pode mudar para o motor local ou continuar e tentar de novo depois.",
       "useLocal": "Usar motor local",
       "continue": "Continuar mesmo assim"
@@ -269,38 +268,24 @@
     "meeting": {
       "title": "Notas de reunião",
       "description": "Capture e resuma suas reuniões",
-      "autoDetect": "O OpenWhispr detecta automaticamente quando você está em uma reunião e oferece iniciar notas — nada é gravado sem você.",
+      "autoDetect": "O HIRA detecta automaticamente quando você está em uma reunião e oferece iniciar notas — nada é gravado sem você.",
       "hotkeyLabel": "Atalho de reunião",
       "hotkeyHint": "Opcional — pressione-o em qualquer reunião para iniciar uma nota na hora."
     },
     "finish": {
       "title": "Tudo pronto",
-      "cloudDescription": "Você está no OpenWhispr Cloud — rápido, preciso, zero retenção de dados e 2.000 palavras grátis por semana. Prefere tudo no seu dispositivo? Mude para o processamento local nas Configurações.",
       "localDescription": "Você está configurado com processamento local ou sua própria chave. Ajuste como seu áudio é processado a qualquer momento nas Configurações.",
       "cleanupNote": "A limpeza de texto por IA usa padrões sensatos. Você pode ajustá-la a qualquer momento nas Configurações.",
       "openSettings": "Abrir Configurações",
-      "skipForNow": "Pular por enquanto",
-      "corti": {
-        "title": "Você nos disse que está aqui pela transcrição clínica",
-        "description": "Firmamos parceria com a Corti — voz para texto de nível clínico com a maior precisão e em conformidade com a HIPAA.",
-        "createAccount": "Crie sua conta Corti",
-        "creditBadge": "US$ 50 de crédito grátis",
-        "regionHint": "Escolha onde seu áudio é processado — EUA ou UE.",
-        "llmHint": "Os recursos de modelo de linguagem também serão executados nos modelos da Corti.",
-        "useCorti": "Usar Corti",
-        "skip": "Agora não",
-        "step1": "Cadastre-se em corti.ai",
-        "step2": "Abra o console da Corti e crie credenciais de API",
-        "step3": "Cole seu Client ID e Secret abaixo"
-      }
+      "skipForNow": "Pular por enquanto"
     }
   },
   "streaming": {
     "errors": {
       "cloudUnreachable": {
-        "title": "Não foi possível acessar o OpenWhispr Cloud",
+        "title": "Não foi possível acessar o HIRA Cloud",
         "generic": "A solicitação de rede falhou. Verifique sua conexão.",
-        "dnsBlocked": "O DNS não está resolvendo openwhispr.com — pode ser um bloqueador de anúncios ou filtro.",
+        "dnsBlocked": "O DNS não está resolvendo the HIRA service — pode ser um bloqueador de anúncios ou filtro.",
         "refused": "A conexão foi recusada — provavelmente um firewall ou VPN.",
         "timeout": "Tempo limite da rede esgotado — VPN, portal cativo ou conexão instável.",
         "tls": "Falha no handshake TLS — verifique o relógio do sistema ou um proxy corporativo.",
@@ -311,7 +296,7 @@
   "controlPanel": {
     "updateRequiredByOrg": {
       "title": "Atualização obrigatória",
-      "description": "Sua organização exige o OpenWhispr {{version}} ou mais recente. Atualize o aplicativo."
+      "description": "Sua organização exige o HIRA {{version}} ou mais recente. Atualize o aplicativo."
     },
     "update": {
       "readyTitle": "Atualização pronta para instalar",
@@ -319,7 +304,7 @@
       "problemTitle": "Houve um problema na atualização",
       "problemDescription": "Não foi possível concluir a atualização. Tente novamente mais tarde.",
       "installTitle": "Instalar atualização",
-      "installDescription": "O OpenWhispr será reiniciado para aplicar a atualização. O trabalho em andamento será salvo.",
+      "installDescription": "O HIRA será reiniciado para aplicar a atualização. O trabalho em andamento será salvo.",
       "couldNotInstallTitle": "Não foi possível instalar a atualização",
       "couldNotInstallDescription": "Algo deu errado. Tente novamente.",
       "couldNotDownloadTitle": "Não foi possível baixar a atualização",
@@ -334,13 +319,7 @@
     },
     "accessibilityMissing": {
       "title": "Permissões de acessibilidade necessárias",
-      "description": "Detectamos que o OpenWhispr precisa de permissões de acessibilidade para funcionar corretamente. Ative-as abaixo."
-    },
-    "billing": {
-      "pastDueTitle": "Não foi possível processar seu pagamento",
-      "pastDueDescription": "Sem problemas — você está no plano gratuito por enquanto. Atualize o pagamento em Configurações para voltar ao Pro.",
-      "bannerDescription": "Você está no plano gratuito por enquanto — ainda tem {{limit}} palavras por semana. Atualize seu pagamento para voltar ao Pro.",
-      "updatePayment": "Atualizar pagamento"
+      "description": "Detectamos que o HIRA precisa de permissões de acessibilidade para funcionar corretamente. Ative-as abaixo."
     },
     "history": {
       "couldNotLoadTitle": "Não foi possível carregar seu histórico",
@@ -399,11 +378,6 @@
       },
       "retryTranslationMode": "Modo de Tradução"
     },
-    "cloudMigration": {
-      "title": "Boas-vindas ao OpenWhispr Cloud",
-      "description": "Mudamos sua transcrição para o OpenWhispr Cloud para resultados mais rápidos e precisos. Suas configurações anteriores foram salvas — volte quando quiser em Configurações.",
-      "viewSettings": "Ver configurações"
-    },
     "aiCta": {
       "title": "Melhore suas transcrições com IA",
       "description": "Corrija automaticamente gramática, pontuação e formatação enquanto você fala.",
@@ -422,10 +396,8 @@
     "mode": {
       "cloud": "Nuvem",
       "local": "Local",
-      "enterprise": "Corporativo",
       "localDescription": "Roda no seu dispositivo. Privacidade total, funciona offline.",
-      "cloudDescription": "Modelos avançados via API. Rápido e potente, requer internet.",
-      "enterpriseDescription": "Use as credenciais de nuvem da sua organização."
+      "cloudDescription": "Modelos avançados via API. Rápido e potente, requer internet."
     },
     "custom": {
       "endpointWithProtocol": "Informe uma URL base completa com protocolo (por exemplo, https://server/v1).",
@@ -579,7 +551,7 @@
         "description": "Não foi possível transcrever parte da gravação."
       },
       "errorDescriptions": {
-        "sessionExpired": "Sua sessão do OpenWhispr Cloud está indisponível. Entre novamente nas Configurações.",
+        "sessionExpired": "Sua sessão do HIRA Cloud está indisponível. Entre novamente nas Configurações.",
         "offline": "Você está offline. A transcrição na nuvem exige conexão com a internet.",
         "dailyLimitReached": "Você atingiu o limite de transcrições de hoje. Tente novamente amanhã ou faça upgrade do seu plano.",
         "providerRateLimited": "Seu provedor de transcrição limitou a solicitação. Aguarde um momento e tente novamente.",
@@ -598,8 +570,8 @@
         "notAppliedTitle": "Edição da seleção não aplicada",
         "changed": "O texto selecionado ou o aplicativo de destino mudou durante o processamento. Nada foi substituído.",
         "expired": "A edição expirou. Selecione o texto novamente e tente de novo.",
-        "pasteFailed": "O OpenWhispr gerou a edição, mas não conseguiu substituir o texto selecionado.",
-        "unavailable": "O OpenWhispr não conseguiu ler o texto selecionado com segurança. Verifique as permissões de acessibilidade ou automação.",
+        "pasteFailed": "O HIRA gerou a edição, mas não conseguiu substituir o texto selecionado.",
+        "unavailable": "O HIRA não conseguiu ler o texto selecionado com segurança. Verifique as permissões de acessibilidade ou automação.",
         "tooLarge": "A seleção é muito grande. Selecione no máximo 6.000 caracteres.",
         "reasoningFailed": "A IA não conseguiu concluir a edição. O texto original não foi alterado."
       }
@@ -674,7 +646,7 @@
       "micErrors": {
         "accessFailed": "Falha no acesso ao microfone. Tente novamente.",
         "noMicrophones": "Nenhum microfone detectado. Conecte ou selecione um microfone em {{settingsPath}}.",
-        "permissionDenied": "Permissão negada. Abra {{privacyPath}} e permita o OpenWhispr.",
+        "permissionDenied": "Permissão negada. Abra {{privacyPath}} e permita o HIRA.",
         "couldNotStart": "Não foi possível iniciar o microfone selecionado. Escolha um dispositivo em {{settingsPath}} e teste novamente.",
         "noActiveInput": "Nenhuma entrada de áudio ativa encontrada. Escolha um microfone em {{settingsPath}}.",
         "unknown": "Falha no acesso ao microfone: {{error}}. Selecione outro dispositivo e tente novamente.",
@@ -703,8 +675,8 @@
         "accessibilityNeeded": "Conceda permissões de acessibilidade nas configurações do sistema para habilitar colagem automática.",
         "windowsReady": "O Windows não exige permissões especiais para colagem automática. Tudo pronto!",
         "linuxReadyWithMethod": "A colagem automática está disponível usando {{method}}. Tudo pronto!",
-        "waylandClipboardMode": "A colagem automática não está disponível nesta sessão Wayland. O OpenWhispr copiará o texto para a área de transferência e você poderá colar com Ctrl+V.",
-        "optionalPasteTool": "Para colagem automática, instale {{tool}}:\n\n{{installCmd}}{{waylandNote}}\n\nSem isso, você ainda pode usar o OpenWhispr — o texto será copiado para a área de transferência e você poderá colar com Ctrl+V."
+        "waylandClipboardMode": "A colagem automática não está disponível nesta sessão Wayland. O HIRA copiará o texto para a área de transferência e você poderá colar com Ctrl+V.",
+        "optionalPasteTool": "Para colagem automática, instale {{tool}}:\n\n{{installCmd}}{{waylandNote}}\n\nSem isso, você ainda pode usar o HIRA — o texto será copiado para a área de transferência e você poderá colar com Ctrl+V."
       },
       "alerts": {
         "accessibilityNeeded": "Permissões de acessibilidade necessárias! Conceda nas configurações do sistema."
@@ -717,7 +689,7 @@
         "defaultPasteTool": "xdotool",
         "xdotoolXwayland": "xdotool (apps XWayland)"
       },
-      "accessibilityTestText": "teste de acessibilidade do OpenWhispr",
+      "accessibilityTestText": "teste de acessibilidade do HIRA",
       "warning": {
         "messages": {
           "macos": "Verifique as configurações de Som para selecionar o dispositivo de entrada",
@@ -729,80 +701,57 @@
       }
     }
   },
-  "auth": {
-    "sessionExpired": "Sessão expirada",
-    "cloudNotConfigured": "Nuvem não configurada",
-    "common": {
-      "back": "Voltar",
-      "continue": "Continuar",
-      "or": "ou"
-    },
-    "emailStep": {
-      "continueWithEmail": "Continuar com e-mail",
-      "continueWithoutAccount": "Continuar sem conta",
-      "emailPlaceholder": "voce@exemplo.com"
-    },
-    "errors": {
-      "accountExistsSignIn": "Já existe uma conta com este e-mail. Faça login.",
-      "accountNotFoundCreate": "Nenhuma conta encontrada com este e-mail. Crie uma conta.",
-      "authNotConfigured": "A autenticação não está configurada",
-      "createAccountFailed": "Falha ao criar conta",
-      "failedProviderSignIn": "Falha ao fazer login com {{provider}}",
-      "failedUserCheck": "Falha ao verificar conta do usuário",
-      "generic": "Algo deu errado. Tente novamente.",
-      "invalidCredentials": "E-mail ou senha inválidos",
-      "plusAliasUnsupported": "Endereços de e-mail com '+' não são aceitos"
-    },
-    "getStarted": "Começar",
-    "legal": {
-      "and": "e",
-      "prefix": "Ao continuar, você concorda com nossos",
-      "privacy": "Política de Privacidade",
-      "suffix": "",
-      "terms": "Termos de Serviço"
-    },
-    "passwordForm": {
-      "createAccount": "Criar uma conta",
-      "createAccountButton": "Criar conta",
-      "createAccountLink": "Criar conta",
-      "createPasswordPlaceholder": "Crie uma senha",
-      "creatingAccount": "Criando conta...",
-      "enterPasswordPlaceholder": "Digite sua senha",
-      "forgotPassword": "Esqueceu a senha?",
-      "fullNamePlaceholder": "Nome completo",
-      "haveAccount": "Já tem uma conta?",
-      "newHere": "Novo por aqui?",
-      "passwordMinLength": "A senha deve ter pelo menos 8 caracteres",
-      "signIn": "Entrar",
-      "signInLink": "Entrar",
-      "signingIn": "Entrando...",
-      "welcomeBack": "Que bom ter você de volta"
-    },
-    "signedIn": {
-      "ready": "Pronto",
-      "welcomeBack": "Que bom ter você de volta",
-      "welcomeBackName": "Que bom ter você de volta, {{name}}"
-    },
-    "sso": {
-      "continueWithSSO": "Entrar com SSO",
-      "emailRequired": "Insira seu e-mail corporativo para usar o SSO.",
-      "failed": "Falha no logon único. Tente novamente.",
-      "companySignInTitle": "Usar o login da sua empresa",
-      "requiredDescription": "{{domain}} exige SSO para o OpenWhispr.",
-      "availableDescription": "A sua conta {{domain}} está pronta para o SSO da empresa.",
-      "useEmailInstead": "Usar e-mail e senha em vez disso"
-    },
-    "social": {
-      "completeInBrowser": "Conclua o login no navegador",
-      "continueWithApple": "Continuar com a Apple",
-      "continueWithGoogle": "Continuar com o Google",
-      "continueWithMicrosoft": "Continuar com a Microsoft",
-      "protocolUnavailable": "Login pelo navegador indisponível — registre novamente o protocolo openwhispr:// nas configurações de Aplicativos Padrão do sistema."
-    },
-    "welcomeSubtitle": "Use sua voz para ditar em qualquer lugar",
-    "welcomeTitle": "Boas-vindas ao OpenWhispr"
-  },
   "cleanupPrompt": "Limpeza",
+  "encounters": {
+    "title": "Encounters",
+    "subtitle": "Your scheduled, active, and completed encounters",
+    "quickDictation": "Quick dictation",
+    "upcoming": "Upcoming encounters",
+    "noUpcoming": "No upcoming encounters",
+    "cached": "Cached",
+    "untitled": "Untitled encounter",
+    "attendees": "{{count}} attendees",
+    "refresh": "Refresh encounters",
+    "starting": "Starting…",
+    "joinAndStart": "Join & start",
+    "openCalendarAndStart": "Open calendar & start",
+    "startEncounter": "Start encounter",
+    "openNote": "Open note",
+    "startError": "Unable to start this encounter.",
+    "openError": "Unable to open this encounter note.",
+    "emptyTitle": "No encounters yet",
+    "emptyDescription": "Calendar encounters will appear here when they are available. Cached encounters remain usable offline.",
+    "inProgress": "In progress",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+    "noneInProgress": "No encounters in progress.",
+    "noneCompleted": "No completed encounters yet.",
+    "noneCancelled": "No cancelled encounters.",
+    "cachedDescription": "Showing cached encounters. Calendar updates are temporarily unavailable.",
+    "syncingDescription": "Updating calendar encounters. Cached encounters remain available.",
+    "lastSynced": "Last synced {{time}}.",
+    "status": {
+      "scheduled": "Scheduled",
+      "in_progress": "In progress",
+      "completed": "Completed",
+      "cancelled": "Cancelled"
+    },
+    "context": {
+      "inPerson": "In person",
+      "telehealth": "Telehealth"
+    },
+    "patient": {
+      "linked": "Pasta do paciente vinculada",
+      "review": "Revisão do paciente necessária"
+    },
+    "sync": {
+      "ready": "Calendar ready",
+      "syncing": "Syncing",
+      "stale": "Cached",
+      "unavailable": "Offline",
+      "error": "Unavailable"
+    }
+  },
   "developerSection": {
     "currentLogFile": "Arquivo de log atual",
     "debugMode": {
@@ -869,41 +818,10 @@
     }
   },
   "dictionarySuffix": "Sufixo do dicionário",
-  "emailVerification": {
-    "checkEmailDescription": "Enviamos um link de verificação para",
-    "checkEmailTitle": "Verifique seu e-mail",
-    "errors": {
-      "resendFailed": "Não foi possível reenviar o e-mail. Tente novamente.",
-      "serverUnreachable": "Não foi possível acessar o servidor. Verifique sua conexão e tente novamente."
-    },
-    "resendButton": "Reenviar e-mail de verificação",
-    "resendIn": "Reenviar em {{seconds}}s",
-    "verifiedDescription": "Sua conta está pronta.",
-    "verifiedTitle": "E-mail verificado",
-    "waiting": "Aguardando verificação...",
-    "backToSignIn": "Voltar para o login"
-  },
   "errorBoundary": {
     "description": "Ocorreu um erro inesperado. Recarregue para tentar novamente.",
     "reload": "Recarregar",
     "title": "Algo deu errado"
-  },
-  "forgotPassword": {
-    "back": "Voltar",
-    "backToSignIn": "Voltar para login",
-    "emailPlaceholder": "Digite seu e-mail",
-    "goBack": "Voltar",
-    "notConfigured": "A autenticação ainda não está configurada.",
-    "sendResetLink": "Enviar link de redefinição",
-    "sending": "Enviando...",
-    "subtitle": "Digite seu e-mail e enviaremos um link de redefinição",
-    "success": {
-      "description": "Enviamos um link de redefinição de senha para",
-      "help": "Não recebeu o e-mail? Verifique a pasta de spam ou tente novamente.",
-      "title": "Verifique seu e-mail",
-      "tryAnother": "Tentar outro e-mail"
-    },
-    "title": "Redefinir sua senha"
   },
   "actionPrompt": "Prompt de ação",
   "hotkeyGuidance": {
@@ -1020,10 +938,10 @@
     "recheckChecking": "Verificando...",
     "title": "Colagem automática",
     "usingMethodPrefix": "Usando",
-    "waylandClipboardDescription": "A colagem automática não está disponível nesta sessão Wayland. O OpenWhispr copiará o texto para a área de transferência para que você cole manualmente com Ctrl+V.",
+    "waylandClipboardDescription": "A colagem automática não está disponível nesta sessão Wayland. O HIRA copiará o texto para a área de transferência para que você cole manualmente com Ctrl+V.",
     "waylandClipboardTitle": "Modo área de transferência no Wayland",
     "windowsReady": "O Windows suporta colagem automática nativamente. Nenhuma configuração necessária!",
-    "withoutToolPrefix": "Sem essa ferramenta, o OpenWhispr copiará o texto para a área de transferência. Você poderá colar manualmente com Ctrl+V.",
+    "withoutToolPrefix": "Sem essa ferramenta, o HIRA copiará o texto para a área de transferência. Você poderá colar manualmente com Ctrl+V.",
     "xwaylandAppsOnly": "a colagem automática funciona apenas para apps XWayland"
   },
   "promptStudio": {
@@ -1073,7 +991,6 @@
       "none": "Nenhum",
       "outputLabel": "Saída",
       "processing": "Processando...",
-      "openwhisprCloud": "OpenWhispr Cloud",
       "providerLabel": "Provedor",
       "run": "Executar teste",
       "customEndpoint": "Endpoint personalizado",
@@ -1094,20 +1011,11 @@
   "settingsModal": {
     "managedByOrg": "Algumas configurações são gerenciadas pela sua organização.",
     "groups": {
-      "account": "Conta",
       "app": "Aplicativo",
       "aiModels": "Modelos de IA",
       "system": "Sistema"
     },
     "sections": {
-      "account": {
-        "description": "Perfil e login",
-        "label": "Conta"
-      },
-      "plansBilling": {
-        "description": "Planos, uso e cobrança",
-        "label": "Planos e cobrança"
-      },
       "general": {
         "description": "Aparência, sons e inicialização",
         "label": "Preferências"
@@ -1125,263 +1033,17 @@
         "label": "Modelos de linguagem"
       },
       "privacyData": {
-        "description": "Privacidade, permissões e análise",
+        "description": "Privacidade e permissões",
         "label": "Privacidade e dados"
       },
       "system": {
         "description": "Atualizações, armazenamento e ferramentas de desenvolvimento",
         "label": "Sistema"
-      },
-      "workspace": {
-        "description": "Membros, espaços de equipe e chaves de API",
-        "label": "Espaço de trabalho"
       }
     },
     "title": "Configurações"
   },
   "settingsPage": {
-    "unifiedBilling": {
-      "workspaceTitle": "Cobrança do workspace",
-      "workspaceDescription": "Cada workspace tem seu próprio plano, assentos e responsável pela cobrança.",
-      "billableSeat": "Seu assento é faturável",
-      "nonBillableSeat": "Acesso somente de administrador · sem assento pago",
-      "managedBy": "A cobrança é gerenciada por {{owner}}.",
-      "addSeat": "Adicionar assento",
-      "seatUpdated_one": "Capacidade do workspace atualizada para {{count}} assento",
-      "seatUpdated_other": "Capacidade do workspace atualizada para {{count}} assentos",
-      "seatUpdateFailed": "Não foi possível atualizar os assentos do workspace",
-      "businessWorkspaceOnly": "Disponível para workspaces",
-      "personalPlanTitle": "Plano pessoal",
-      "providedBy": "Plano pessoal: Gratuito · Acesso pago fornecido por {{workspaces}}",
-      "confirmSeats": {
-        "title": "Adicionar um assento ao workspace?",
-        "description_one": "Aumentar {{workspace}} para {{count}} assento. O Stripe fará o rateio da alteração.",
-        "description_other": "Aumentar {{workspace}} para {{count}} assentos. O Stripe fará o rateio da alteração.",
-        "newCapacity": "Nova capacidade",
-        "chargeToday": "Cobrança de hoje",
-        "confirm": "Adicionar assento"
-      }
-    },
-    "account": {
-      "badges": {
-        "free": "Gratuito",
-        "limitReached": "Limite atingido",
-        "pastDue": "Em atraso",
-        "pro": "Pro",
-        "business": "Business",
-        "trial": "Teste"
-      },
-      "billing": {
-        "couldNotOpenDescription": "Tivemos dificuldade em abrir a página de cobrança. Tente novamente.",
-        "couldNotOpenTitle": "Não foi possível abrir cobrança",
-        "manageBilling": "Gerenciar cobrança",
-        "opening": "Abrindo...",
-        "updatePaymentMethod": "Atualizar forma de pagamento",
-        "contactOwnerTitle": "Fale com o proprietário do workspace",
-        "contactOwnerDescription": "Apenas o proprietário do workspace pode atualizar a cobrança dele."
-      },
-      "checkout": {
-        "couldNotOpenDescription": "Tivemos dificuldade em abrir a página de checkout. Tente novamente.",
-        "couldNotOpenTitle": "Não foi possível abrir checkout",
-        "opening": "Abrindo...",
-        "upgradeToPro": "Fazer upgrade para Pro"
-      },
-      "disabled": "Desabilitado",
-      "featuresDisabled": "Recursos de conta desabilitados",
-      "featuresDisabledDescription": "Defina VITE_AUTH_URL no seu arquivo .env para habilitar os recursos de conta.",
-      "notConfigured": "A autenticação não está configurada",
-      "notSignedIn": "Não conectado",
-      "notSignedInDescription": "Crie uma conta para desbloquear recursos premium.",
-      "offline": "Offline",
-      "pastDue": {
-        "description": "Você está no plano gratuito por enquanto. Atualize sua forma de pagamento para voltar ao Pro.",
-        "title": "Não foi possível processar seu pagamento"
-      },
-      "planDescriptions": {
-        "freeUsage": "{{used}} / {{limit}} palavras esta semana",
-        "nextBilling": "Próxima cobrança: {{date}}",
-        "pastDue": "{{used}} / {{limit}} palavras gratuitas esta semana — atualize o pagamento para restaurar o Pro",
-        "trial": "{{days}} dias restantes — transcrições ilimitadas",
-        "unlimited": "Ilimitado"
-      },
-      "planLabels": {
-        "free": "Gratuito",
-        "pro": "Pro",
-        "business": "Business",
-        "trial": "Teste"
-      },
-      "rollingWeeklyLimit": "Limite semanal contínuo",
-      "signOut": {
-        "failedDescription": "Algo deu errado ao sair. Tente novamente.",
-        "failedTitle": "Não foi possível sair",
-        "signOut": "Sair",
-        "signingOut": "Saindo..."
-      },
-      "signedIn": "Conectado",
-      "title": "Conta",
-      "toasts": {
-        "approachingLimit": {
-          "description": "Você usou {{used}} de {{limit}} palavras gratuitas esta semana. Faça upgrade para Pro para uso ilimitado.",
-          "title": "Aproximando-se do limite semanal"
-        }
-      },
-      "trialCta": {
-        "button": "Criar conta gratuita",
-        "description": "Transcrições ilimitadas, processamento prioritário e muito mais.",
-        "title": "Experimente o Pro grátis por 7 dias"
-      },
-      "pricing": {
-        "title": "Planos",
-        "billedYearly": "Cobrança anual",
-        "free": {
-          "name": "Free",
-          "price": "$0",
-          "period": "para sempre",
-          "features": [
-            "## OpenWhispr Cloud",
-            "2.000 palavras/semana de transcrição",
-            "5 horas de gravação de reuniões/mês",
-            "## Sempre gratuito",
-            "Modelos de IA locais ilimitados",
-            "Transcrição na nuvem ilimitada com suas próprias chaves de API",
-            "Mais de 100 idiomas suportados",
-            "Dicionário personalizado",
-            "Zero retenção de dados",
-            "Suporte da comunidade"
-          ]
-        },
-        "pro": {
-          "name": "Pro",
-          "monthlyPrice": "$8",
-          "monthlyPeriod": "/mês",
-          "annualPrice": "$80",
-          "annualPeriod": "/ano",
-          "annualEquivalent": "$6.67",
-          "includesPrefix": "Todos os recursos do Free +",
-          "features": [
-            "Transcrição na nuvem ilimitada",
-            "20 horas de gravação de reuniões/mês",
-            "Sincronização entre dispositivos",
-            "Compartilhe notas com links públicos",
-            "Acesso pessoal à API",
-            "Integração MCP em todos os seus apps",
-            "Aplicativo móvel (iOS em breve)",
-            "Suporte por e-mail"
-          ],
-          "cta": "Começar",
-          "switchToAnnual": "Mudar para anual"
-        },
-        "business": {
-          "name": "Business",
-          "monthlyPrice": "$16",
-          "monthlyPeriod": "/mês",
-          "annualPrice": "$160",
-          "annualPeriod": "/ano",
-          "annualEquivalent": "$13.33",
-          "includesPrefix": "Todos os recursos do Pro +",
-          "badge": "Mais popular",
-          "features": [
-            "Espaços de equipe para notas compartilhadas",
-            "Funções e gestão de membros do espaço de trabalho",
-            "Gravações de reuniões ilimitadas",
-            "Modo agente",
-            "Converse com seus dados",
-            "Suporte prioritário"
-          ],
-          "cta": "Começar",
-          "switchToAnnual": "Mudar para anual"
-        },
-        "enterprise": {
-          "name": "Enterprise",
-          "price": "Personalizado",
-          "subtitle": "Para segurança avançada e suporte",
-          "includesPrefix": "Todos os recursos do Business +",
-          "features": [
-            "Créditos de API gerenciados",
-            "Sincronização na nuvem entre dispositivos",
-            "Recursos de equipe e administração",
-            "SSO e conformidade",
-            "Suporte dedicado"
-          ],
-          "cta": "Falar com Vendas"
-        },
-        "currentPlan": "Plano atual",
-        "coveredByWorkspace": "Incluído no plano do seu workspace",
-        "upgrade": "Fazer upgrade",
-        "downgrade": "Fazer downgrade",
-        "planSwitched": "Plano atualizado com sucesso",
-        "confirmSwitch": {
-          "title": "Confirmar alteração de plano",
-          "description": "Mudar para {{plan}} ({{interval}})",
-          "monthly": "mensal",
-          "yearly": "anual",
-          "chargeToday": "Cobrança hoje",
-          "accountCredit": "Crédito na conta",
-          "newPrice": "Novo preço",
-          "nextBilling": "Próxima cobrança",
-          "mo": "mo",
-          "yr": "yr",
-          "cancel": "Cancelar",
-          "confirm": "Confirmar"
-        }
-      },
-      "signedOutPlans": {
-        "button": "Criar conta gratuita"
-      },
-      "user": "Usuário",
-      "wordsRemaining": "{{remaining}} restantes",
-      "deleteAccount": {
-        "label": "Excluir conta",
-        "labelDescription": "Excluir permanentemente sua conta, todos os dados na nuvem e dados locais. Esta ação não pode ser desfeita.",
-        "button": "Excluir minha conta",
-        "deleting": "Excluindo...",
-        "title": "Excluir sua conta?",
-        "description": "Isso excluirá permanentemente sua conta OpenWhispr, todas as notas sincronizadas na nuvem e todos os dados locais, incluindo transcrições, gravações de áudio, modelos baixados, conexões de calendário e configurações. Esta ação não pode ser desfeita.",
-        "confirmText": "Excluir tudo",
-        "successTitle": "Conta excluída",
-        "successDescription": "Sua conta e todos os dados foram excluídos. O aplicativo será recarregado agora.",
-        "failedTitle": "Falha na exclusão",
-        "failedDescription": "Algo deu errado ao excluir sua conta. Seus dados locais podem ter sido parcialmente removidos. Tente novamente."
-      },
-      "profile": {
-        "name": {
-          "label": "Nome de exibição",
-          "placeholder": "Seu nome",
-          "save": "Salvar",
-          "saving": "Salvando...",
-          "saved": "Nome de exibição atualizado",
-          "error": "Não foi possível atualizar seu nome"
-        },
-        "password": {
-          "label": "Senha",
-          "description": "Altere a senha que você usa para entrar.",
-          "change": "Alterar senha",
-          "dialogTitle": "Alterar senha",
-          "dialogDescription": "Digite sua senha atual e escolha uma nova.",
-          "currentLabel": "Senha atual",
-          "newLabel": "Nova senha",
-          "confirmLabel": "Confirmar nova senha",
-          "minLength": "A senha deve ter pelo menos 8 caracteres",
-          "mismatch": "As senhas não coincidem",
-          "revokeOthers": "Sair dos outros dispositivos",
-          "submit": "Atualizar senha",
-          "saving": "Atualizando...",
-          "cancel": "Cancelar",
-          "saved": "Senha atualizada"
-        },
-        "errors": {
-          "invalidPassword": "Sua senha atual está incorreta.",
-          "passwordTooShort": "A senha deve ter pelo menos 8 caracteres.",
-          "passwordTooLong": "A senha é muito longa.",
-          "noPassword": "Nenhuma senha está definida para esta conta.",
-          "generic": "Algo deu errado. Tente novamente."
-        }
-      },
-      "planUnavailable": {
-        "title": "Plano indisponível",
-        "description": "Não conseguimos carregar seu plano agora. Seu acesso permanece o mesmo."
-      }
-    },
     "agentConfig": {
       "agentName": "Nome do agente",
       "description": "Dê um nome ao seu assistente de IA para poder chamá-lo diretamente durante o ditado",
@@ -1410,25 +1072,15 @@
       "enableTextCleanup": "Ativar limpeza de texto",
       "enableTextCleanupDescription": "A IA remove palavras de preenchimento, corrige gramática e pontuação",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "Provedores na nuvem",
         "local": "Local",
         "selfHosted": "Auto-hospedado",
-        "openwhisprDesc": "Resultados confiáveis. Sem configuração.",
         "providersDesc": "Use sua própria chave API.",
         "localDesc": "Modelos no dispositivo. Privado.",
-        "selfHostedDesc": "Seu servidor na sua rede.",
-        "enterprise": "Corporativo",
-        "enterpriseDesc": "Use a conta de nuvem da sua organização (AWS, Azure, GCP)."
+        "selfHostedDesc": "Seu servidor na sua rede."
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "Resultados confiáveis. Sem configuração.",
       "title": "Melhoria de texto com IA",
       "toasts": {
-        "switchedCloud": {
-          "description": "A melhoria de texto usará o serviço de nuvem do OpenWhispr.",
-          "title": "Mudou para OpenWhispr Cloud"
-        },
         "switchedCustom": {
           "description": "Configure seu próprio provedor e chave API.",
           "title": "Mudou para configuração personalizada"
@@ -1444,20 +1096,7 @@
         "switchedSelfHosted": {
           "title": "Auto-hospedado",
           "description": "Usando seu próprio servidor."
-        },
-        "switchedEnterprise": {
-          "title": "Corporativo",
-          "description": "Usando a conta de nuvem da sua organização."
         }
-      },
-      "managedEnterprise": {
-        "errorTitle": "A IA empresarial gerenciada precisa de atenção",
-        "title": "Gerenciado pela sua organização",
-        "description": "O login fornece acesso de curta duração automaticamente. Não são necessárias chaves de nuvem nem configuração da CLI.",
-        "usePersonalSetup": "Usar configuração pessoal",
-        "availableTitle": "Configuração da organização disponível",
-        "availableDescription": "Use {{provider}} sem gerenciar credenciais.",
-        "useManaged": "Usar gerenciado"
       }
     },
     "developer": {
@@ -1515,7 +1154,7 @@
       "appearance": {
         "auto": "Auto",
         "dark": "Escuro",
-        "description": "Controle a aparência do OpenWhispr",
+        "description": "Controle a aparência do HIRA",
         "light": "Claro",
         "theme": "Tema",
         "themeDescription": "Escolha claro, escuro ou acompanhe o sistema",
@@ -1543,8 +1182,8 @@
         "linuxPttSetupDescription": "O seu utilizador precisa de acesso aos dispositivos de entrada do teclado.",
         "linuxPttSetupNote": "Depois de executar o comando, termine e reinicie a sessão.",
         "hyprlandConfigWriteWarningTitle": "Os atalhos do Hyprland não serão mantidos",
-        "hyprlandConfigWriteWarningDescription": "O OpenWhispr não consegue escrever em {{path}}, por isso os atalhos não serão mantidos após recarregar a configuração do Hyprland. Verifique se o ficheiro existe e permite escrita.",
-        "hyprlandUnbindDescription": "No Hyprland, o OpenWhispr reserva o atalho selecionado. Qualquer atalho existente do Hyprland que use a mesma combinação de teclas será desvinculado quando o OpenWhispr registar o atalho."
+        "hyprlandConfigWriteWarningDescription": "O HIRA não consegue escrever em {{path}}, por isso os atalhos não serão mantidos após recarregar a configuração do Hyprland. Verifique se o ficheiro existe e permite escrita.",
+        "hyprlandUnbindDescription": "No Hyprland, o HIRA reserva o atalho selecionado. Qualquer atalho existente do Hyprland que use a mesma combinação de teclas será desvinculado quando o HIRA registar o atalho."
       },
       "meetingHotkey": {
         "title": "Atalho modo reunião",
@@ -1570,7 +1209,7 @@
       },
       "notifications": {
         "title": "Notificações",
-        "description": "Controle quais notificações o OpenWhispr pode mostrar",
+        "description": "Controle quais notificações o HIRA pode mostrar",
         "disableAll": "Desativar todas as notificações",
         "disableAllDescription": "Silenciar tudo exceto mensagens de erro",
         "meetingDetection": "Detecção de reuniões",
@@ -1589,14 +1228,14 @@
       },
       "startup": {
         "launchAtLogin": "Iniciar ao fazer login",
-        "launchAtLoginDescription": "Iniciar o OpenWhispr em segundo plano ao fazer login",
+        "launchAtLoginDescription": "Iniciar o HIRA em segundo plano ao fazer login",
         "title": "Inicialização",
-        "description": "Controle o comportamento do OpenWhispr ao iniciar",
+        "description": "Controle o comportamento do HIRA ao iniciar",
         "startMinimized": "Iniciar minimizado",
         "startMinimizedDescription": "Iniciar sem mostrar a janela do painel de controle",
         "needsApproval": {
           "title": "Aprovação necessária nas Configurações do Sistema",
-          "description": "O macOS registrou o OpenWhispr como item de início, mas está aguardando que você o permita em Itens de Início.",
+          "description": "O macOS registrou o HIRA como item de início, mas está aguardando que você o permita em Itens de Início.",
           "action": "Abrir Itens de Início"
         }
       },
@@ -1642,7 +1281,7 @@
           "group": {
             "step1Title": "Adicionar o seu utilizador ao grupo input",
             "step2Title": "Terminar sessão e voltar a entrar",
-            "step2Desc": "As alterações de grupo só têm efeito após uma nova sessão. Termine sessão no ambiente de trabalho, inicie sessão novamente e reabra o OpenWhispr."
+            "step2Desc": "As alterações de grupo só têm efeito após uma nova sessão. Termine sessão no ambiente de trabalho, inicie sessão novamente e reabra o HIRA."
           },
           "service": {
             "step1Title": "Criar o diretório do serviço",
@@ -1666,7 +1305,7 @@
           "manualTitle": "Adicione isto à sua configuração",
           "manualDesc": "Configure manualmente e depois reconstrua.",
           "flakeTitle": "A instalar pelo nosso flake?",
-          "flakeDesc": "Se instalar o OpenWhispr pelo flake, programs.openwhispr.enable ativa o ydotool, o módulo uinput e as associações de grupo por si.",
+          "flakeDesc": "Se instalar o HIRA pelo flake, programs.openwhispr.enable ativa o ydotool, o módulo uinput e as associações de grupo por si.",
           "rebuildNote": "Execute sudo nixos-rebuild switch, depois termine a sessão e volte a entrar para que a alteração de grupo e a regra /dev/uinput entrem em vigor. Substitua <you> pelo seu nome de utilizador."
         }
       },
@@ -1699,7 +1338,7 @@
           },
           "installUpdate": {
             "confirmText": "Instalar e reiniciar",
-            "description": "O OpenWhispr será reiniciado para aplicar a atualização.",
+            "description": "O HIRA será reiniciado para aplicar a atualização.",
             "title": "Instalar atualização"
           },
           "noUpdates": {
@@ -1734,13 +1373,13 @@
     "permissions": {
       "accessibilityDescription": "Necessário para colagem automática após a transcrição",
       "accessibilityTitle": "Acessibilidade",
-      "description": "Teste e gerencie as permissões do sistema necessárias para o OpenWhispr funcionar corretamente",
+      "description": "Teste e gerencie as permissões do sistema necessárias para o HIRA funcionar corretamente",
       "microphoneDescription": "Captura a sua voz para ditado e transcrição",
       "microphoneTitle": "Microfone",
       "resetAccessibility": {
-        "description": "Isso removerá o OpenWhispr das permissões de acessibilidade. Você precisará conceder novamente em Configurações do Sistema > Privacidade e Segurança > Acessibilidade.",
+        "description": "Isso removerá o HIRA das permissões de acessibilidade. Você precisará conceder novamente em Configurações do Sistema > Privacidade e Segurança > Acessibilidade.",
         "label": "Redefinir permissões de acessibilidade",
-        "rowDescription": "Corrija problemas após reinstalar ou recompilar o app removendo e readicionando o OpenWhispr nas Configurações do Sistema",
+        "rowDescription": "Corrija problemas após reinstalar ou recompilar o app removendo e readicionando o HIRA nas Configurações do Sistema",
         "title": "Redefinir permissões de acessibilidade"
       },
       "optional": "Opcional",
@@ -1754,15 +1393,8 @@
       "troubleshootingTitle": "Solução de problemas"
     },
     "privacy": {
-      "cloudBackup": "Backup na nuvem",
-      "cloudBackupDescription": "Salve suas transcrições e notas na nuvem para acesso contínuo em todos os dispositivos.",
-      "cloudBackupTeamCaveat": "Notas em espaços de equipe e notas que você compartilhou são sempre sincronizadas, independentemente desta configuração.",
-      "cloudNotesMigration": "Fazendo backup das notas… {{done}} / {{total}}",
-      "cloudNotesMigrationDone": "Todas as notas salvas na nuvem",
       "description": "Controle quais dados saem do seu dispositivo. Tudo está desativado por padrão.",
       "title": "Privacidade",
-      "usageAnalytics": "Análise de uso",
-      "usageAnalyticsDescription": "Ajude-nos a melhorar o OpenWhispr compartilhando métricas anônimas de desempenho. Nunca enviamos conteúdo de transcrição — apenas dados de tempo e erros.",
       "dataRetention": "Retenção de dados",
       "dataRetentionDescription": "Armazenar transcrições e áudio localmente no seu histórico. Quando desativado, as transcrições são coladas mas não salvas.",
       "transcriptRetention": "Retenção de transcrições",
@@ -1770,7 +1402,6 @@
       "transcriptRetentionForever": "Para sempre",
       "hoursAgo": "há {{count}}h",
       "justNow": "agora mesmo",
-      "lastSynced": "Última sincronização {{time}}",
       "minutesAgo": "há {{count}}min",
       "audioRetention": "Retenção de áudio",
       "audioRetentionDescription": "Armazena gravações de áudio localmente para retranscrição e download. Os arquivos são excluídos automaticamente após o período de retenção.",
@@ -1818,25 +1449,17 @@
     "transcription": {
       "customSetup": "Configuração personalizada",
       "customSetupDescription": "Use seu próprio provedor e chave API.",
-      "description": "Escolha como o OpenWhispr transcreve sua voz",
+      "description": "Escolha como o HIRA transcreve sua voz",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "Provedores na nuvem",
         "local": "Local",
         "selfHosted": "Auto-hospedado",
-        "openwhisprDesc": "Resultados confiáveis. Sem configuração.",
         "providersDesc": "Use sua própria chave API.",
         "localDesc": "Modelos no dispositivo. Privado.",
         "selfHostedDesc": "Seu servidor na sua rede."
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "Resultados confiáveis. Sem configuração.",
       "title": "Fala para texto",
       "toasts": {
-        "switchedCloud": {
-          "description": "A transcrição usará o serviço de nuvem do OpenWhispr.",
-          "title": "Mudou para OpenWhispr Cloud"
-        },
         "switchedCustom": {
           "description": "Configure seu próprio provedor e chave API.",
           "title": "Mudou para configuração personalizada"
@@ -1921,204 +1544,6 @@
       "endpointUrl": "URL do endpoint",
       "serverUrl": "URL do servidor",
       "apiKeyOptional": "API Key (opcional)"
-    },
-    "workspace": {
-      "title": "Espaço de trabalho",
-      "description": "Colabore com colegas, compartilhe notas e gerencie o acesso ao workspace em um só lugar.",
-      "empty": {
-        "title": "Crie seu primeiro espaço de trabalho",
-        "description": "Espaços de trabalho permitem colaborar com colegas e compartilhar notas.",
-        "create": "Criar espaço de trabalho"
-      },
-      "loadError": {
-        "title": "Não foi possível carregar os espaços de trabalho",
-        "description": "Verifique sua conexão e tente novamente.",
-        "retry": "Tentar novamente"
-      },
-      "tab": {
-        "general": "Geral",
-        "members": "Membros",
-        "teams": "Equipes",
-        "developer": "Desenvolvedor"
-      },
-      "role": {
-        "owner": "Proprietário",
-        "admin": "Administrador",
-        "member": "Membro"
-      },
-      "general": {
-        "nameLabel": "Nome do espaço de trabalho",
-        "slugLabel": "Nome curto",
-        "slugHint": "Usado em URLs e links de convite. Apenas letras minúsculas, dígitos e hifens.",
-        "slugInvalid": "Apenas letras minúsculas, dígitos e hifens.",
-        "saved": "Espaço de trabalho atualizado",
-        "dangerTitle": "Excluir espaço de trabalho",
-        "dangerDescription": "Todas as notas, pastas e integrações compartilhadas serão excluídas. Esta ação não pode ser desfeita.",
-        "delete": "Excluir espaço de trabalho",
-        "confirmTitle": "Excluir {{name}}?",
-        "confirmDescription": "Isso cancela a assinatura e remove todos os dados do espaço de trabalho permanentemente.",
-        "deleting": "Excluindo…",
-        "deleted": "Espaço de trabalho excluído",
-        "leaveTitle": "Sair do espaço de trabalho",
-        "leaveDescription": "Você perderá o acesso a este espaço de trabalho e às notas compartilhadas dele.",
-        "leave": "Sair do espaço de trabalho",
-        "leaving": "Saindo…",
-        "leaveConfirm": {
-          "title": "Sair de {{name}}?",
-          "description": "Você perderá o acesso imediatamente. Um administrador pode convidá-lo de volta."
-        },
-        "left": "Você saiu de {{name}}"
-      },
-      "members": {
-        "title": "Membros",
-        "description": "{{count}} de {{seats}} assentos usados.",
-        "invite": "Convidar",
-        "empty": "Ainda não há membros.",
-        "loadError": "Não foi possível carregar os membros.",
-        "roleUpdated": "Função atualizada",
-        "removed": "{{name}} removido",
-        "promote": "Tornar administrador",
-        "demote": "Tornar membro",
-        "transferOwnership": "Transferir propriedade",
-        "remove": "Remover do espaço de trabalho",
-        "removeConfirm": {
-          "title": "Remover este membro?",
-          "description": "{{name}} perderá o acesso a {{workspace}} imediatamente."
-        },
-        "transferConfirm": {
-          "title": "Transferir a propriedade?",
-          "description": "{{name}} se torna o proprietário de {{workspace}}. Sua função muda para administrador e apenas o novo proprietário pode transferi-la de volta."
-        }
-      },
-      "joinRequests": {
-        "title": "Pedidos de acesso",
-        "approve": "Aprovar",
-        "deny": "Recusar",
-        "approved": "{{name}} entrou no workspace",
-        "denied": "Pedido recusado",
-        "errorTitle": "Não foi possível atualizar o pedido"
-      },
-      "teams": {
-        "title": "Equipes",
-        "description": "Grupos de membros do workspace que concedem acesso a espaços de equipe.",
-        "new": "Nova equipe",
-        "empty": "Nenhuma equipe ainda.",
-        "createFirst": "Crie sua primeira equipe",
-        "addMembersLabel": "Adicionar membros",
-        "createTitle": "Criar equipe",
-        "nameLabel": "Nome da equipe",
-        "memberCount_one": "{{count}} membro",
-        "memberCount_other": "{{count}} membros",
-        "membersButton": "Membros",
-        "grantsAccessToSpaces_one": "Dá acesso a {{count}} espaço",
-        "grantsAccessToSpaces_other": "Dá acesso a {{count}} espaços",
-        "couldNotCreate": "Não foi possível criar a equipe",
-        "created": "{{team}} criada",
-        "deleted": "{{team}} excluída",
-        "deleteConfirmTitle": "Excluir {{team}}?",
-        "deleteConfirmDescription": "Isso arquiva a equipe. Seus membros perdem o acesso que ela concedia.",
-        "deleteConfirmSpaceAccess_one": "Esta equipe dá acesso a {{count}} espaço. Seus membros perderão esse acesso.",
-        "deleteConfirmSpaceAccess_other": "Esta equipe dá acesso a {{count}} espaços. Seus membros perderão esse acesso.",
-        "members": {
-          "title": "Membros de {{team}}",
-          "removeConfirm": "Remover {{name}} de {{team}}?",
-          "leave": "Sair da equipe",
-          "leftTeam": "Você saiu de {{team}}",
-          "leaveConfirm": "Sair de {{team}}?",
-          "leaveConfirmDescription": "Você perderá o acesso aos espaços atribuídos a esta equipe, a menos que outra equipe o inclua."
-        }
-      },
-      "invites": {
-        "title": "Convites pendentes",
-        "expiresIn_one": "Expira em {{count}} dia",
-        "expiresIn_other": "Expira em {{count}} dias",
-        "expired": "Expirado",
-        "loadError": "Não foi possível carregar os convites.",
-        "resend": "Reenviar",
-        "resending": "Reenviando…",
-        "revoke": "Revogar",
-        "resent": "Convite reenviado",
-        "resentNoEmail": "Convite atualizado, mas não foi possível entregar o e-mail.",
-        "revoked": "Convite revogado",
-        "revokeFailed": "Não foi possível revogar o convite",
-        "revokeConfirm": {
-          "title": "Revogar este convite?",
-          "description": "O link de convite de {{email}} deixará de funcionar."
-        }
-      },
-      "billing": {
-        "plan": "Plano",
-        "seats": "Assentos",
-        "ownerOnly": "Apenas o proprietário do espaço de trabalho pode gerenciar a assinatura.",
-        "nextInvoice": "Próxima fatura",
-        "manageStripe": "Gerenciar no Stripe",
-        "startSubscription": "Iniciar assinatura",
-        "planLabel": {
-          "business": "Business",
-          "pro": "Pro",
-          "free": "Gratuito",
-          "enterprise": "Enterprise"
-        },
-        "status": {
-          "active": "Ativa",
-          "trialing": "Em teste",
-          "past_due": "Em atraso",
-          "canceled": "Cancelada",
-          "incomplete": "Incompleta",
-          "unpaid": "Não paga"
-        }
-      },
-      "developer": {
-        "title": "Chaves de API",
-        "description": "Acesso programático limitado a este espaço de trabalho.",
-        "empty": "Ainda não há chaves de API. Crie uma para integrar com este espaço de trabalho.",
-        "loadError": "Não foi possível carregar as chaves de API.",
-        "new": "Nova chave",
-        "create": "Criar chave",
-        "createTitle": "Criar chave de API",
-        "createDescription": "Escolha as permissões que esta chave precisa. Você pode revogá-la a qualquer momento.",
-        "nameLabel": "Nome da chave",
-        "namePlaceholder": "Integração de produção",
-        "revoke": "Revogar chave",
-        "revoked": "Chave {{name}} revogada",
-        "lastUsed": "Último uso {{date}}",
-        "neverUsed": "Nunca usada",
-        "keyCreatedTitle": "Chave de API criada",
-        "keyCreatedDescription": "Copie esta chave agora — você não poderá vê-la novamente.",
-        "revokeConfirm": {
-          "title": "Revogar esta chave?",
-          "description": "{{name}} deixará de funcionar imediatamente. Qualquer integração que a utilize começará a falhar."
-        },
-        "scopes": {
-          "notes": {
-            "title": "Notas",
-            "read": "Ler notas",
-            "write": "Escrever notas"
-          },
-          "folders": {
-            "title": "Pastas",
-            "read": "Ler pastas",
-            "write": "Escrever pastas"
-          },
-          "transcriptions": {
-            "title": "Transcrições",
-            "read": "Ler transcrições"
-          },
-          "members": {
-            "title": "Membros",
-            "read": "Ler membros",
-            "write": "Gerenciar membros"
-          },
-          "billing": {
-            "title": "Cobrança",
-            "read": "Ler cobrança"
-          },
-          "full": {
-            "title": "Acesso total",
-            "admin": "Administrador do espaço de trabalho"
-          }
-        }
-      }
     }
   },
   "models": {
@@ -2249,98 +1674,11 @@
       }
     }
   },
-  "upgradePrompt": {
-    "paymentFailed": "Não foi possível processar seu pagamento",
-    "weeklyLimit": "Você atingiu seu limite semanal",
-    "pastDueDescription": "Você está no plano gratuito por enquanto — sem problemas, você ainda tem {{limit}} palavras por semana.\nAtualize sua forma de pagamento para voltar ao Pro ilimitado.",
-    "limitDescription": "{{used}} de {{limit}} palavras usadas.\nSua transcrição foi salva e colada.",
-    "updatePayment": "Atualizar forma de pagamento",
-    "updatePaymentDescription": "Volte às transcrições ilimitadas do Pro.",
-    "upgradeToPro": "Fazer upgrade para Pro",
-    "upgradeDescription": "Transcrições ilimitadas a partir de apenas $8/mês.",
-    "useApiKey": "Use sua própria chave API",
-    "useApiKeyDescription": "Traga sua própria chave para uso ilimitado.",
-    "switchToLocal": "Mudar para local",
-    "switchToLocalDescription": "Transcrição offline. Sem limites.",
-    "rollingWeeklyLimit": "Limite semanal contínuo"
-  },
   "windowControls": {
     "minimize": "Minimizar",
     "maximize": "Maximizar",
     "restore": "Restaurar",
     "close": "Fechar"
-  },
-  "referral": {
-    "modalTitle": "Indicar um amigo",
-    "title": "Indique e ganhe recompensas",
-    "subtitle": "Dê um mês. Ganhe um mês.",
-    "tabs": {
-      "refer": "Indicar",
-      "pastInvites": "Convites anteriores"
-    },
-    "howItWorks": {
-      "shareLink": "Compartilhe seu link de convite",
-      "theySignUp": "A pessoa se cadastra e ganha um ",
-      "freeMonthOfPro": "mês grátis de Pro",
-      "youGet": "Você ganha um ",
-      "freeMonth": "mês grátis",
-      "whenTheyDictate": " quando ela ditar 2.000 palavras"
-    },
-    "inviteLink": {
-      "title": "Seu link de convite",
-      "copy": "Copiar",
-      "copied": "Copiado"
-    },
-    "sendInvites": {
-      "title": "Enviar convites",
-      "placeholder": "friend@example.com",
-      "send": "Enviar",
-      "sending": "Enviando"
-    },
-    "stats": {
-      "referred": "Indicados",
-      "converted": "Convertidos",
-      "monthsEarned": "Meses ganhos"
-    },
-    "status": {
-      "converted": "Convertido",
-      "opened": "Aberto",
-      "failed": "Falhou",
-      "sent": "Enviado"
-    },
-    "empty": {
-      "title": "Nenhum convite enviado ainda",
-      "description": "Compartilhe seu link ou envie um convite para começar"
-    },
-    "toasts": {
-      "copiedTitle": "Copiado!",
-      "copiedDescription": "Link de indicação copiado para a área de transferência",
-      "copyFailedTitle": "Falha ao copiar",
-      "copyFailedDescription": "Não foi possível copiar o link para a área de transferência",
-      "invalidEmailTitle": "E-mail inválido",
-      "invalidEmailDescription": "Por favor, insira um endereço de e-mail válido",
-      "inviteSentTitle": "Convite enviado!",
-      "inviteSentDescription": "Convite enviado para {{email}}",
-      "sendFailedTitle": "Falha ao enviar",
-      "sendFailedDescription": "Não foi possível enviar o convite. Por favor, tente novamente."
-    },
-    "errors": {
-      "unableToLoad": "Não foi possível carregar os dados de indicação",
-      "unableToLoadStats": "Não foi possível carregar as estatísticas de indicação. Por favor, tente novamente mais tarde."
-    },
-    "tryAgain": "Tentar novamente",
-    "card": {
-      "brand": "OpenWhispr",
-      "signalId": "Signal ID",
-      "audioSignature": "Sua assinatura de áudio",
-      "stop": "Parar",
-      "playSignal": "Reproduzir sinal"
-    },
-    "friends": {
-      "title": "Amigos",
-      "completed": "Concluído",
-      "sentInvites": "Convites enviados"
-    }
   },
   "notes": {
     "mutationErrors": {
@@ -2360,11 +1698,9 @@
     },
     "spaces": {
       "privateSpaces": "Espaços privados",
-      "teamSpaces": "Espaços de equipe",
       "personal": "Pessoal",
       "privateTooltip": "Somente você pode ver seu espaço pessoal",
       "newSpace": "Novo espaço de equipe",
-      "newSpaceInWorkspace": "Novo espaço de equipe em {{workspace}}",
       "createTitle": "Criar espaço de equipe",
       "createDescription": "Uma área compartilhada dentro de um workspace que uma ou mais equipes podem acessar.",
       "nameLabel": "Nome",
@@ -2379,7 +1715,6 @@
       "deleteSpace": "Excluir espaço",
       "deleteConfirmTitle": "Excluir espaço?",
       "deleteConfirmDescription": "Isso exclui permanentemente {{space}} com todas as suas pastas e notas neste dispositivo.",
-      "deleteConfirmTeamDescription": "Isso exclui {{space}} para todos. Suas equipes permanecem, mas os membros perdem o acesso a todas as pastas e notas.",
       "deleteTypeName": "Digite {{space}} para confirmar",
       "couldNotDelete": "Não foi possível excluir o espaço",
       "deleted": "{{space}} excluído",
@@ -2393,14 +1728,12 @@
       "confirmMoveIn": "Todos em {{space}} poderão ver e editar esta nota. As notas não podem ser retiradas de um espaço de equipe depois.",
       "confirmMoveInFolder": "Todos em {{space}} poderão ver e editar esta pasta e suas notas. As pastas e notas não podem ser retiradas de um espaço de equipe depois.",
       "cantMoveOut": "As notas não podem ser retiradas de um espaço de equipe.",
-      "cantMoveTeammate": "Apenas o proprietário da nota ou um administrador do workspace pode movê-la para outro espaço.",
       "moved": "“{{title}}” movida para {{target}}",
       "couldNotMove": "Não foi possível mover a pasta",
       "couldNotMoveNote": "Não foi possível mover a nota",
       "folderNameTaken": "Não foi possível mover “{{name}}”: já existe uma pasta com esse nome nesse local",
       "undo": "Desfazer",
       "emptySpace": "Nenhuma nota ainda. As notas aqui são visíveis para todos em {{space}}.",
-      "emptyTeamHint": "Os espaços compartilhados com você aparecerão aqui.",
       "noteCount_one": "{{count}} nota",
       "noteCount_other": "{{count}} notas",
       "accessRevoked": "Você não tem mais acesso a {{space}}",
@@ -2413,67 +1746,14 @@
       "conflictBanner": "Existe uma versão mais recente desta nota.",
       "conflictRefresh": "Atualizar",
       "conflictKeep": "Continuar editando",
-      "editedBy": "Editado por {{name}} · {{time}}",
-      "members": {
-        "addPeopleToTeam": "Adicionar pessoas a {{team}}",
-        "addedToTeam": "{{name}} adicionado a {{team}}",
-        "removedFromTeam": "{{name}} removido de {{team}}",
-        "roleUpdated": "Função atualizada",
-        "you": "Você",
-        "addFailed": "Não foi possível adicionar {{failed}} de {{total}} pessoas",
-        "searchPlaceholder": "Pesquisar pessoas…",
-        "noResults": "Nenhuma pessoa encontrada",
-        "roleAdmin": "Administrador",
-        "roleMember": "Membro",
-        "remove": "Remover",
-        "removeConfirm": "Remover {{name}} de {{space}}?",
-        "removeConfirmDescription": "A pessoa perderá o acesso a todas as notas deste espaço.",
-        "inviteFooter": "Convidar {{email}} para o espaço de trabalho…",
-        "empty": "Ninguém foi adicionado ainda"
-      },
-      "invitedTo_one": "Você entrará em {{count}} espaço de equipe",
-      "invitedTo_other": "Você entrará em {{count}} espaços de equipe",
-      "teamsMembers": {
-        "menu": "Equipes e membros…",
-        "title": "Equipes e membros de {{space}}",
-        "noTeams": "Nenhuma equipe tem acesso a este espaço ainda. Apenas administradores do workspace podem vê-lo.",
-        "addTeamLabel": "Adicionar uma equipe a este espaço",
-        "chooseTeam": "Escolher equipe…",
-        "teamAdded": "{{team}} adicionada a {{space}}",
-        "teamRemoved": "{{team}} removida de {{space}}",
-        "removeTeamFromSpace": "Remover do espaço",
-        "removeTeamConfirm": "Remover {{team}} de {{space}}?",
-        "removeTeamConfirmDescription": "Seus membros perderão o acesso a este espaço, a menos que outra equipe atribuída os inclua.",
-        "lastTeamWarning": "Esta é a única equipe com acesso a este espaço. Após removê-la, apenas administradores do workspace mantêm o acesso.",
-        "affectsOtherSpaces_one": "Alterações em {{team}} também se aplicam a {{count}} outro espaço ao qual ela tem acesso.",
-        "affectsOtherSpaces_other": "Alterações em {{team}} também se aplicam a {{count}} outros espaços aos quais ela tem acesso.",
-        "accessLabel": "Acesso ao espaço",
-        "accessAdmin": "Administrador",
-        "accessMember": "Membro",
-        "accessChanged": "Acesso de {{team}} atualizado",
-        "accessHint": "Os administradores de {{team}} só gerenciam este espaço quando seu acesso está definido como Administrador."
-      },
-      "teams": {
-        "assignLabel": "Equipes",
-        "newTeam": "Nova equipe",
-        "newTeamNameLabel": "Nome da equipe",
-        "loadError": "Não foi possível carregar as equipes."
-      }
+      "editedBy": "Editado por {{name}} · {{time}}"
     },
     "structureIntro": {
       "title": "Onde ficam suas notas",
-      "description": "O OpenWhispr separa pensamentos privados do trabalho compartilhado para que as pessoas certas vejam as notas certas.",
+      "description": "O HIRA separa pensamentos privados do trabalho compartilhado para que as pessoas certas vejam as notas certas.",
       "personal": {
         "title": "Espaço pessoal",
         "description": "Somente você pode ver as pastas e notas deste espaço."
-      },
-      "workspace": {
-        "title": "Espaço de trabalho",
-        "description": "O lugar dos membros, funções e espaços de equipe do seu workspace."
-      },
-      "teamSpace": {
-        "title": "Espaço de equipe",
-        "description": "Uma área compartilhada dentro de um workspace. Uma ou mais equipes concedem acesso a ela."
       },
       "contents": "Cada espaço pode conter pastas e notas.",
       "done": "Entendi",
@@ -2496,13 +1776,29 @@
       "newNote": "Nova nota",
       "untitled": "Sem título",
       "untitledNote": "Nota sem título",
-      "shared": "Compartilhada",
       "timeNow": "Agora",
       "minutesAgo": "{{count}}m",
       "hoursAgo": "{{count}}h",
       "daysAgo": "{{count}}d"
     },
     "editor": {
+      "clinicalOutputs": {
+        "summary": "Summary",
+        "soap": "SOAP",
+        "loading": "Loading clinical notes...",
+        "recording": "Recording encounter...",
+        "processingTranscript": "Processing transcript...",
+        "separatingSpeakers": "Separating speakers...",
+        "generatingNotes": "Generating clinical notes...",
+        "ready": "Ready",
+        "stale": "Transcript changed — regenerate notes",
+        "failed": "Generation failed",
+        "failedDescription": "Clinical notes could not be generated. Your transcript is saved; try again.",
+        "empty": "Clinical notes will appear here after the encounter is processed.",
+        "unavailable": "Encounter output is unavailable.",
+        "retry": "Retry",
+        "regenerate": "Regenerate"
+      },
       "untitled": "Sem título",
       "noteTitle": "Título da nota",
       "stop": "Parar",
@@ -2544,7 +1840,6 @@
       "dropToUpload": "Solte para enviar",
       "transcribe": "Transcrever",
       "cancel": "Cancelar",
-      "transcribingCloud": "Transcrevendo pela nuvem...",
       "transcribingLocal": "Transcrevendo localmente...",
       "transcribingProvider": "Transcrevendo via {{provider}}...",
       "cancelTranscription": "Cancelar transcrição",
@@ -2559,7 +1854,6 @@
       "newFolder": "Nova pasta",
       "folderName": "Nome da pasta",
       "create": "Criar",
-      "openwhisprCloud": "OpenWhispr Cloud",
       "custom": "Personalizado",
       "selectFolder": "Selecionar pasta",
       "transcriptionFailed": "Falha na transcrição",
@@ -2571,15 +1865,9 @@
       "fileTooLarge": "Este arquivo excede o limite de 500 MB.",
       "largeFileNote": "Arquivos grandes são divididos e transcritos em paralelo.",
       "chunkProgress": "Transcrevendo parte {{completed}} de {{total}}...",
-      "paidPlanRequired": "A transcrição na nuvem para arquivos acima de 25 MB requer um plano pago. Arquivos grandes são processados com o OpenWhispr Cloud para resultados confiáveis e de alta qualidade.",
+      "paidPlanRequired": "A transcrição na nuvem para arquivos acima de 25 MB requer um plano pago. Arquivos grandes são processados com o HIRA Cloud para resultados confiáveis e de alta qualidade.",
       "byokTooLarge": "Chaves API de terceiros suportam apenas arquivos de até 25 MB.",
-      "byokTooLargeDetail": "Para arquivos acima de 25 MB, o OpenWhispr Cloud cuida da divisão, processamento paralelo e remontagem — para resultados confiáveis sem depender dos limites de provedores de terceiros.",
-      "byokTooLargeNeedsAccount": "Crie uma conta e mude para um plano pago para transcrever arquivos maiores com o OpenWhispr Cloud.",
-      "byokTooLargeNeedsUpgrade": "Mude para um plano pago para transcrever arquivos maiores com o OpenWhispr Cloud.",
-      "switchToCloudForLargeFiles": "Mude para o OpenWhispr Cloud para transcrever este arquivo.",
-      "createAccount": "Criar conta",
-      "upgrade": "Fazer upgrade",
-      "switchToCloud": "OpenWhispr Cloud",
+      "byokTooLargeDetail": "Para arquivos acima de 25 MB, o HIRA Cloud cuida da divisão, processamento paralelo e remontagem — para resultados confiáveis sem depender dos limites de provedores de terceiros.",
       "orDivider": "ou",
       "urlPlaceholder": "Cole uma URL do YouTube ou de áudio",
       "urlDownloading": "Baixando áudio...",
@@ -2706,8 +1994,7 @@
       }
     },
     "realtimeBanner": {
-      "message": "Transcrição em tempo real disponível no Pro",
-      "upgrade": "Fazer upgrade"
+      "message": "Transcrição em tempo real disponível no Pro"
     },
     "enhance": {
       "title": "Erro de aprimoramento"
@@ -2716,6 +2003,7 @@
       "you": "Você",
       "them": "Outro",
       "unknown": "Participante desconhecido",
+      "unassigned": "Participante não atribuído",
       "label": "Participante {{n}}",
       "identifyingSpeakers": "Identificando participantes...",
       "liveAccuracyHint": "Ainda identificando participantes. A precisão dos rótulos melhorará quando a chamada terminar.",
@@ -2755,9 +2043,20 @@
         "othersInCall_other": "{{count}} outras pessoas na chamada"
       }
     },
+    "meetingContext": {
+      "label": "Meeting type",
+      "inPerson": "In-person",
+      "telehealth": "Telehealth",
+      "inPersonDescription": "Shared room microphone. Speakers are separated after recording.",
+      "telehealthDescription": "Microphone and computer audio. Remote speakers may be labeled live.",
+      "processing": "Separating speakers locally…",
+      "peopleInRoom_one": "{{count}} person in room",
+      "peopleInRoom_other": "{{count}} people in room",
+      "speakerSeparationFailedTitle": "Speaker separation unavailable",
+      "speakerSeparationFailed": "Your transcript was saved, but speaker separation could not finish: {{error}}"
+    },
     "overview": {
       "subtitle": {
-        "team": "Notas visíveis para todos neste espaço.",
         "private": "Só você pode ver estas notas."
       },
       "meta": {
@@ -2768,11 +2067,9 @@
       },
       "banner": {
         "title": {
-          "team": "Seu espaço de equipe",
           "private": "Seu espaço privado"
         },
         "body": {
-          "team": "Transforme conversas em conhecimento compartilhado. Publique entrevistas com usuários, ligações de vendas e reuniões de equipe onde todos possam encontrá-las.",
           "private": "Guarde notas de reuniões, ideias e rascunhos em um só lugar — e pergunte sobre qualquer coisa neste espaço."
         },
         "dismiss": "Dispensar"
@@ -2785,7 +2082,6 @@
           "inFlight": "Mostre os projetos em andamento"
         }
       },
-      "invite": "Convidar",
       "list": {
         "empty": "Ainda não há notas aqui"
       },
@@ -2800,7 +2096,7 @@
     "clearAll": "Limpar tudo",
     "clearTitle": "Limpar o dicionário?",
     "clearDescription": "Isso removerá todas as palavras do seu dicionário personalizado. Esta ação não pode ser desfeita.",
-    "addPlaceholder": "Adicione palavras separadas por vírgulas — OpenWhispr, Supabase, John Snow, ARR",
+    "addPlaceholder": "Adicione palavras separadas por vírgulas — HIRA, Supabase, John Snow, ARR",
     "add": "Adicionar",
     "importWords": "Importar palavras",
     "importPlaceholder": "Cole palavras separadas por vírgulas ou novas linhas...",
@@ -2829,7 +2125,7 @@
       "duplicate": "Já existe um snippet com esse gatilho",
       "emptyTitle": "O que você não deveria ter que dizer",
       "emptyTitleAccent": "duas vezes",
-      "emptyDescription": "Fale um gatilho e o OpenWhispr o substitui pelo que você salvou: URLs, introduções, assinaturas, prompts.",
+      "emptyDescription": "Fale um gatilho e o HIRA o substitui pelo que você salvou: URLs, introduções, assinaturas, prompts.",
       "new": "Novo snippet",
       "examples": {
         "linkedinTrigger": "Meu LinkedIn",
@@ -2859,9 +2155,6 @@
     "support": "Suporte",
     "limitReached": "Limite semanal atingido",
     "limitReachedDescription": "Faça upgrade para Pro para transcrições ilimitadas.",
-    "viewPlans": "Ver planos",
-    "upgradeTitle": "Fazer upgrade para Pro",
-    "upgradeDescription": "Transcrições ilimitadas e recursos avançados.",
     "learnMore": "Saiba mais",
     "integrations": "Integrações",
     "defaultUser": "Usuário",
@@ -2899,7 +2192,7 @@
     "submitBug": "Reportar um bug"
   },
   "postMigration": {
-    "title": "Bem-vindo de volta ao OpenWhispr",
+    "title": "Bem-vindo de volta ao HIRA",
     "description": "Suas notas e configurações foram mantidas da versão anterior. No entanto, o macOS trata isto como um novo app, então algumas permissões precisam ser concedidas novamente.",
     "done": "Concluído",
     "remindLater": "Lembrar-me mais tarde"
@@ -2941,7 +2234,7 @@
       "undo": "Desfazer",
       "accessibilityMissing": {
         "title": "Permissões de acessibilidade necessárias",
-        "description": "O OpenWhispr precisa de permissões de acessibilidade para detectar seu atalho e colar texto. Ative-as no Painel de Controle."
+        "description": "O HIRA precisa de permissões de acessibilidade para detectar seu atalho e colar texto. Ative-as no Painel de Controle."
       },
       "gpuFallback": {
         "title": "Aceleração GPU indisponível",
@@ -2982,19 +2275,15 @@
       "visionModelDescription": "Encaminha comandos que incluem captura de tela para outro modelo com visão.",
       "permissionTitle": "Gravação de tela",
       "permissionDescription": "O macOS exige permissão de gravação de tela para capturar sua tela.",
-      "relaunchHint": "A permissão de gravação de tela foi concedida enquanto o OpenWhispr estava em execução. Feche e reabra o OpenWhispr para começar a capturar a tela."
+      "relaunchHint": "A permissão de gravação de tela foi concedida enquanto o HIRA estava em execução. Feche e reabra o HIRA para começar a capturar a tela."
     },
     "modes": {
-      "openwhispr": "OpenWhispr Cloud",
-      "openwhisprDesc": "Use o agente gerenciado pelo OpenWhispr, sem precisar de chave API.",
       "providers": "Use sua própria chave",
       "providersDesc": "Conecte-se à OpenAI, Anthropic, Gemini ou Groq com sua própria chave API.",
       "local": "Local",
       "localDesc": "Rode um LLM local no seu dispositivo, totalmente privado.",
       "selfHosted": "Auto-hospedado",
-      "selfHostedDesc": "Aponte para um endpoint compatível com OpenAI auto-hospedado.",
-      "enterprise": "Corporativo",
-      "enterpriseDesc": "Use AWS Bedrock, Azure OpenAI ou Google Vertex."
+      "selfHostedDesc": "Aponte para um endpoint compatível com OpenAI auto-hospedado."
     },
     "prompt": {
       "title": "Prompt do agente",
@@ -3011,19 +2300,13 @@
       "systemPromptDescription": "Instruções personalizadas para o agente",
       "systemPromptPlaceholder": "Digite um prompt de sistema personalizado...",
       "modes": {
-        "openwhispr": "OpenWhispr Cloud",
         "providers": "Provedores Cloud",
         "local": "Local",
         "selfHosted": "Auto-hospedado",
-        "openwhisprDesc": "Resultados confiáveis. Sem configuração.",
         "providersDesc": "Traga sua própria chave API.",
         "localDesc": "Modelos no dispositivo. Totalmente privado.",
-        "selfHostedDesc": "Seu próprio servidor na sua rede.",
-        "enterprise": "Corporativo",
-        "enterpriseDesc": "Use a conta de nuvem da sua organização (AWS, Azure, GCP)."
+        "selfHostedDesc": "Seu próprio servidor na sua rede."
       },
-      "openwhisprCloud": "OpenWhispr Cloud",
-      "openwhisprCloudDescription": "Resultados confiáveis. Sem configuração.",
       "customSetup": "Configuração personalizada (BYOK)",
       "customSetupDescription": "Use suas próprias chaves API e escolha seu modelo preferido"
     },
@@ -3091,7 +2374,7 @@
       "disconnectConfirm": "Desconectar {{email}}?",
       "disconnectDescription": "As notas de reunião não serão mais gravadas deste calendário.",
       "systemAudioRequired": "Permissão de Áudio do Sistema Necessária",
-      "systemAudioDescription": "Para transcrever reuniões, o OpenWhispr precisa da permissão de Áudio do Sistema para capturar o áudio dos outros participantes. Nunca gravamos a sua tela. Você será levado às Configurações do Sistema para ativá-la.",
+      "systemAudioDescription": "Para transcrever reuniões, o HIRA precisa da permissão de Áudio do Sistema para capturar o áudio dos outros participantes. Nunca gravamos a sua tela. Você será levado às Configurações do Sistema para ativá-la.",
       "openSettings": "Abrir Configurações do Sistema",
       "connectFailed": "Falha na conexão",
       "connectFailedDescription": "Ocorreu um erro ao conectar ao Google Calendar. Tente novamente."
@@ -3121,10 +2404,10 @@
       "disconnectConfirm": "Desconectar o Calendário da Apple?",
       "disconnectDescription": "As notas de reunião não serão mais gravadas do seu Calendário da Apple.",
       "permissionDenied": "Acesso ao calendário necessário",
-      "permissionDeniedDescription": "O OpenWhispr precisa de acesso ao calendário para detectar reuniões. Ative o OpenWhispr em Configurações do Sistema, em Privacidade e Segurança → Calendários.",
+      "permissionDeniedDescription": "O HIRA precisa de acesso ao calendário para detectar reuniões. Ative o HIRA em Configurações do Sistema, em Privacidade e Segurança → Calendários.",
       "openSettings": "Abrir Configurações do Sistema",
       "connectFailed": "Falha na conexão",
-      "connectFailedDescription": "Ocorreu um erro ao conectar ao Calendar.app. Reinicie o OpenWhispr e tente novamente."
+      "connectFailedDescription": "Ocorreu um erro ao conectar ao Calendar.app. Reinicie o HIRA e tente novamente."
     },
     "sections": {
       "calendar": "Calendário",
@@ -3137,19 +2420,17 @@
       "description": "Gerencie chaves de API para acesso programático",
       "proRequired": "Atualize para um plano pago para acessar a API",
       "manage": "Gerenciar chaves",
-      "viewPlans": "Ver planos",
       "dialogTitle": "Chaves de API"
     },
     "mcp": {
       "title": "Leve suas notas para suas ferramentas de IA",
       "description": "Converse, pesquise e trabalhe com suas notas no Claude, ChatGPT e Cursor.",
-      "step1": "Na sua ferramenta de IA, adicione OpenWhispr MCP usando a URL pública",
+      "step1": "Na sua ferramenta de IA, adicione HIRA MCP usando a URL pública",
       "step2": "Crie uma chave de API acima com os escopos necessários.",
       "step3": "Cole a chave como cabeçalho Authorization para conectar.",
       "learnMore": "Saiba mais",
-      "viewPlans": "Ver planos",
       "copyUrl": "Copiar URL do MCP",
-      "proRequired": "Atualize para um plano pago para conectar o OpenWhispr ao Claude, ChatGPT e Cursor.",
+      "proRequired": "Atualize para um plano pago para conectar o HIRA ao Claude, ChatGPT e Cursor.",
       "copied": "Copiado"
     },
     "cli": {
@@ -3159,16 +2440,10 @@
       "learnMore": "Ler a documentação",
       "copyDocsLink": "Copiar link da documentação",
       "docsLinkCopied": "Link da documentação copiado",
-      "viewPlans": "Ver planos",
       "local": {
         "label": "Local",
         "freeBadge": "Grátis",
-        "description": "Leia suas notas locais diretamente. Sem login ou chave de API — funciona enquanto o OpenWhispr estiver aberto."
-      },
-      "cloud": {
-        "label": "Nuvem",
-        "description": "Sincronize entre máquinas usando sua chave de API.",
-        "proRequired": "Atualize para um plano pago para usar a CLI no modo nuvem."
+        "description": "Leia suas notas locais diretamente. Sem login ou chave de API — funciona enquanto o HIRA estiver aberto."
       }
     },
     "plan": {
@@ -3179,12 +2454,11 @@
       "essential": "Essential",
       "essentialLimit": "20 reuniões / mês",
       "pro": "Pro",
-      "proLimit": "Ilimitado",
-      "upgrade": "Atualizar"
+      "proLimit": "Ilimitado"
     },
     "notABot": {
-      "title": "O OpenWhispr é um gravador de reuniões, não um bot",
-      "description": "O OpenWhispr captura áudio diretamente do seu sistema — ele nunca entra nas suas reuniões como participante. Basta conectar seu calendário e fazer anotações normalmente."
+      "title": "O HIRA é um gravador de reuniões, não um bot",
+      "description": "O HIRA captura áudio diretamente do seu sistema — ele nunca entra nas suas reuniões como participante. Basta conectar seu calendário e fazer anotações normalmente."
     }
   },
   "calendar": {
@@ -3202,7 +2476,6 @@
     "disconnect": "Desconectar",
     "disconnecting": "Desconectando...",
     "sync": "Sincronizar",
-    "syncing": "Sincronizando...",
     "calendarsTitle": "Calendários",
     "upcomingTitle": "Próximos",
     "noUpcoming": "Nenhum evento próximo",
@@ -3224,7 +2497,7 @@
     "signInDescription": "Crie uma conta ou entre para gravar e transcrever reuniões.",
     "connectCalendar": "Conecte seu calendário",
     "connectCalendarDescription": "Vincule seu Google Calendar para ver próximas reuniões e gravar notas automaticamente.",
-    "notABot": "O OpenWhispr grava usando o áudio do seu sistema — ele nunca entra nas reuniões como um bot.",
+    "notABot": "O HIRA grava usando o áudio do seu sistema — ele nunca entra nas reuniões como um bot.",
     "connectCalendarButton": "Conectar calendário"
   },
   "notesView": {
@@ -3249,54 +2522,7 @@
     "deleteNote": "Excluir nota",
     "deleteConfirmTitle": "Excluir nota?",
     "deleteConfirmDescription": "Esta nota será excluída permanentemente e não poderá ser recuperada.",
-    "deleteConfirm": "Excluir",
-    "share": {
-      "button": "Compartilhar",
-      "dialog": {
-        "title": "Compartilhar nota",
-        "description": "Convide pessoas por e-mail ou compartilhe um link para esta nota.",
-        "searchPlaceholder": "Buscar pessoas, pastas ou emails",
-        "noResults": "Nenhum resultado encontrado",
-        "emailLabel": "Pessoas, pastas ou email",
-        "shareButton": "Compartilhar",
-        "createLink": "Criar link",
-        "copyLink": "Copiar link",
-        "copied": "Copiado",
-        "owner": "Proprietário",
-        "editor": "Pode editar",
-        "viewer": "Pode visualizar",
-        "teamAudience": "Todos neste espaço de equipe",
-        "pending": "Pendente",
-        "accepted": "Com acesso",
-        "resend": "Reenviar convite",
-        "revoke": "Remover",
-        "invitationActions": "Ações do convite",
-        "resendSent": "Convite enviado",
-        "resendThrottled": "Convite enviado há pouco. Tente novamente em um minuto.",
-        "syncPrompt": "O compartilhamento mantém uma cópia desta nota na sua nuvem OpenWhispr. Só você pode vê-la até escolher com quem compartilhá-la.",
-        "syncAndShare": "Sincronizar nota",
-        "visibility": {
-          "label": "Visibilidade",
-          "private": "Privada",
-          "privateOption": "Privada — apenas você",
-          "link": "Qualquer pessoa com o link",
-          "domain": "Todos em {{domain}} com o link",
-          "invited": "Apenas pessoas convidadas"
-        },
-        "error": {
-          "invalidEmail": "Digite um endereço de e-mail válido",
-          "alreadyInvited": "{{email}} já foi convidado",
-          "inviteFailed": "Não foi possível enviar o convite. Tente novamente.",
-          "visibilityFailed": "Não foi possível atualizar o compartilhamento. Tente novamente.",
-          "copyFailed": "Não foi possível copiar o link. Tente novamente.",
-          "revokeFailed": "Não foi possível remover o convite. Tente novamente.",
-          "resendFailed": "Não foi possível reenviar o convite. Tente novamente.",
-          "syncFailed": "Não foi possível sincronizar esta nota. Tente novamente.",
-          "loadFailed": "Não foi possível carregar as configurações de compartilhamento",
-          "retry": "Tentar novamente"
-        }
-      }
-    }
+    "deleteConfirm": "Excluir"
   },
   "commandSearch": {
     "allSpaces": "Todos os espaços",
@@ -3318,62 +2544,14 @@
     }
   },
   "updateNotification": {
-    "title": "Atualização do OpenWhispr disponível",
+    "title": "Atualização do HIRA disponível",
     "body": "A versão {{version}} está pronta para download",
     "cta": "Atualizar agora"
   },
   "permissionsGate": {
     "title": "Permissões necessárias",
-    "description": "O OpenWhispr precisa de algumas permissões para funcionar neste computador.",
+    "description": "O HIRA precisa de algumas permissões para funcionar neste computador.",
     "continue": "Continuar"
-  },
-  "apiKeysSection": {
-    "title": "Chaves API",
-    "description": "Crie chaves para acessar a API do OpenWhispr programaticamente.",
-    "docsLink": "Docs da API",
-    "empty": "Nenhuma chave API ainda",
-    "createButton": "Criar chave API",
-    "create": {
-      "title": "Criar chave API",
-      "nameLabel": "Nome da chave",
-      "namePlaceholder": "ex. Minha Integração",
-      "scopesLabel": "Permissões",
-      "expiryLabel": "Expiração",
-      "expiryOptions": {
-        "never": "Nunca expira",
-        "30days": "30 dias",
-        "60days": "60 dias",
-        "90days": "90 dias",
-        "1year": "1 ano"
-      },
-      "submit": "Criar",
-      "cancel": "Cancelar"
-    },
-    "created": {
-      "title": "Chave API criada",
-      "warning": "Copie esta chave agora. Ela não será exibida novamente.",
-      "copied": "Copiado!",
-      "copyButton": "Copiar para a área de transferência",
-      "done": "Concluído"
-    },
-    "scopes": {
-      "notesRead": "Ler notas",
-      "notesWrite": "Criar e editar notas",
-      "transcriptionsRead": "Ler transcrições"
-    },
-    "revoke": {
-      "button": "Revogar",
-      "confirm": "Revogar esta chave? As integrações que a utilizam deixarão de funcionar.",
-      "success": "Chave API revogada"
-    },
-    "neverUsed": "Nunca usada",
-    "lastUsed": "Último uso {{time}}",
-    "maxKeysReached": "Máximo de {{max}} chaves permitidas",
-    "errors": {
-      "loadFailed": "Falha ao carregar as chaves API",
-      "createFailed": "Falha ao criar a chave API",
-      "revokeFailed": "Falha ao revogar a chave API"
-    }
   },
   "embeddedChat": {
     "askPlaceholder": "Pergunte algo...",
@@ -3401,83 +2579,6 @@
       "others": "Outros"
     },
     "missingAudio": "[áudio ausente {{from}}-{{to}}]"
-  },
-  "workspaces": {
-    "switcher": {
-      "workspaces": "Espaços de trabalho",
-      "create": "Criar espaço de trabalho…"
-    },
-    "create": {
-      "title": "Criar espaço de trabalho",
-      "description": "Um espaço de trabalho reúne os membros e a cobrança da sua organização. Crie espaços de equipe dentro dele para notas compartilhadas.",
-      "nameLabel": "Nome do espaço de trabalho",
-      "namePlaceholder": "Acme Corp",
-      "freePlanNote": "Novos espaços de trabalho começam no plano Free. Os espaços de equipe exigem um plano do espaço de trabalho.",
-      "submit": "Criar espaço de trabalho",
-      "submitting": "Criando…",
-      "errorTitle": "Não foi possível criar o espaço de trabalho"
-    },
-    "created": {
-      "title": "Espaço de trabalho criado",
-      "description": "Agora você é o proprietário de {{name}}."
-    },
-    "invite": {
-      "title": "Convidar para {{workspace}}",
-      "description": "Adicione colegas por e-mail. Eles receberão um link para entrar.",
-      "emailLabel": "E-mail",
-      "emailPlaceholder": "colega@exemplo.com",
-      "roleLabel": "Função",
-      "seatUsage": "Usando {{used}} de {{seats}} assentos",
-      "seatCost": "Se a pessoa aceitar, será adicionado um assento ao plano · cobrança proporcional estimada de {{amount}}.",
-      "submit": "Enviar convite",
-      "submitting": "Enviando…",
-      "sentTitle": "Convite enviado",
-      "sentDescription": "Enviamos um convite para {{email}}.",
-      "sentNoEmailTitle": "Convite criado, mas não enviado por e-mail",
-      "sentNoEmailDescription": "{{email}} foi convidado, mas não foi possível entregar o e-mail. Reenvie-o mais tarde ou compartilhe o link de convite de outra forma.",
-      "errorTitle": "Não foi possível enviar o convite",
-      "role": {
-        "admin": "Administrador",
-        "member": "Membro"
-      },
-      "roleDescription": {
-        "admin": "Gerencia membros e cobrança",
-        "member": "Usa o espaço de trabalho"
-      }
-    },
-    "join": {
-      "title": "Entre na sua equipe",
-      "domainTitle": "Sua equipe já está no OpenWhispr",
-      "description": "Estes workspaces têm alguém do domínio do seu e-mail.",
-      "invitedDescription": "Você foi convidado para um workspace.",
-      "invitedBy": "Convidado por {{inviter}} como {{role}}",
-      "memberCount_one": "{{count}} membro",
-      "memberCount_other": "{{count}} membros",
-      "join": "Entrar",
-      "requestErrorTitle": "Não foi possível enviar o pedido",
-      "requestedDescription": "Um administrador de {{workspace}} vai analisar.",
-      "requestedTitle": "Pedido enviado",
-      "requested": "Solicitado",
-      "request": "Pedir acesso",
-      "notNow": "Agora não",
-      "successTitle": "Você entrou",
-      "successDescription": "Agora você é membro de {{workspace}}.",
-      "errorTitle": "Não foi possível entrar"
-    },
-    "accept": {
-      "title": "Entrar no espaço de trabalho",
-      "description": "{{inviter}} convidou você para entrar em {{workspace}} como {{role}}.",
-      "loading": "Carregando convite…",
-      "accept": "Aceitar convite",
-      "accepting": "Aceitando…",
-      "signInToAccept": "Faça login para aceitar",
-      "switchAccount": "Trocar de conta",
-      "successTitle": "Você entrou",
-      "successDescription": "Você é membro de {{name}}. Gerencie em Configurações → Espaço de trabalho.",
-      "errorTitle": "Não foi possível aceitar o convite",
-      "sentTo": "Convite enviado para {{email}}",
-      "wrongAccount": "Este convite foi enviado para {{email}}. Você está conectado como {{current}}."
-    }
   },
   "dictationTranslation": {
     "title": "Tradução de Ditado",

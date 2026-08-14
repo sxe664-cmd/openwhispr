@@ -1061,6 +1061,304 @@ body:has(.agent-overlay-window) #root {
   height: 0;
 }
 
+@keyframes prayer-confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -12vh, 0) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--prayer-drift), 112vh, 0) rotate(var(--prayer-rotation));
+  }
+}
+
+@keyframes prayer-amen-float {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 110vh, 0) rotate(-8deg) scale(0.78);
+  }
+  14% {
+    opacity: 1;
+  }
+  74% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--prayer-drift), -24vh, 0) rotate(var(--prayer-rotation)) scale(1.08);
+  }
+}
+
+.prayer-celebration {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.prayer-confetti {
+  position: absolute;
+  top: -14px;
+  width: 7px;
+  height: 13px;
+  border-radius: 2px;
+  animation: prayer-confetti-fall 2.7s ease-out both;
+}
+
+.prayer-amen {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  font-size: clamp(1rem, 2.2vw, 1.7rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-shadow: 0 2px 12px rgb(255 255 255 / 0.85);
+  animation: prayer-amen-float 2.9s cubic-bezier(0.22, 0.75, 0.35, 1) both;
+}
+
+/* AIReceptionist appointment surface.  These names intentionally mirror the
+   source runtime so the calendar page keeps the same visual language and
+   action affordances as the private receptionist console. */
+.appointments-show-more:hover {
+  background: var(--color-muted);
+}
+
+.appointments-list {
+  display: grid;
+  gap: 0.6rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.9rem;
+}
+
+/* The same restrained depth treatment is shared by Home encounters and
+   Calendar appointments so both surfaces feel like one product. */
+.encounter-card,
+.appointment-card {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #8b99aa 100%) border-box;
+}
+
+.encounter-card--in-progress {
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-surface-1) 92%, var(--color-primary) 8%), color-mix(in srgb, var(--color-surface-1) 92%, var(--color-primary) 8%)) padding-box,
+    linear-gradient(180deg, #dbeaff 0%, #5279ac 100%) border-box;
+}
+
+.dark .encounter-card,
+.dark .appointment-card {
+  background:
+    linear-gradient(var(--color-surface-2), var(--color-surface-2)) padding-box,
+    linear-gradient(180deg, oklch(0.52 0.02 250) 0%, oklch(0.3 0.02 250) 100%) border-box;
+}
+
+.appointment-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  overflow: visible;
+  padding: 0.85rem 0.9rem;
+  border-radius: 0.9rem;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.06);
+}
+
+.appointment-card--cancelled {
+  opacity: 0.62;
+}
+
+.appointment-card__copy {
+  min-width: 0;
+}
+
+.appointment-card__copy strong {
+  display: block;
+  color: var(--color-foreground);
+  font-size: 0.94rem;
+  line-height: 1.2;
+}
+
+.appointment-card__copy small {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--color-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.appointment-card__copy .appointment-card__metadata {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.55rem;
+  line-height: 1.35;
+}
+
+.appointment-card__time,
+.appointment-card__recipient {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.appointment-card__recipient--missing {
+  color: color-mix(in srgb, var(--color-muted-foreground) 82%, var(--color-foreground) 18%);
+  font-style: italic;
+}
+
+.appointment-card__metadata-separator {
+  color: var(--color-border-hover);
+}
+
+.appointment-card__badge {
+  flex: 0 0 auto;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-muted-foreground);
+  font-size: 0.62rem;
+}
+
+.appointment-card__cancelled-label {
+  color: var(--color-warning);
+}
+
+.appointment-card__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  justify-self: end;
+}
+
+.appointment-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.appointment-actions button {
+  display: inline-flex;
+  width: 2.4rem;
+  min-width: 2.4rem;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #aebdce 100%) border-box;
+  color: var(--color-foreground);
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.appointment-actions button.is-ready {
+  color: #fff;
+  box-shadow: 0 8px 16px oklch(0 0 0 / 0.1);
+}
+
+.appointment-actions button[data-appointment-action="sms"],
+.appointment-action--sms.is-ready {
+  border-color: transparent;
+  background:
+    linear-gradient(#34d399, #34d399) padding-box,
+    linear-gradient(180deg, #c3f7e3 0%, #168b67 100%) border-box;
+}
+
+.appointment-actions button[data-appointment-action="email"],
+.appointment-action--email.is-ready {
+  border-color: transparent;
+  background:
+    linear-gradient(#ef4444, #ef4444) padding-box,
+    linear-gradient(180deg, #ffc4c4 0%, #b92d36 100%) border-box;
+}
+
+.appointment-actions button.is-used {
+  color: var(--color-muted-foreground);
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #aebdce 100%) border-box;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.appointment-actions button[data-appointment-action="email"].is-used,
+.appointment-action--email.is-used {
+  color: var(--color-muted-foreground);
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #aebdce 100%) border-box;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.appointment-actions button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px oklch(0 0 0 / 0.14);
+}
+
+.appointment-actions button.is-disabled,
+.appointment-actions button:disabled {
+  cursor: not-allowed;
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #aebdce 100%) border-box;
+  border-color: transparent;
+  color: var(--color-muted-foreground);
+  opacity: 0.42;
+  box-shadow: none;
+}
+
+.appointment-action__icon {
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.appointment-card__feedback {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  font-size: 0.7rem;
+}
+
+.appointment-card__feedback--success {
+  color: var(--color-success);
+}
+
+.appointment-card__feedback--error {
+  color: var(--color-destructive);
+}
+
+.appointments-show-more {
+  min-height: 2.35rem;
+  justify-self: center;
+  padding: 0.45rem 0.95rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 640px) {
+  .appointment-card {
+    grid-template-columns: 1fr;
+    gap: 0.7rem;
+  }
+
+  .appointment-card__controls {
+    justify-self: start;
+  }
+}
+
 /* Dark mode adjustments */
 .dark .rich-text-editor-content li::marker {
   color: oklch(0.7 0 0 / 0.4);
@@ -1085,4 +1383,110 @@ body:has(.agent-overlay-window) #root {
 
 .dark .rich-text-editor-content p.is-editor-empty:first-child::before {
   color: oklch(0.7 0 0 / 0.2);
+}
+
+/* AI Receptionist surfaces: clearer hierarchy with the same light-over-dark depth
+   treatment used by calendar and encounter cards. Keep the effect on major panels
+   and message surfaces only so the settings page stays calm. */
+.ai-receptionist-status-panel,
+.ai-receptionist-editor-card,
+.ai-receptionist-runtime-panel {
+  border-color: transparent;
+  background:
+    linear-gradient(var(--color-surface-1), var(--color-surface-1)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #a3b1c0 100%) border-box;
+  box-shadow: 0 1px 2px oklch(0 0 0 / 0.045);
+}
+
+.ai-receptionist-editor-card {
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.055);
+}
+
+.ai-receptionist-runtime-panel--error {
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-destructive) 5%, var(--color-surface-1)), color-mix(in srgb, var(--color-destructive) 5%, var(--color-surface-1))) padding-box,
+    linear-gradient(180deg, color-mix(in srgb, var(--color-destructive) 30%, #f5f9ff), color-mix(in srgb, var(--color-destructive) 55%, #a3b1c0)) border-box;
+}
+
+.ai-receptionist-template-group,
+.ai-receptionist-preview {
+  border-color: color-mix(in srgb, var(--color-border) 82%, var(--color-foreground) 18%);
+  background-color: color-mix(in srgb, var(--color-surface-1) 88%, var(--color-foreground) 12%);
+}
+
+.ai-receptionist-preview {
+  box-shadow: inset 0 1px 2px oklch(from var(--color-foreground) l c h / 0.055);
+}
+
+.ai-receptionist-view textarea,
+.ai-receptionist-view input:not(.input-inline),
+.ai-receptionist-view select {
+  background-color: var(--color-background);
+  border-color: color-mix(in srgb, var(--color-border) 84%, var(--color-foreground) 16%);
+}
+
+.ai-receptionist-view textarea:focus,
+.ai-receptionist-view input:not(.input-inline):focus,
+.ai-receptionist-view select:focus {
+  background-color: var(--color-surface-1);
+  border-color: var(--color-border-active);
+}
+
+.ai-receptionist-message-field {
+  min-height: 6.5rem;
+  box-shadow: inset 0 1px 3px oklch(from var(--color-foreground) l c h / 0.05);
+}
+
+.ai-receptionist-variable-chip {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--color-muted), var(--color-muted)) padding-box,
+    linear-gradient(180deg, #f5f9ff 0%, #aebdce 100%) border-box;
+  transition: color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.ai-receptionist-variable-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 5px oklch(0 0 0 / 0.1);
+}
+
+.dark .ai-receptionist-status-panel,
+.dark .ai-receptionist-editor-card,
+.dark .ai-receptionist-runtime-panel {
+  background:
+    linear-gradient(var(--color-surface-2), var(--color-surface-2)) padding-box,
+    linear-gradient(180deg, oklch(0.62 0.02 250 / 0.45) 0%, oklch(0.34 0.02 250 / 0.8) 100%) border-box;
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.18);
+}
+
+.dark .ai-receptionist-runtime-panel--error {
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-destructive) 12%, var(--color-surface-2)), color-mix(in srgb, var(--color-destructive) 12%, var(--color-surface-2))) padding-box,
+    linear-gradient(180deg, color-mix(in srgb, var(--color-destructive) 38%, oklch(0.62 0.02 250)), color-mix(in srgb, var(--color-destructive) 62%, oklch(0.34 0.02 250))) border-box;
+}
+
+.dark .ai-receptionist-template-group,
+.dark .ai-receptionist-preview {
+  border-color: color-mix(in srgb, var(--color-border-hover) 76%, var(--color-foreground) 24%);
+  background-color: color-mix(in srgb, var(--color-surface-0) 82%, var(--color-foreground) 18%);
+}
+
+.dark .ai-receptionist-view textarea,
+.dark .ai-receptionist-view input:not(.input-inline),
+.dark .ai-receptionist-view select {
+  background-color: color-mix(in srgb, var(--color-surface-0) 88%, var(--color-foreground) 12%);
+  border-color: color-mix(in srgb, var(--color-border-hover) 82%, var(--color-foreground) 18%);
+}
+
+.dark .ai-receptionist-view textarea:focus,
+.dark .ai-receptionist-view input:not(.input-inline):focus,
+.dark .ai-receptionist-view select:focus {
+  background-color: var(--color-surface-1);
+  border-color: var(--color-border-active);
+}
+
+.dark .ai-receptionist-variable-chip {
+  background:
+    linear-gradient(var(--color-muted), var(--color-muted)) padding-box,
+    linear-gradient(180deg, oklch(0.58 0.02 250 / 0.55) 0%, oklch(0.3 0.02 250 / 0.85) 100%) border-box;
 }

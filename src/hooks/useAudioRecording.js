@@ -7,12 +7,6 @@ import { getSettings } from "../stores/settingsStore";
 import { expandSnippets } from "../utils/snippets";
 import { getRecordingErrorTitle, getRecordingErrorDescription } from "../utils/recordingErrors";
 import { isAccessibilitySkipped } from "../utils/permissions";
-import {
-  isAgentAllowed,
-  isScreenContextAllowed,
-  isTranscriptionContextAllowed,
-} from "../stores/policyRules";
-import { usePolicyStore } from "../stores/policyStore";
 
 // Maps a failed selection-replacement code to its `selectionEditing.*` toast
 // detail key; unlisted codes fall back to the generic "unavailable" message.
@@ -46,15 +40,6 @@ export const useAudioRecording = (toast, options = {}) => {
       stopRequestedDuringStartRef.current = false;
       try {
         if (!audioManagerRef.current) return false;
-        const policyState = usePolicyStore.getState();
-        if (
-          !isTranscriptionContextAllowed(policyState, getSettings(), "dictation") ||
-          (voiceAgentRequested && !isAgentAllowed(policyState))
-        ) {
-          toast({ title: t("common.managedByOrg"), variant: "default" });
-          return false;
-        }
-
         const currentState = audioManagerRef.current.getState();
         if (currentState.isRecording || currentState.isProcessing) return false;
 
@@ -77,14 +62,7 @@ export const useAudioRecording = (toast, options = {}) => {
             "reasoning"
           );
         }
-        // getSettings() already reflects a managed policy that forces the
-        // setting off; the predicate additionally fails closed while the
-        // policy is still loading or errored.
-        if (
-          voiceAgentRequested &&
-          getSettings().voiceAgentScreenContext &&
-          isScreenContextAllowed(policyState)
-        ) {
+        if (voiceAgentRequested && getSettings().voiceAgentScreenContext) {
           audioManagerRef.current.beginScreenContextCapture();
         }
 
@@ -139,7 +117,7 @@ export const useAudioRecording = (toast, options = {}) => {
         stopRequestedDuringStartRef.current = false;
       }
     },
-    [t, toast]
+    []
   );
 
   const performStopRecording = useCallback(async () => {
@@ -339,18 +317,6 @@ export const useAudioRecording = (toast, options = {}) => {
             });
           }
 
-          // Cloud usage: limit reached after this transcription
-          if (result.source === "openwhispr" && result.limitReached) {
-            // Notify control panel to show UpgradePrompt dialog
-            window.electronAPI?.notifyLimitReached?.({
-              wordsUsed: result.wordsUsed,
-              limit:
-                result.wordsRemaining !== undefined
-                  ? result.wordsUsed + result.wordsRemaining
-                  : 2000,
-            });
-          }
-
           if (audioManagerRef.current.shouldUseStreaming()) {
             audioManagerRef.current.warmupStreamingConnection();
           }
@@ -376,11 +342,6 @@ export const useAudioRecording = (toast, options = {}) => {
     // Keep overlay content protection in sync with the screen-context setting
     // so the dictation pill stays out of captures (survives window recreation).
     window.electronAPI.setScreenContextEnabled?.(getSettings().voiceAgentScreenContext);
-    // A policy refresh can flip the effective screen-context value mid-session;
-    // re-sync overlay content protection when it does.
-    const unsubscribePolicy = usePolicyStore.subscribe(() => {
-      window.electronAPI.setScreenContextEnabled?.(getSettings().voiceAgentScreenContext);
-    });
     window.electronAPI.getSttConfig?.().then((config) => {
       if (config?.success && audioManagerRef.current) {
         audioManagerRef.current.setSttConfig(config);
@@ -466,7 +427,6 @@ export const useAudioRecording = (toast, options = {}) => {
 
     // Cleanup
     return () => {
-      unsubscribePolicy();
       disposeToggle?.();
       disposeVoiceAgentToggle?.();
       disposeTranslationToggle?.();

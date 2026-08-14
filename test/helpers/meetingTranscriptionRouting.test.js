@@ -21,12 +21,6 @@ const baseOptions = {
   selectedProvider: "tinfoil",
   selectedModel: "voxtral-mini-4b-realtime",
   byokProviders,
-  managedProviders: [
-    {
-      id: "assemblyai",
-      models: [{ id: "universal-streaming", default: true }],
-    },
-  ],
   cortiEnvironment: "us",
   cortiTenant: "tenant",
   keyterms: ["OpenWhispr"],
@@ -88,41 +82,6 @@ test("local mode wins over stale cloud provider state", async () => {
       provider: "local",
       localProvider: "nvidia",
       localModel: "nemotron-speech-streaming-en-0.6b",
-      language: "en",
-    }
-  );
-});
-
-test("managed mode ignores stale BYOK state", async () => {
-  const { resolveMeetingTranscriptionOptions } = await load();
-
-  assert.deepEqual(
-    resolveMeetingTranscriptionOptions({
-      ...baseOptions,
-      transcriptionMode: "openwhispr",
-    }),
-    {
-      provider: "assemblyai-realtime",
-      model: "universal-streaming",
-      mode: "openwhispr",
-      language: "en",
-    }
-  );
-});
-
-test("managed mode keeps its established OpenAI default before the catalog loads", async () => {
-  const { resolveMeetingTranscriptionOptions } = await load();
-
-  assert.deepEqual(
-    resolveMeetingTranscriptionOptions({
-      ...baseOptions,
-      transcriptionMode: "openwhispr",
-      managedProviders: null,
-    }),
-    {
-      provider: "openai-realtime",
-      model: "gpt-4o-mini-transcribe",
-      mode: "openwhispr",
       language: "en",
     }
   );

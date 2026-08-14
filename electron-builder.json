@@ -1,9 +1,9 @@
 {
   "appId": "com.gizmolabs.openwhispr",
   "afterPack": "scripts/afterPack.js",
-  "productName": "OpenWhispr",
+  "productName": "Hira Console",
   "protocols": {
-    "name": "OpenWhispr Protocol",
+    "name": "Hira Console Protocol",
     "schemes": ["openwhispr"]
   },
   "directories": {
@@ -99,6 +99,10 @@
     ".env",
     "src/assets/**/*",
     {
+      "from": "build/ai-receptionist-dad-stage",
+      "to": "ai-receptionist"
+    },
+    {
       "from": "resources/bin/",
       "to": "bin/",
       "filter": [
@@ -161,12 +165,12 @@
     ],
     "extendInfo": {
       "LSUIElement": false,
-      "CFBundleIconName": "openwhispr",
-      "NSMicrophoneUsageDescription": "OpenWhispr uses the microphone to capture your voice for transcription.",
-      "NSAudioCaptureUsageDescription": "OpenWhispr uses system audio to capture other participants' audio from calls and meetings.",
-      "NSAccessibilityUsageDescription": "OpenWhispr needs accessibility permissions to paste transcribed text into other applications.",
-      "NSCalendarsUsageDescription": "OpenWhispr reads your calendar to detect upcoming meetings and link meeting notes to events.",
-      "NSCalendarsFullAccessUsageDescription": "OpenWhispr reads your calendar to detect upcoming meetings and link meeting notes to events."
+      "CFBundleIconName": "hira-console",
+      "NSMicrophoneUsageDescription": "HIRA uses the microphone to capture your voice for transcription.",
+      "NSAudioCaptureUsageDescription": "HIRA uses system audio to capture other participants' audio from calls and meetings.",
+      "NSAccessibilityUsageDescription": "HIRA needs accessibility permissions to paste transcribed text into other applications.",
+      "NSCalendarsUsageDescription": "HIRA reads your calendar to detect upcoming meetings and link meeting notes to events.",
+      "NSCalendarsFullAccessUsageDescription": "HIRA reads your calendar to detect upcoming meetings and link meeting notes to events."
     }
   },
   "win": {
@@ -259,7 +263,7 @@
     "include": "resources/nsis/installer.nsh"
   },
   "dmg": {
-    "title": "OpenWhispr",
+    "title": "Hira Console",
     "icon": "src/assets/icon.icns",
     "window": {
       "width": 540,

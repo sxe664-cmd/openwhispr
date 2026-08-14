@@ -20,7 +20,7 @@ export interface TeardownContainersResult extends NoteContainerState {
   removedNotes: NoteItem[];
 }
 
-export function createClearedAccountNoteState<TSpace, TFolder, TShare, TConflict>() {
+export function createClearedNoteState<TSpace, TFolder>() {
   return {
     notes: [] as NoteItem[],
     spaces: [] as TSpace[],
@@ -32,9 +32,6 @@ export function createClearedAccountNoteState<TSpace, TFolder, TShare, TConflict
     activeContext: null,
     activeNoteId: null,
     isTreeLoading: true,
-    migration: null,
-    shareByCloudId: new Map<string, TShare>(),
-    noteConflicts: {} as Record<string, TConflict>,
   };
 }
 

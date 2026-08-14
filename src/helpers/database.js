@@ -1,15 +1,55 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
-const { randomUUID } = require("crypto");
+const { randomUUID, createHash } = require("crypto");
 const debugLogger = require("./debugLogger");
 const { buildNoteSearchQuery } = require("./noteSearch");
 const { normalizeStoredSpeakerCount } = require("./speakerCount");
+const { localDayRange, normalizeRange, MAX_CALENDAR_ROWS } = require("./calendarContract");
+const {
+  formatEncounterAutoTitle,
+  parsePatientMetadata,
+  resolvePatientIdentity,
+} = require("./patientIdentity");
 const { app } = require("electron");
 
 // Server-enforced trigger cap (openwhispr-api); enforced here so one oversized
 // trigger can't 400 the whole sync batch.
 const MAX_SNIPPET_TRIGGER_LENGTH = 100;
+
+const ENCOUNTER_OUTPUT_STATUSES = new Set(["pending", "processing", "ready", "failed", "stale"]);
+const PATIENT_RESOLUTIONS = [
+  "created",
+  "matched",
+  "unassigned_missing_email",
+  "unassigned_multiple_attendees",
+  "unassigned_conflict",
+  "unassigned_invalid_metadata",
+  "unassigned_folder_unavailable",
+  "unassigned_legacy",
+];
+const PATIENT_RESOLUTION_SQL = PATIENT_RESOLUTIONS.map((value) => `'${value}'`).join(", ");
+
+function hashEncounterTranscript(transcript) {
+  return createHash("sha256")
+    .update(String(transcript ?? ""), "utf8")
+    .digest("hex");
+}
+
+function decorateEncounterOutput(output) {
+  if (!output) return null;
+  // `status` predates the optional focus output and remains the summary/SOAP
+  // aggregate consumed by existing encounter flows. Focus has its own status;
+  // letting a pending focus hold this legacy aggregate in pending/processing
+  // would regress completed summary/SOAP output publication.
+  const statuses = [output.summary_status, output.soap_status];
+  let status = "pending";
+  if (statuses.includes("processing")) status = "processing";
+  else if (statuses.includes("failed")) status = "failed";
+  else if (statuses.includes("stale")) status = "stale";
+  else if (statuses.every((entry) => entry === "ready")) status = "ready";
+  return { ...output, status };
+}
 
 // Every local field a note create (POST) carries; the acknowledgement compares
 // these atomically against the pushed snapshot. Must mirror NotePushSnapshot
@@ -66,6 +106,75 @@ const FOLDER_NAME_TAKEN_FILTER = `(deleted_at IS NULL OR EXISTS (
   WHERE r.folder_id = folders.id AND r.entity_type = 'folder'
 ))`;
 
+// Public calendar APIs must be explicit about their shape. In particular, the
+// legacy calendar_events.patient_metadata column is deliberately absent here:
+// it is relocated to calendar_patient_metadata and may only be read by the
+// private patient resolver inside the encounter-start transaction.
+const CALENDAR_EVENT_PUBLIC_COLUMNS = [
+  "id",
+  "calendar_id",
+  "provider",
+  "summary",
+  "start_time",
+  "end_time",
+  "is_all_day",
+  "status",
+  "hangout_link",
+  "html_link",
+  "conference_data",
+  "organizer_email",
+  "attendees_count",
+  "attendees",
+  "event_id",
+  "event_uid",
+  "occurrence_id",
+  "timezone",
+  "recurrence",
+  "capabilities",
+  "synced_at",
+].join(", ");
+
+const CALENDAR_EVENT_PUBLIC_COLUMNS_QUALIFIED = CALENDAR_EVENT_PUBLIC_COLUMNS.split(", ")
+  .map((column) => `calendar_events.${column}`)
+  .join(", ");
+
+function normalizePatientMetadataForStorage(value, { allowLegacySource = false } = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const allowedKeys = new Set(["name", "email", "phone", "source"]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  if (
+    value.source != null &&
+    value.source !== "structured_description"
+  ) {
+    return null;
+  }
+  if (!allowLegacySource && value.source !== "structured_description") return null;
+
+  const parsed = parsePatientMetadata(value);
+  return parsed.metadata ? parsed.metadata : null;
+}
+
+function parseLegacyPatientMetadata(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    return normalizePatientMetadataForStorage(JSON.parse(value), { allowLegacySource: true });
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSelfAttendeePresentForStorage(value) {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  return null;
+}
+
+function parseStoredSelfAttendeePresent(value) {
+  if (value === 1) return true;
+  if (value === 0) return false;
+  return null;
+}
+
 // A meeting synced by both a REST provider (Google/Microsoft) and Apple
 // (Calendar.app mirrors the same accounts) would double-fire reminders and
 // duplicate UI rows; suppress the Apple copy when a REST row occupies the same
@@ -74,8 +183,8 @@ const FOLDER_NAME_TAKEN_FILTER = `(deleted_at IS NULL OR EXISTS (
 // RFC3339, Apple/Microsoft store UTC "Z" form). REST rows are never collapsed
 // — Google and Microsoft are never mirrors of each other.
 function dedupedEventsQuery(where) {
-  return `SELECT * FROM (
-    SELECT *, MAX(provider != 'apple') OVER (
+  return `SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS} FROM (
+    SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS}, MAX(provider != 'apple') OVER (
       PARTITION BY datetime(start_time), datetime(end_time), COALESCE(summary, '')
     ) AS has_synced
     FROM calendar_events
@@ -108,6 +217,7 @@ class DatabaseManager {
 
       this.db = new Database(dbPath);
       this.db.pragma("journal_mode = WAL");
+      this.db.pragma("foreign_keys = ON");
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS transcriptions (
@@ -533,6 +643,7 @@ class DatabaseManager {
           is_all_day INTEGER NOT NULL DEFAULT 0,
           status TEXT NOT NULL DEFAULT 'confirmed',
           hangout_link TEXT,
+          html_link TEXT,
           conference_data TEXT,
           organizer_email TEXT,
           attendees_count INTEGER DEFAULT 0,
@@ -547,6 +658,25 @@ class DatabaseManager {
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
       }
+
+      try {
+        this.db.exec("ALTER TABLE calendar_events ADD COLUMN html_link TEXT");
+      } catch (err) {
+        if (!err.message.includes("duplicate column")) throw err;
+      }
+      // Phase 2 incorrectly stored the safe Google Calendar event page in
+      // hangout_link. Retain it as a non-join fallback and clear only that
+      // known legacy shape; genuine conference links stay untouched.
+      this.db.exec(`
+        UPDATE calendar_events
+        SET html_link = COALESCE(html_link, hangout_link), hangout_link = NULL
+        WHERE provider = 'ai_receptionist'
+          AND hangout_link IS NOT NULL
+          AND (
+            hangout_link LIKE 'https://calendar.google.com/%'
+            OR hangout_link LIKE 'https://www.google.com/calendar/%'
+          )
+      `);
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS apple_calendars (
@@ -563,6 +693,14 @@ class DatabaseManager {
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
       }
+      // The revision is deliberately independent of the hash: a transcript can
+      // change A -> B -> A while retaining the same hash. Keeping a monotonic
+      // value lets guarded output completion reject that ABA case.
+      try {
+        this.db.exec("ALTER TABLE notes ADD COLUMN transcript_revision INTEGER NOT NULL DEFAULT 0");
+      } catch (err) {
+        if (!err.message.includes("duplicate column")) throw err;
+      }
       try {
         this.db.exec("ALTER TABLE notes ADD COLUMN calendar_event_id TEXT");
       } catch (err) {
@@ -573,6 +711,77 @@ class DatabaseManager {
         this.db.exec("ALTER TABLE calendar_events ADD COLUMN attendees TEXT");
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
+      }
+      for (const column of [
+        "event_uid TEXT",
+        "event_id TEXT",
+        "occurrence_id TEXT",
+        "timezone TEXT",
+        "recurrence TEXT",
+        "capabilities TEXT",
+        "patient_metadata TEXT",
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE calendar_events ADD COLUMN ${column}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
+      }
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS calendar_patient_metadata (
+          calendar_event_id TEXT PRIMARY KEY
+            REFERENCES calendar_events(id) ON DELETE CASCADE,
+          metadata_json TEXT NOT NULL,
+          source TEXT NOT NULL CHECK (source = 'structured_description'),
+          self_attendee_present INTEGER
+            CHECK (self_attendee_present IN (0, 1) OR self_attendee_present IS NULL),
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      try {
+        // Preserve pre-R8 metadata rows as provenance-unknown. Backfilling
+        // false could let a historical metadata-only event create a folder.
+        this.db.exec(`
+          ALTER TABLE calendar_patient_metadata
+          ADD COLUMN self_attendee_present INTEGER
+            CHECK (self_attendee_present IN (0, 1) OR self_attendee_present IS NULL)
+        `);
+      } catch (err) {
+        if (!err.message.includes("duplicate column")) throw err;
+      }
+
+      // Earlier development builds wrote an already-sanitized JSON payload to
+      // calendar_events.patient_metadata. Relocate only the valid subset into
+      // the resolver-only table, clear the obsolete column (including invalid
+      // values), and intentionally do not create any patient entities here.
+      // The transaction makes repeat startup/retry safe on upgraded databases.
+      const legacyPatientMetadataRows = this.db
+        .prepare(
+          "SELECT id, patient_metadata FROM calendar_events WHERE patient_metadata IS NOT NULL"
+        )
+        .all();
+      if (legacyPatientMetadataRows.length > 0) {
+        const relocateLegacyPatientMetadata = this.db.transaction((rows) => {
+          const upsertMetadata = this.db.prepare(`
+            INSERT INTO calendar_patient_metadata (calendar_event_id, metadata_json, source, updated_at)
+            VALUES (?, ?, 'structured_description', CURRENT_TIMESTAMP)
+            ON CONFLICT(calendar_event_id) DO UPDATE SET
+              metadata_json = excluded.metadata_json,
+              source = excluded.source,
+              updated_at = CURRENT_TIMESTAMP
+          `);
+          const clearLegacyMetadata = this.db.prepare(
+            "UPDATE calendar_events SET patient_metadata = NULL WHERE id = ?"
+          );
+          for (const row of rows) {
+            const metadata = parseLegacyPatientMetadata(row.patient_metadata);
+            if (metadata) {
+              upsertMetadata.run(row.id, JSON.stringify(metadata));
+            }
+            clearLegacyMetadata.run(row.id);
+          }
+        });
+        relocateLegacyPatientMetadata(legacyPatientMetadataRows);
       }
       try {
         this.db.exec("ALTER TABLE notes ADD COLUMN participants TEXT");
@@ -589,6 +798,185 @@ class DatabaseManager {
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
       }
+      // Nullable so legacy notes remain distinguishable from explicitly
+      // selected contexts; the renderer resolves NULL to telehealth.
+      try {
+        this.db.exec("ALTER TABLE notes ADD COLUMN meeting_context TEXT");
+      } catch (err) {
+        if (!err.message.includes("duplicate column")) throw err;
+      }
+      try {
+        this.db.exec("ALTER TABLE notes ADD COLUMN encounter_auto_title_seed TEXT");
+      } catch (err) {
+        if (!err.message.includes("duplicate column")) throw err;
+      }
+
+      // Encounters are the local scheduling/recording lifecycle. Meeting notes
+      // remain the document and transcript store; note_id connects one encounter
+      // to the one note created when it is first started.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS encounters (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          calendar_event_id TEXT UNIQUE,
+          provider TEXT,
+          calendar_id TEXT,
+          title TEXT NOT NULL DEFAULT 'Encounter',
+          start_time TEXT,
+          end_time TEXT,
+          source_status TEXT NOT NULL DEFAULT 'confirmed',
+          lifecycle_state TEXT NOT NULL DEFAULT 'scheduled'
+            CHECK (lifecycle_state IN ('scheduled', 'in_progress', 'completed', 'cancelled')),
+          note_id INTEGER UNIQUE,
+          meeting_context TEXT
+            CHECK (meeting_context IS NULL OR meeting_context IN ('in_person', 'telehealth')),
+          attendees_count INTEGER NOT NULL DEFAULT 0,
+          attendees TEXT,
+          patient_profile_id INTEGER REFERENCES patient_profiles(id),
+          patient_resolution TEXT NOT NULL DEFAULT 'unassigned_missing_email'
+            CHECK (patient_resolution IN (${PATIENT_RESOLUTION_SQL})),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          started_at DATETIME,
+          completed_at DATETIME,
+          cancelled_at DATETIME
+        )
+      `);
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_encounters_start_time ON encounters(start_time)"
+      );
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_encounters_lifecycle_start ON encounters(lifecycle_state, start_time)"
+      );
+      for (const [column, definition] of [
+        ["patient_profile_id", "INTEGER REFERENCES patient_profiles(id)"],
+        ["patient_resolution", "TEXT NOT NULL DEFAULT 'unassigned_missing_email'"],
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE encounters ADD COLUMN ${column} ${definition}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
+      }
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_encounters_patient_profile ON encounters(patient_profile_id)"
+      );
+
+      // Existing development databases cannot safely rebuild encounters just to
+      // add a CHECK. Normalize the historical/free-form values first, then use
+      // triggers to give upgrades the same hard failure semantics as a fresh
+      // database. This is intentionally before any new resolver work runs.
+      this.db
+        .prepare(
+          `UPDATE encounters
+           SET patient_resolution = 'unassigned_legacy'
+           WHERE patient_resolution IS NULL
+              OR patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})`
+        )
+        .run();
+      this.db.exec(`
+        CREATE TRIGGER IF NOT EXISTS validate_encounters_patient_resolution_insert
+        BEFORE INSERT ON encounters
+        FOR EACH ROW
+        WHEN NEW.patient_resolution IS NULL
+          OR NEW.patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})
+        BEGIN
+          SELECT RAISE(ABORT, 'invalid patient_resolution');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS validate_encounters_patient_resolution_update
+        BEFORE UPDATE OF patient_resolution ON encounters
+        FOR EACH ROW
+        WHEN NEW.patient_resolution IS NULL
+          OR NEW.patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})
+        BEGIN
+          SELECT RAISE(ABORT, 'invalid patient_resolution');
+        END;
+      `);
+
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS patient_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          normalized_email TEXT NOT NULL UNIQUE,
+          display_name TEXT,
+          phone TEXT,
+          folder_id INTEGER NOT NULL UNIQUE REFERENCES folders(id),
+          identity_source TEXT NOT NULL
+            CHECK (identity_source IN ('attendee_email', 'structured_description', 'manual')),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_patient_profiles_folder ON patient_profiles(folder_id)"
+      );
+
+      // Clinical encounter outputs deliberately live beside, rather than in,
+      // notes. A note is the user-owned canonical transcript; this record
+      // tracks derived summary/SOAP material and the exact transcript revision
+      // it was generated from.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS encounter_outputs (
+          encounter_id INTEGER PRIMARY KEY REFERENCES encounters(id) ON DELETE CASCADE,
+          transcript_hash TEXT NOT NULL,
+          transcript_revision INTEGER NOT NULL DEFAULT 0,
+          summary TEXT,
+          soap TEXT,
+          focus TEXT,
+          summary_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (summary_status IN ('pending', 'processing', 'ready', 'failed', 'stale')),
+          soap_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (soap_status IN ('pending', 'processing', 'ready', 'failed', 'stale')),
+          focus_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (focus_status IN ('pending', 'processing', 'ready', 'failed', 'stale')),
+          summary_provider TEXT,
+          summary_model TEXT,
+          soap_provider TEXT,
+          soap_model TEXT,
+          summary_error_code TEXT,
+          soap_error_code TEXT,
+          focus_provider TEXT,
+          focus_model TEXT,
+          focus_error_code TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          summary_updated_at DATETIME,
+          soap_updated_at DATETIME
+          ,focus_updated_at DATETIME
+        )
+      `);
+      // Keep upgrades safe if a development build created an earlier, partial
+      // version of this local-only table.
+      for (const [column, definition] of [
+        ["transcript_hash", "TEXT NOT NULL DEFAULT ''"],
+        ["transcript_revision", "INTEGER NOT NULL DEFAULT 0"],
+        ["summary", "TEXT"],
+        ["soap", "TEXT"],
+        ["focus", "TEXT"],
+        ["summary_status", "TEXT NOT NULL DEFAULT 'pending'"],
+        ["soap_status", "TEXT NOT NULL DEFAULT 'pending'"],
+        ["focus_status", "TEXT NOT NULL DEFAULT 'pending'"],
+        ["summary_provider", "TEXT"],
+        ["summary_model", "TEXT"],
+        ["soap_provider", "TEXT"],
+        ["soap_model", "TEXT"],
+        ["summary_error_code", "TEXT"],
+        ["soap_error_code", "TEXT"],
+        ["focus_provider", "TEXT"],
+        ["focus_model", "TEXT"],
+        ["focus_error_code", "TEXT"],
+        ["summary_updated_at", "DATETIME"],
+        ["soap_updated_at", "DATETIME"],
+        ["focus_updated_at", "DATETIME"],
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE encounter_outputs ADD COLUMN ${column} ${definition}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
+      }
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_encounter_outputs_transcript_hash ON encounter_outputs(transcript_hash)"
+      );
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS contacts (
@@ -679,6 +1067,24 @@ class DatabaseManager {
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
       }
+
+      // Existing recorded meetings keep their calendar linkage after the local
+      // encounter migration. This runs only after all legacy note columns used
+      // by the filter above are available, and never deletes or rewrites a note.
+      this.db.exec(`
+        INSERT OR IGNORE INTO encounters (
+          calendar_event_id, provider, calendar_id, title, start_time, end_time,
+          source_status, lifecycle_state, note_id, attendees_count, attendees,
+          created_at, updated_at, started_at
+        )
+        SELECT c.id, c.provider, c.calendar_id, COALESCE(c.summary, n.title),
+          c.start_time, c.end_time, COALESCE(c.status, 'confirmed'), 'in_progress',
+          n.id, COALESCE(c.attendees_count, 0), c.attendees,
+          n.created_at, n.updated_at, n.created_at
+        FROM notes n
+        JOIN calendar_events c ON c.id = n.calendar_event_id
+        WHERE n.calendar_event_id IS NOT NULL AND n.deleted_at IS NULL
+      `);
 
       // Sync columns for folders
       try {
@@ -2094,6 +2500,7 @@ class DatabaseManager {
         "participants",
         "diarization_enabled",
         "expected_speaker_count",
+        "meeting_context",
         "sync_status",
         "deleted_at",
         "client_note_id",
@@ -2112,18 +2519,40 @@ class DatabaseManager {
         }
       }
       if (fields.length === 0) return { success: false };
-      // Re-queue for cloud sync on any local edit, so post-sync field changes aren't
-      // left local-only and overwritten by a later pull.
-      if (!("sync_status" in updates)) {
+      // meeting_context is deliberately local-only until the hosted sync schema
+      // carries it. Do not enqueue a cloud write for a context-only edit; cloud
+      // upserts omit this column and therefore preserve an existing local value.
+      const hasCloudSyncableUpdate = Object.keys(updates).some(
+        (key) => key !== "meeting_context" && allowedFields.includes(key)
+      );
+      if (!("sync_status" in updates) && hasCloudSyncableUpdate) {
         fields.push("sync_status = 'pending'");
       }
-      fields.push("updated_at = CURRENT_TIMESTAMP");
-      values.push(id);
-      const stmt = this.db.prepare(`UPDATE notes SET ${fields.join(", ")} WHERE id = ?`);
-      stmt.run(...values);
-      const fetchStmt = this.db.prepare("SELECT * FROM notes WHERE id = ?");
-      const note = fetchStmt.get(id);
-      return { success: true, note };
+      const writesTranscript = updates.transcript !== undefined;
+      const update = () => {
+        const previousTranscript = writesTranscript
+          ? this.db.prepare("SELECT transcript FROM notes WHERE id = ?").get(id)?.transcript
+          : undefined;
+        const updateFields = [...fields];
+        const updateValues = [...values];
+        if (writesTranscript) {
+          updateFields.push(
+            "transcript_revision = CASE WHEN transcript IS NOT ? THEN transcript_revision + 1 ELSE transcript_revision END"
+          );
+          updateValues.push(updates.transcript);
+        }
+        updateFields.push("updated_at = CURRENT_TIMESTAMP");
+        updateValues.push(id);
+        this.db
+          .prepare(`UPDATE notes SET ${updateFields.join(", ")} WHERE id = ?`)
+          .run(...updateValues);
+        const note = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
+        if (writesTranscript && note && note.transcript !== previousTranscript) {
+          this._invalidateEncounterOutputsForNote(id, this._getNoteTranscriptToken(id));
+        }
+        return { success: true, note };
+      };
+      return writesTranscript && !this.db.inTransaction ? this.db.transaction(update)() : update();
     } catch (error) {
       debugLogger.error("Error updating note", { error: error.message }, "notes");
       throw error;
@@ -3315,35 +3744,1119 @@ class DatabaseManager {
     }
   }
 
-  upsertCalendarEvents(events) {
+  _upsertPublicCalendarEvents(events) {
+    const stmt = this.db.prepare(`
+      INSERT INTO calendar_events (
+        id, calendar_id, provider, summary, start_time, end_time, is_all_day,
+        status, hangout_link, html_link, conference_data, organizer_email,
+        attendees_count, attendees, event_id, event_uid, occurrence_id,
+        timezone, recurrence, capabilities, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        calendar_id = excluded.calendar_id,
+        provider = excluded.provider,
+        summary = excluded.summary,
+        start_time = excluded.start_time,
+        end_time = excluded.end_time,
+        is_all_day = excluded.is_all_day,
+        status = excluded.status,
+        hangout_link = excluded.hangout_link,
+        html_link = excluded.html_link,
+        conference_data = excluded.conference_data,
+        organizer_email = excluded.organizer_email,
+        attendees_count = excluded.attendees_count,
+        attendees = excluded.attendees,
+        event_id = excluded.event_id,
+        event_uid = excluded.event_uid,
+        occurrence_id = excluded.occurrence_id,
+        timezone = excluded.timezone,
+        recurrence = excluded.recurrence,
+        capabilities = excluded.capabilities,
+        synced_at = CURRENT_TIMESTAMP
+    `);
+    for (const event of events) {
+      stmt.run(
+        event.id,
+        event.calendar_id,
+        event.provider || "google",
+        event.summary || null,
+        event.start_time,
+        event.end_time,
+        event.is_all_day ? 1 : 0,
+        event.status || "confirmed",
+        event.hangout_link || null,
+        event.html_link || null,
+        event.conference_data || null,
+        event.organizer_email || null,
+        event.attendees_count || 0,
+        event.attendees || null,
+        event.event_id || null,
+        event.event_uid || null,
+        event.occurrence_id || event.id || null,
+        event.timezone || null,
+        event.recurrence || null,
+        event.capabilities || null
+      );
+    }
+  }
+
+  // Provider callers persist only PublicCalendarEvent fields. Deliberately
+  // ignore unexpected object properties instead of serializing a generic row.
+  upsertCalendarEvents(publicEvents) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const transaction = this.db.transaction((events) => this._upsertPublicCalendarEvents(events));
+      transaction(publicEvents);
+      return { success: true };
+    } catch (error) {
+      debugLogger.error("Error upserting calendar events", { error: error.message }, "gcal");
+      throw error;
+    }
+  }
+
+  // The bridge is the only caller allowed to supply CalendarIngressEnvelope.
+  // Keep metadata in a sibling resolver-only table; it must never be attached
+  // to public event rows or returned through the general calendar API.
+  upsertCalendarIngress(envelopes) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const transaction = this.db.transaction((ingressEnvelopes) => {
+        const publicEvents = ingressEnvelopes.map(({ publicEvent }) => publicEvent);
+        this._upsertPublicCalendarEvents(publicEvents);
+
+        const upsertMetadata = this.db.prepare(`
+          INSERT INTO calendar_patient_metadata (
+            calendar_event_id, metadata_json, source, self_attendee_present, updated_at
+          ) VALUES (?, ?, 'structured_description', ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(calendar_event_id) DO UPDATE SET
+            metadata_json = excluded.metadata_json,
+            source = excluded.source,
+            self_attendee_present = excluded.self_attendee_present,
+            updated_at = CURRENT_TIMESTAMP
+        `);
+        const deleteMetadata = this.db.prepare(
+          "DELETE FROM calendar_patient_metadata WHERE calendar_event_id = ?"
+        );
+
+        for (const { publicEvent, patientMetadata, selfAttendeePresent } of ingressEnvelopes) {
+          const metadata = normalizePatientMetadataForStorage(patientMetadata);
+          if (metadata) {
+            upsertMetadata.run(
+              publicEvent.id,
+              JSON.stringify(metadata),
+              normalizeSelfAttendeePresentForStorage(selfAttendeePresent)
+            );
+          } else {
+            deleteMetadata.run(publicEvent.id);
+          }
+        }
+      });
+      transaction(envelopes);
+      return { success: true };
+    } catch (error) {
+      debugLogger.error("Error upserting calendar ingress", { error: error.message }, "gcal");
+      throw error;
+    }
+  }
+
+  // Calendar feeds own only source/display information. Local recording state,
+  // note ownership, and the chosen encounter context are deliberately excluded
+  // from the conflict update so a later sync cannot undo local work.
+  upsertEncountersFromCalendarEvents(events) {
     try {
       if (!this.db) throw new Error("Database not initialized");
       const transaction = this.db.transaction((eventList) => {
-        const stmt = this.db.prepare(
-          "INSERT OR REPLACE INTO calendar_events (id, calendar_id, provider, summary, start_time, end_time, is_all_day, status, hangout_link, conference_data, organizer_email, attendees_count, attendees, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
-        );
-        for (const e of eventList) {
+        const stmt = this.db.prepare(`
+          INSERT INTO encounters (
+            calendar_event_id, provider, calendar_id, title, start_time, end_time,
+            source_status, attendees_count, attendees, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(calendar_event_id) DO UPDATE SET
+            provider = excluded.provider,
+            calendar_id = excluded.calendar_id,
+            title = excluded.title,
+            start_time = excluded.start_time,
+            end_time = excluded.end_time,
+            source_status = excluded.source_status,
+            attendees_count = excluded.attendees_count,
+            attendees = excluded.attendees,
+            lifecycle_state = CASE
+              WHEN encounters.note_id IS NULL
+                AND encounters.lifecycle_state = 'scheduled'
+                AND excluded.source_status = 'cancelled'
+              THEN 'cancelled'
+              ELSE encounters.lifecycle_state
+            END,
+            cancelled_at = CASE
+              WHEN encounters.note_id IS NULL
+                AND encounters.lifecycle_state = 'scheduled'
+                AND excluded.source_status = 'cancelled'
+              THEN COALESCE(encounters.cancelled_at, CURRENT_TIMESTAMP)
+              ELSE encounters.cancelled_at
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        `);
+        for (const event of eventList || []) {
+          if (!event?.id || !event.start_time || !event.end_time) continue;
           stmt.run(
-            e.id,
-            e.calendar_id,
-            e.provider || "google",
-            e.summary || null,
-            e.start_time,
-            e.end_time,
-            e.is_all_day ? 1 : 0,
-            e.status || "confirmed",
-            e.hangout_link || null,
-            e.conference_data || null,
-            e.organizer_email || null,
-            e.attendees_count || 0,
-            e.attendees || null
+            event.id,
+            event.provider || null,
+            event.calendar_id || null,
+            event.summary || "Encounter",
+            event.start_time,
+            event.end_time,
+            event.status || "confirmed",
+            Number(event.attendees_count) || 0,
+            event.attendees || null
           );
         }
       });
       transaction(events);
       return { success: true };
     } catch (error) {
-      debugLogger.error("Error upserting calendar events", { error: error.message }, "gcal");
+      debugLogger.error(
+        "Error projecting calendar encounters",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  getEncounterById(encounterId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      return (
+        this.db
+          .prepare(
+            `
+        SELECT encounters.*,
+          CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+          CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+        FROM encounters
+        LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+        WHERE encounters.id = ?
+      `
+          )
+          .get(encounterId) || null
+      );
+    } catch (error) {
+      debugLogger.error("Error getting encounter", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  getEncounterByCalendarEventId(eventId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      return (
+        this.db
+          .prepare(
+            `
+            SELECT encounters.*,
+              CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+              CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+            FROM encounters
+            LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+            WHERE encounters.calendar_event_id = ?
+          `
+          )
+          .get(eventId) || null
+      );
+    } catch (error) {
+      debugLogger.error(
+        "Error getting encounter by calendar event",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  getEncounters(limit = 100) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+      return this.db
+        .prepare(
+          `
+          SELECT encounters.*,
+            CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+            CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+          FROM encounters
+          LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+          ORDER BY CASE lifecycle_state
+            WHEN 'in_progress' THEN 0
+            WHEN 'scheduled' THEN 1
+            WHEN 'completed' THEN 2
+            ELSE 3
+          END, datetime(encounters.start_time) ASC, encounters.id DESC
+          LIMIT ?
+        `
+        )
+        .all(normalizedLimit);
+    } catch (error) {
+      debugLogger.error("Error getting encounters", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  /**
+   * Bounded encounter read for Home/calendar surfaces. The legacy getEncounters
+   * query intentionally remains unbounded for History/Search callers.
+   */
+  getEncountersInRange(startIso, endIso, limit = 100) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const range = normalizeRange({ startIso, endIso, limit });
+      return this.db
+        .prepare(
+          `
+          SELECT encounters.*,
+            CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+            CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+          FROM encounters
+          LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+          WHERE datetime(encounters.start_time) >= datetime(?)
+            AND datetime(encounters.start_time) < datetime(?)
+          ORDER BY datetime(encounters.start_time) ASC, encounters.id DESC
+          LIMIT ?
+        `
+        )
+        .all(range.startIso, range.endIso, range.limit);
+    } catch (error) {
+      debugLogger.error("Error getting bounded encounters", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  getEncountersForLocalDay(date = new Date(), limit = 100) {
+    const range = localDayRange(date);
+    return this.getEncountersInRange(range.startIso, range.endIso, limit);
+  }
+
+  getCalendarEventsInRange(startIso, endIso, limit = MAX_CALENDAR_ROWS, provider = null) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const range = normalizeRange({ startIso, endIso, limit });
+      const providerClause = provider ? " AND provider = ?" : "";
+      const params = provider
+        ? [range.startIso, range.endIso, provider, range.limit]
+        : [range.startIso, range.endIso, range.limit];
+      return this.db
+        .prepare(
+          `
+          SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS} FROM calendar_events
+          WHERE datetime(start_time) >= datetime(?)
+            AND datetime(start_time) < datetime(?)
+            ${providerClause}
+          ORDER BY datetime(start_time) ASC, id ASC
+          LIMIT ?
+        `
+        )
+        .all(...params);
+    } catch (error) {
+      debugLogger.error("Error getting bounded calendar events", { error: error.message }, "calendar");
+      throw error;
+    }
+  }
+
+  markEncountersCancelledByCalendarEventPrefix(provider, calendarId, idPrefix) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const result = this.db
+        .prepare(
+          `
+          UPDATE encounters
+          SET source_status = 'cancelled',
+            lifecycle_state = CASE
+              WHEN note_id IS NULL AND lifecycle_state = 'scheduled' THEN 'cancelled'
+              ELSE lifecycle_state
+            END,
+            cancelled_at = CASE
+              WHEN note_id IS NULL AND lifecycle_state = 'scheduled'
+              THEN COALESCE(cancelled_at, CURRENT_TIMESTAMP)
+              ELSE cancelled_at
+            END,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE provider = ? AND calendar_id = ? AND calendar_event_id LIKE ?
+        `
+        )
+        .run(provider, calendarId, `${idPrefix}%`);
+      return { success: true, changes: result.changes };
+    } catch (error) {
+      debugLogger.error(
+        "Error cancelling calendar encounters",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  _resolvePatientForEncounter(calendarEvent, encounter) {
+    const privateSpaceId = this.getPrivateSpaceId();
+    const loadProfile = (where, value) =>
+      this.db
+        .prepare(
+          `SELECT p.*, f.space_id, f.deleted_at AS folder_deleted_at
+           FROM patient_profiles p
+           LEFT JOIN folders f ON f.id = p.folder_id
+           WHERE ${where}`
+        )
+        .get(value);
+    const hasAvailablePrivateFolder = (profile) =>
+      !!profile && profile.folder_deleted_at == null && profile.space_id === privateSpaceId;
+    if (encounter?.patient_profile_id) {
+      const profile = loadProfile("p.id = ?", encounter.patient_profile_id);
+      if (hasAvailablePrivateFolder(profile)) {
+        return { profile, resolution: "matched", folderAvailable: true };
+      }
+      // Preserve the established audit link even when the folder has since
+      // been deleted or moved out of the private space. The note remains in
+      // Meetings and the renderer receives only the review enum.
+      return { profile: profile || null, resolution: "unassigned_folder_unavailable", folderAvailable: false };
+    }
+
+    const identity = resolvePatientIdentity({
+      attendees: calendarEvent.attendees,
+      patientMetadata: parseLegacyPatientMetadata(calendarEvent.patient_metadata),
+      selfAttendeePresent: parseStoredSelfAttendeePresent(calendarEvent.self_attendee_present),
+    });
+    if (!identity.normalizedEmail) {
+      return { profile: null, resolution: identity.status, folderAvailable: false };
+    }
+
+    const existing = loadProfile("p.normalized_email = ?", identity.normalizedEmail);
+    if (existing) {
+      if (!hasAvailablePrivateFolder(existing)) {
+        return {
+          profile: existing,
+          resolution: "unassigned_folder_unavailable",
+          folderAvailable: false,
+        };
+      }
+      if (identity.displayName || identity.phone) {
+        this.db
+          .prepare(
+            `UPDATE patient_profiles
+             SET display_name = COALESCE(?, display_name),
+                 phone = COALESCE(?, phone),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          )
+          .run(identity.displayName || null, identity.phone || null, existing.id);
+      }
+      return {
+        profile: loadProfile("p.id = ?", existing.id),
+        resolution: "matched",
+        folderAvailable: true,
+      };
+    }
+
+    const labelBase = String(identity.displayName || identity.normalizedEmail)
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .trim()
+      .slice(0, 100) || "Patient";
+    let label = labelBase;
+    let counter = 2;
+    while (
+      this.db
+        .prepare(`SELECT id FROM folders WHERE name = ? AND space_id = ? AND ${FOLDER_NAME_TAKEN_FILTER}`)
+        .get(label, privateSpaceId)
+    ) {
+      label = `${labelBase} (${counter})`;
+      counter += 1;
+    }
+    const maxOrder = this.db
+      .prepare("SELECT MAX(sort_order) as max_order FROM folders WHERE space_id = ?")
+      .get(privateSpaceId);
+    const folderResult = this.db
+      .prepare(
+        "INSERT INTO folders (name, sort_order, space_id, client_folder_id) VALUES (?, ?, ?, ?)"
+      )
+      .run(label, (maxOrder?.max_order ?? 0) + 1, privateSpaceId, randomUUID());
+    const profileResult = this.db
+      .prepare(
+        `INSERT INTO patient_profiles (normalized_email, display_name, phone, folder_id, identity_source)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(
+        identity.normalizedEmail,
+        identity.displayName,
+        identity.phone,
+        folderResult.lastInsertRowid,
+        identity.identitySource
+      );
+    return {
+      profile: loadProfile("p.id = ?", profileResult.lastInsertRowid),
+      resolution: "created",
+      folderAvailable: true,
+    };
+  }
+
+  _getCalendarEventForPatientResolution(eventId) {
+    return (
+      this.db
+        .prepare(
+          `SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS_QUALIFIED},
+                  calendar_patient_metadata.metadata_json AS patient_metadata,
+                  calendar_patient_metadata.self_attendee_present
+           FROM calendar_events
+           LEFT JOIN calendar_patient_metadata
+             ON calendar_patient_metadata.calendar_event_id = calendar_events.id
+           WHERE calendar_events.id = ?`
+        )
+        .get(eventId) || null
+    );
+  }
+
+  // The database transaction is the idempotency boundary for every calendar
+  // start entry point. No async work occurs inside it, so retries all resolve
+  // to the same encounter/note pair on this local database.
+  startEncounterForCalendarEvent(eventId, { meetingContext = null } = {}) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      if (!eventId || typeof eventId !== "string") {
+        return { success: false, error: "A calendar event is required." };
+      }
+      const context = ["in_person", "telehealth"].includes(meetingContext) ? meetingContext : null;
+      const transaction = this.db.transaction(() => {
+        const calendarEvent = this._getCalendarEventForPatientResolution(eventId);
+        if (!calendarEvent) return { success: false, error: "Calendar event not found." };
+
+        let encounter = this.db
+          .prepare("SELECT * FROM encounters WHERE calendar_event_id = ?")
+          .get(eventId);
+        if (!encounter) {
+          const linkedNote = this.db
+            .prepare(
+              "SELECT * FROM notes WHERE calendar_event_id = ? AND deleted_at IS NULL LIMIT 1"
+            )
+            .get(eventId);
+          this.db
+            .prepare(
+              `
+              INSERT INTO encounters (
+                calendar_event_id, provider, calendar_id, title, start_time, end_time,
+                source_status, lifecycle_state, note_id, attendees_count, attendees, started_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `
+            )
+            .run(
+              calendarEvent.id,
+              calendarEvent.provider || null,
+              calendarEvent.calendar_id || null,
+              calendarEvent.summary || "Encounter",
+              calendarEvent.start_time,
+              calendarEvent.end_time,
+              calendarEvent.status || "confirmed",
+              linkedNote ? "in_progress" : "scheduled",
+              linkedNote?.id || null,
+              Number(calendarEvent.attendees_count) || 0,
+              calendarEvent.attendees || null,
+              linkedNote ? linkedNote.created_at : null
+            );
+          encounter = this.db
+            .prepare("SELECT * FROM encounters WHERE calendar_event_id = ?")
+            .get(eventId);
+        }
+
+        let note = encounter.note_id
+          ? this.db
+              .prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL")
+              .get(encounter.note_id)
+          : null;
+        if (!note) {
+          note = this.db
+            .prepare(
+              "SELECT * FROM notes WHERE calendar_event_id = ? AND deleted_at IS NULL LIMIT 1"
+            )
+            .get(eventId);
+        }
+
+        let createdNote = false;
+        // Never retroactively classify a legacy/existing meeting note. New
+        // encounters resolve before their note is created; retries reuse the
+        // stored profile relationship from that first transaction.
+        const patient = encounter.patient_profile_id || !note
+          ? this._resolvePatientForEncounter(calendarEvent, encounter)
+          : {
+              profile: null,
+              resolution: encounter.patient_resolution || "unassigned_legacy",
+              folderAvailable: false,
+            };
+        if (!note) {
+          const noteResult = this.saveNote(
+            formatEncounterAutoTitle({
+              startTime: calendarEvent.start_time,
+              timezone: calendarEvent.timezone,
+              focus: calendarEvent.summary || "Encounter",
+            }),
+            "",
+            "meeting",
+            null,
+            null,
+            patient.folderAvailable ? patient.profile?.folder_id || null : null
+          );
+          note = noteResult?.note || null;
+          createdNote = !!note;
+          if (note?.id) {
+            this.db
+              .prepare("UPDATE notes SET encounter_auto_title_seed = ? WHERE id = ?")
+              .run(note.title, note.id);
+            note = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(note.id);
+          }
+        }
+        if (!note?.id) return { success: false, error: "Unable to create meeting note." };
+
+        const noteUpdates = {};
+        if (note.calendar_event_id !== eventId) noteUpdates.calendar_event_id = eventId;
+        if (calendarEvent.attendees && note.participants !== calendarEvent.attendees) {
+          noteUpdates.participants = calendarEvent.attendees;
+        }
+        if (context && note.meeting_context !== context) noteUpdates.meeting_context = context;
+        if (Object.keys(noteUpdates).length > 0) {
+          note = this.updateNote(note.id, noteUpdates)?.note || note;
+        }
+
+        this.db
+          .prepare(
+            `
+            UPDATE encounters
+            SET note_id = ?,
+              patient_profile_id = COALESCE(patient_profile_id, ?),
+              patient_resolution = ?,
+              lifecycle_state = CASE
+                WHEN lifecycle_state = 'completed' THEN 'completed'
+                ELSE 'in_progress'
+              END,
+              meeting_context = CASE WHEN ? IS NULL THEN meeting_context ELSE ? END,
+              started_at = CASE
+                WHEN lifecycle_state = 'completed' THEN started_at
+                ELSE COALESCE(started_at, CURRENT_TIMESTAMP)
+              END,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `
+          )
+          .run(note.id, patient.profile?.id || null, patient.resolution, context, context, encounter.id);
+
+        encounter = this.db.prepare("SELECT * FROM encounters WHERE id = ?").get(encounter.id);
+        const token = this._getNoteTranscriptToken(note.id);
+        this.db
+          .prepare(
+            `INSERT INTO encounter_outputs (encounter_id, transcript_hash, transcript_revision)
+             VALUES (?, ?, ?)
+             ON CONFLICT(encounter_id) DO NOTHING`
+          )
+          .run(encounter.id, token.transcriptHash, token.transcriptRevision);
+        return {
+          success: true,
+          encounter,
+          note,
+          createdNote,
+          // The resolver profile contains contact data and stays main-process
+          // only. Encounter consumers receive the foreign-key audit link and
+          // controlled review state, never the profile/folder payload.
+          patientProfileId: encounter.patient_profile_id || null,
+          patientResolution: encounter.patient_resolution,
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error("Error starting encounter", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  getEncounterByNoteId(noteId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      return (
+        this.db
+          .prepare(
+            `SELECT encounters.*,
+              CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+              CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+             FROM encounters
+             LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+             WHERE encounters.note_id = ?`
+          )
+          .get(noteId) || null
+      );
+    } catch (error) {
+      debugLogger.error("Error getting encounter by note", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  _getEncounterOutputRow(encounterId) {
+    return (
+      this.db.prepare("SELECT * FROM encounter_outputs WHERE encounter_id = ?").get(encounterId) ||
+      null
+    );
+  }
+
+  _getNoteTranscriptToken(noteId) {
+    const row = this.db
+      .prepare("SELECT transcript, transcript_revision FROM notes WHERE id = ?")
+      .get(noteId);
+    if (!row) return null;
+    return {
+      transcriptRevision: Number(row.transcript_revision) || 0,
+      transcriptHash: hashEncounterTranscript(row.transcript),
+    };
+  }
+
+  _getEncounterTranscriptSnapshot(encounterId) {
+    const row = this.db
+      .prepare(
+        `SELECT notes.id AS note_id, notes.transcript, notes.transcript_revision
+         FROM encounters
+         LEFT JOIN notes ON notes.id = encounters.note_id
+         WHERE encounters.id = ?`
+      )
+      .get(encounterId);
+    if (!row?.note_id) return null;
+    return {
+      transcript: String(row.transcript ?? ""),
+      token: {
+        transcriptRevision: Number(row.transcript_revision) || 0,
+        transcriptHash: hashEncounterTranscript(row.transcript),
+      },
+    };
+  }
+
+  _ensureEncounterOutputForToken(encounterId, token) {
+    this.db
+      .prepare(
+        `INSERT INTO encounter_outputs (encounter_id, transcript_hash, transcript_revision)
+         VALUES (?, ?, ?)
+         ON CONFLICT(encounter_id) DO NOTHING`
+      )
+      .run(encounterId, token.transcriptHash, token.transcriptRevision);
+    return this._getEncounterOutputRow(encounterId);
+  }
+
+  _invalidateEncounterOutputsForNote(noteId, token) {
+    const encounter = this.db.prepare("SELECT id FROM encounters WHERE note_id = ?").get(noteId);
+    if (!encounter || !token) return null;
+    const result = this.db
+      .prepare(
+        `UPDATE encounter_outputs
+         SET transcript_hash = ?,
+           transcript_revision = ?,
+           summary_status = CASE
+             WHEN COALESCE(summary, '') = '' THEN 'pending'
+             ELSE 'stale'
+           END,
+           soap_status = CASE
+             WHEN COALESCE(soap, '') = '' THEN 'pending'
+             ELSE 'stale'
+           END,
+           focus_status = CASE
+             WHEN COALESCE(focus, '') = '' THEN 'pending'
+             ELSE 'stale'
+           END,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE encounter_id = ?
+           AND (transcript_hash != ? OR transcript_revision != ?)`
+      )
+      .run(
+        token.transcriptHash,
+        token.transcriptRevision,
+        encounter.id,
+        token.transcriptHash,
+        token.transcriptRevision
+      );
+    return { encounterId: encounter.id, ...token, changes: result.changes };
+  }
+
+  _getEncounterTranscriptHash(encounterId) {
+    return this._getEncounterTranscriptSnapshot(encounterId)?.token.transcriptHash || null;
+  }
+
+  getEncounterOutput(encounterId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      return decorateEncounterOutput(this._getEncounterOutputRow(encounterId));
+    } catch (error) {
+      debugLogger.error("Error getting encounter output", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  getOrCreateEncounterOutput(encounterId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0) return null;
+      const transaction = this.db.transaction(() => {
+        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+        if (!snapshot) return null;
+        return decorateEncounterOutput(
+          this._ensureEncounterOutputForToken(normalizedId, snapshot.token)
+        );
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error("Error creating encounter output", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  getEncounterTranscriptToken(encounterId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0) return null;
+      return this._getEncounterTranscriptSnapshot(normalizedId)?.token || null;
+    } catch (error) {
+      debugLogger.error(
+        "Error getting encounter transcript token",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  _normalizeEncounterOutputTypes(outputTypes) {
+    const requested =
+      outputTypes === "all" || outputTypes == null
+        ? ["summary", "soap", "focus"]
+        : Array.isArray(outputTypes)
+          ? outputTypes
+          : [outputTypes];
+    return [...new Set(requested.filter((type) => type === "summary" || type === "soap" || type === "focus"))];
+  }
+
+  beginEncounterOutputGeneration(encounterId, outputTypes = "all") {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      const types = this._normalizeEncounterOutputTypes(outputTypes);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0 || types.length === 0) return null;
+      const transaction = this.db.transaction(() => {
+        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+        if (!snapshot) return null;
+        this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
+        const fields = ["updated_at = CURRENT_TIMESTAMP"];
+        for (const type of types) {
+          fields.push(
+            `${type}_status = 'processing'`,
+            `${type}_error_code = NULL`,
+            `${type}_updated_at = CURRENT_TIMESTAMP`
+          );
+        }
+        this.db
+          .prepare(`UPDATE encounter_outputs SET ${fields.join(", ")} WHERE encounter_id = ?`)
+          .run(normalizedId);
+        return {
+          transcript: snapshot.transcript,
+          token: snapshot.token,
+          output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error(
+        "Error beginning encounter output generation",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  finishEncounterOutputGeneration(encounterId, token, updates = {}) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      const expectedRevision = Number(token?.transcriptRevision);
+      const expectedHash = token?.transcriptHash;
+      if (
+        !Number.isInteger(normalizedId) ||
+        normalizedId <= 0 ||
+        !Number.isInteger(expectedRevision) ||
+        expectedRevision < 0 ||
+        typeof expectedHash !== "string"
+      ) {
+        return { applied: false, output: null };
+      }
+      const transaction = this.db.transaction(() => {
+        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+        if (!snapshot) return { applied: false, output: null };
+        this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
+        const output = decorateEncounterOutput(this._getEncounterOutputRow(normalizedId));
+        if (
+          snapshot.token.transcriptRevision !== expectedRevision ||
+          snapshot.token.transcriptHash !== expectedHash
+        ) {
+          return { applied: false, output };
+        }
+
+        const fields = [];
+        const values = [];
+        for (const type of ["summary", "soap", "focus"]) {
+          const status = updates?.[`${type}_status`];
+          if (status !== "ready" && status !== "failed") continue;
+          for (const field of [
+            type,
+            `${type}_status`,
+            `${type}_provider`,
+            `${type}_model`,
+            `${type}_error_code`,
+          ]) {
+            if (updates[field] === undefined) continue;
+            fields.push(`${field} = ?`);
+            values.push(updates[field]);
+          }
+          fields.push(`${type}_updated_at = CURRENT_TIMESTAMP`);
+        }
+        if (fields.length === 0) return { applied: false, output };
+        fields.push("updated_at = CURRENT_TIMESTAMP");
+        values.push(normalizedId);
+        this.db
+          .prepare(`UPDATE encounter_outputs SET ${fields.join(", ")} WHERE encounter_id = ?`)
+          .run(...values);
+        let note = null;
+        if (updates.focus_status === "ready" && typeof updates.focus === "string") {
+          const titleTarget = this.db
+            .prepare(
+              `SELECT n.id, n.title, n.encounter_auto_title_seed, e.start_time, calendar_events.timezone
+               FROM encounters e
+               JOIN notes n ON n.id = e.note_id
+               LEFT JOIN calendar_events ON calendar_events.id = e.calendar_event_id
+               WHERE e.id = ?`
+            )
+            .get(normalizedId);
+          if (
+            titleTarget?.encounter_auto_title_seed &&
+            titleTarget.title === titleTarget.encounter_auto_title_seed
+          ) {
+            const title = formatEncounterAutoTitle({
+              startTime: titleTarget.start_time,
+              timezone: titleTarget.timezone,
+              focus: updates.focus,
+            });
+            this.db
+              .prepare(
+                "UPDATE notes SET title = ?, sync_status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+              )
+              .run(title, titleTarget.id);
+            note = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(titleTarget.id);
+          }
+        }
+        return {
+          applied: true,
+          output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
+          note,
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error(
+        "Error finishing encounter output generation",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  updateEncounterOutput(encounterId, updates = {}) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0) return null;
+      const existing = this.getOrCreateEncounterOutput(normalizedId);
+      if (!existing) return null;
+      const allowedFields = new Set([
+        "summary",
+        "soap",
+        "focus",
+        "summary_status",
+        "soap_status",
+        "focus_status",
+        "summary_provider",
+        "summary_model",
+        "soap_provider",
+        "soap_model",
+        "focus_provider",
+        "focus_model",
+        "summary_error_code",
+        "soap_error_code",
+        "focus_error_code",
+      ]);
+      const fields = [];
+      const values = [];
+      for (const [key, value] of Object.entries(updates || {})) {
+        if (!allowedFields.has(key) || value === undefined) continue;
+        if (key.endsWith("_status") && !ENCOUNTER_OUTPUT_STATUSES.has(value)) continue;
+        fields.push(`${key} = ?`);
+        values.push(value);
+        if (key === "summary" || key.startsWith("summary_")) {
+          if (!fields.includes("summary_updated_at = CURRENT_TIMESTAMP")) {
+            fields.push("summary_updated_at = CURRENT_TIMESTAMP");
+          }
+        }
+        if (key === "soap" || key.startsWith("soap_")) {
+          if (!fields.includes("soap_updated_at = CURRENT_TIMESTAMP")) {
+            fields.push("soap_updated_at = CURRENT_TIMESTAMP");
+          }
+        }
+        if (key === "focus" || key.startsWith("focus_")) {
+          if (!fields.includes("focus_updated_at = CURRENT_TIMESTAMP")) {
+            fields.push("focus_updated_at = CURRENT_TIMESTAMP");
+          }
+        }
+      }
+      if (fields.length === 0) return existing;
+      fields.push("updated_at = CURRENT_TIMESTAMP");
+      values.push(normalizedId);
+      this.db
+        .prepare(`UPDATE encounter_outputs SET ${fields.join(", ")} WHERE encounter_id = ?`)
+        .run(...values);
+      return decorateEncounterOutput(this._getEncounterOutputRow(normalizedId));
+    } catch (error) {
+      debugLogger.error("Error updating encounter output", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  retryEncounterOutput(encounterId, outputType = "all") {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      if (!["summary", "soap", "focus", "all"].includes(outputType)) return null;
+      const normalizedId = Number(encounterId);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0) return null;
+      const output = this.getOrCreateEncounterOutput(normalizedId);
+      if (!output) return null;
+      const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+      if (!snapshot) return null;
+      const fields = [
+        "transcript_hash = ?",
+        "transcript_revision = ?",
+        "updated_at = CURRENT_TIMESTAMP",
+      ];
+      const values = [snapshot.token.transcriptHash, snapshot.token.transcriptRevision];
+      if (outputType === "summary" || outputType === "all") {
+        fields.push(
+          "summary_status = 'pending'",
+          "summary_error_code = NULL",
+          "summary_updated_at = CURRENT_TIMESTAMP"
+        );
+      }
+      if (outputType === "soap" || outputType === "all") {
+        fields.push(
+          "soap_status = 'pending'",
+          "soap_error_code = NULL",
+          "soap_updated_at = CURRENT_TIMESTAMP"
+        );
+      }
+      if (outputType === "focus" || outputType === "all") {
+        fields.push(
+          "focus_status = 'pending'",
+          "focus_error_code = NULL",
+          "focus_updated_at = CURRENT_TIMESTAMP"
+        );
+      }
+      values.push(normalizedId);
+      this.db
+        .prepare(`UPDATE encounter_outputs SET ${fields.join(", ")} WHERE encounter_id = ?`)
+        .run(...values);
+      return decorateEncounterOutput(this._getEncounterOutputRow(normalizedId));
+    } catch (error) {
+      debugLogger.error("Error retrying encounter output", { error: error.message }, "encounter");
+      throw error;
+    }
+  }
+
+  markEncounterOutputsStaleForNote(noteId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      return this._invalidateEncounterOutputsForNote(noteId, this._getNoteTranscriptToken(noteId));
+    } catch (error) {
+      debugLogger.error(
+        "Error marking encounter output stale",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  completeEncounterRecording(noteId, transcript) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedNoteId = Number(noteId);
+      if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) {
+        return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+      }
+      const transaction = this.db.transaction(() => {
+        const note = this.db
+          .prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL")
+          .get(normalizedNoteId);
+        if (!note) return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+
+        const nextTranscript = typeof transcript === "string" ? transcript : note.transcript || "";
+        const transcriptChanged = nextTranscript !== note.transcript;
+        this.db
+          .prepare(
+            `UPDATE notes
+             SET transcript = ?,
+               transcript_revision = CASE
+                 WHEN transcript IS NOT ? THEN transcript_revision + 1
+                 ELSE transcript_revision
+               END,
+               sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          )
+          .run(nextTranscript, nextTranscript, normalizedNoteId);
+
+        const encounter = this.db
+          .prepare("SELECT * FROM encounters WHERE note_id = ?")
+          .get(normalizedNoteId);
+        if (!encounter) {
+          return {
+            success: true,
+            note: this.db.prepare("SELECT * FROM notes WHERE id = ?").get(normalizedNoteId),
+            encounter: null,
+            output: null,
+          };
+        }
+
+        if (transcriptChanged) {
+          this._invalidateEncounterOutputsForNote(
+            normalizedNoteId,
+            this._getNoteTranscriptToken(normalizedNoteId)
+          );
+        }
+        this.db
+          .prepare(
+            `UPDATE encounters
+             SET lifecycle_state = 'completed',
+               completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          )
+          .run(encounter.id);
+        return {
+          success: true,
+          note: this.db.prepare("SELECT * FROM notes WHERE id = ?").get(normalizedNoteId),
+          encounter: this.db.prepare("SELECT * FROM encounters WHERE id = ?").get(encounter.id),
+          output: decorateEncounterOutput(this._getEncounterOutputRow(encounter.id)),
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error(
+        "Error completing encounter recording",
+        { error: error.message },
+        "encounter"
+      );
       throw error;
     }
   }
@@ -3419,7 +4932,11 @@ class DatabaseManager {
   getCalendarEventById(eventId) {
     try {
       if (!this.db) throw new Error("Database not initialized");
-      return this.db.prepare("SELECT * FROM calendar_events WHERE id = ?").get(eventId) || null;
+      return (
+        this.db
+          .prepare(`SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS} FROM calendar_events WHERE id = ?`)
+          .get(eventId) || null
+      );
     } catch (error) {
       debugLogger.error("Error getting calendar event by id", { error: error.message }, "gcal");
       return null;
@@ -3515,6 +5032,116 @@ class DatabaseManager {
       return { success: true };
     } catch (error) {
       debugLogger.error("Error removing calendar events", { error: error.message }, "gcal");
+      throw error;
+    }
+  }
+
+  removeCalendarEventsByPrefix(provider, calendarId, idPrefix) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      this.db
+        .prepare(
+          `DELETE FROM calendar_events
+           WHERE provider = ? AND calendar_id = ? AND id LIKE ?
+             AND id NOT IN (
+               SELECT calendar_event_id
+               FROM notes
+               WHERE calendar_event_id IS NOT NULL AND deleted_at IS NULL
+             )`
+        )
+        .run(provider, calendarId, `${idPrefix}%`);
+      return { success: true };
+    } catch (error) {
+      debugLogger.error(
+        "Error removing calendar event occurrences",
+        { error: error.message },
+        "calendar"
+      );
+      throw error;
+    }
+  }
+
+  removeStaleCalendarEventsInWindow(provider, calendarId, freshEventIds, startTime, endTime) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const placeholders = freshEventIds.map(() => "?").join(", ");
+      const freshFilter = freshEventIds.length > 0 ? `AND id NOT IN (${placeholders})` : "";
+      this.db
+        .prepare(
+          `DELETE FROM calendar_events
+           WHERE provider = ? AND calendar_id = ?
+             AND datetime(start_time) >= datetime(?)
+             AND datetime(start_time) < datetime(?)
+             ${freshFilter}
+             AND id NOT IN (
+               SELECT calendar_event_id
+               FROM notes
+               WHERE calendar_event_id IS NOT NULL AND deleted_at IS NULL
+             )`
+        )
+        .run(provider, calendarId, startTime, endTime, ...freshEventIds);
+      return { success: true };
+    } catch (error) {
+      debugLogger.error(
+        "Error reconciling calendar event window",
+        { error: error.message },
+        "calendar"
+      );
+      throw error;
+    }
+  }
+
+  // A complete AIReceptionist window is authoritative for both local cache
+  // tables. Keep recorded work intact, but cancel a never-started encounter
+  // when its source occurrence no longer appears in that authoritative feed.
+  reconcileStaleCalendarWindow(provider, calendarId, freshEventIds, startTime, endTime) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const fresh = Array.isArray(freshEventIds) ? freshEventIds : [];
+      const placeholders = fresh.map(() => "?").join(", ");
+      const freshFilter = fresh.length > 0 ? `AND calendar_event_id NOT IN (${placeholders})` : "";
+      const eventFreshFilter = fresh.length > 0 ? `AND id NOT IN (${placeholders})` : "";
+      const transaction = this.db.transaction(() => {
+        const cancelled = this.db
+          .prepare(
+            `
+          UPDATE encounters
+          SET source_status = 'cancelled', lifecycle_state = 'cancelled',
+            cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP),
+            updated_at = CURRENT_TIMESTAMP
+          WHERE provider = ? AND calendar_id = ?
+            AND datetime(start_time) >= datetime(?)
+            AND datetime(start_time) < datetime(?)
+            ${freshFilter}
+            AND lifecycle_state = 'scheduled' AND note_id IS NULL
+        `
+          )
+          .run(provider, calendarId, startTime, endTime, ...fresh);
+        const pruned = this.db
+          .prepare(
+            `
+          DELETE FROM calendar_events
+          WHERE provider = ? AND calendar_id = ?
+            AND datetime(start_time) >= datetime(?)
+            AND datetime(start_time) < datetime(?)
+            ${eventFreshFilter}
+            AND id NOT IN (
+              SELECT calendar_event_id FROM notes
+              WHERE calendar_event_id IS NOT NULL AND deleted_at IS NULL
+            )
+        `
+          )
+          .run(provider, calendarId, startTime, endTime, ...fresh);
+        return { cancelled: cancelled.changes, pruned: pruned.changes };
+      });
+      const result = transaction();
+      return { success: true, ...result };
+    } catch (error) {
+      debugLogger.error(
+        "Error reconciling stale encounter window",
+        { error: error.message },
+        "encounter"
+      );
       throw error;
     }
   }
@@ -4318,10 +5945,14 @@ class DatabaseManager {
   upsertNoteFromCloud(cloudNote, localFolderId, localSpaceId = null) {
     try {
       if (!this.db) throw new Error("Database not initialized");
-      // Sync must never replace non-empty local content/enhanced_content/
-      // transcript with an empty cloud value (#1290, the #938 invariant).
-      // The enhancement prompt/hash travel with enhanced_content.
-      const stmt = this.db.prepare(`
+      const transaction = this.db.transaction(() => {
+        const previousNote = this.db
+          .prepare("SELECT id, transcript FROM notes WHERE client_note_id = ?")
+          .get(cloudNote.client_note_id);
+        // Sync must never replace non-empty local content/enhanced_content/
+        // transcript with an empty cloud value (#1290, the #938 invariant).
+        // The enhancement prompt/hash travel with enhanced_content.
+        const stmt = this.db.prepare(`
         INSERT INTO notes (client_note_id, cloud_id, title, content, enhanced_content,
           enhancement_prompt, enhanced_at_content_hash, note_type, source_file,
           audio_duration_seconds, transcript, folder_id, space_id, participants, calendar_event_id,
@@ -4359,33 +5990,43 @@ class DatabaseManager {
           updated_at = excluded.updated_at,
           cloud_updated_at = excluded.cloud_updated_at
       `);
-      stmt.run(
-        cloudNote.client_note_id,
-        cloudNote.id,
-        cloudNote.title,
-        cloudNote.content,
-        cloudNote.enhanced_content || null,
-        cloudNote.enhancement_prompt || null,
-        cloudNote.enhanced_at_content_hash || null,
-        cloudNote.note_type || "personal",
-        cloudNote.source_file || null,
-        cloudNote.audio_duration_seconds || null,
-        cloudNote.transcript || null,
-        localFolderId,
-        localSpaceId ?? this.getPrivateSpaceId(),
-        cloudNote.participants || null,
-        cloudNote.calendar_event_id || null,
-        cloudNote.diarization_enabled ?? null,
-        normalizeStoredSpeakerCount(cloudNote.expected_speaker_count),
-        cloudNote.updated_by_user_id || null,
-        cloudNote.user_id || null,
-        cloudNote.created_at,
-        cloudNote.updated_at,
-        cloudNote.updated_at
-      );
-      return this.db
-        .prepare("SELECT * FROM notes WHERE client_note_id = ?")
-        .get(cloudNote.client_note_id);
+        stmt.run(
+          cloudNote.client_note_id,
+          cloudNote.id,
+          cloudNote.title,
+          cloudNote.content,
+          cloudNote.enhanced_content || null,
+          cloudNote.enhancement_prompt || null,
+          cloudNote.enhanced_at_content_hash || null,
+          cloudNote.note_type || "personal",
+          cloudNote.source_file || null,
+          cloudNote.audio_duration_seconds || null,
+          cloudNote.transcript || null,
+          localFolderId,
+          localSpaceId ?? this.getPrivateSpaceId(),
+          cloudNote.participants || null,
+          cloudNote.calendar_event_id || null,
+          cloudNote.diarization_enabled ?? null,
+          normalizeStoredSpeakerCount(cloudNote.expected_speaker_count),
+          cloudNote.updated_by_user_id || null,
+          cloudNote.user_id || null,
+          cloudNote.created_at,
+          cloudNote.updated_at,
+          cloudNote.updated_at
+        );
+        let note = this.db
+          .prepare("SELECT * FROM notes WHERE client_note_id = ?")
+          .get(cloudNote.client_note_id);
+        if (previousNote && note && note.transcript !== previousNote.transcript) {
+          this.db
+            .prepare("UPDATE notes SET transcript_revision = transcript_revision + 1 WHERE id = ?")
+            .run(note.id);
+          this._invalidateEncounterOutputsForNote(note.id, this._getNoteTranscriptToken(note.id));
+          note = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(note.id);
+        }
+        return note;
+      });
+      return transaction();
     } catch (error) {
       debugLogger.error("Error upserting note from cloud", { error: error.message }, "database");
       throw error;

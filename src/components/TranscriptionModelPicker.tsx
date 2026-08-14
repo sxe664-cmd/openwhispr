@@ -376,7 +376,6 @@ export default function TranscriptionModelPicker({
   const setTinfoilApiKey = useSettingsStore((s) => s.setTinfoilApiKey);
   const customTranscriptionApiKey = useSettingsStore((s) => s.customTranscriptionApiKey);
   const setCustomTranscriptionApiKey = useSettingsStore((s) => s.setCustomTranscriptionApiKey);
-  const isSignedIn = useSettingsStore((s) => s.isSignedIn);
   const effectiveLocal = mode === "local" ? true : mode === "cloud" ? false : useLocalWhisper;
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [parakeetModels, setParakeetModels] = useState<LocalModel[]>([]);
@@ -535,7 +534,7 @@ export default function TranscriptionModelPicker({
   useEffect(() => {
     if (
       effectiveLocal ||
-      !shouldPersistProviderFallback(policyState, isSignedIn) ||
+      !shouldPersistProviderFallback(policyState) ||
       (effectiveCloudSelection.provider === selectedCloudProvider &&
         effectiveCloudSelection.model === selectedCloudModel)
     ) {
@@ -550,7 +549,6 @@ export default function TranscriptionModelPicker({
   }, [
     effectiveCloudSelection,
     effectiveLocal,
-    isSignedIn,
     onCloudModelSelect,
     onCloudProviderSelect,
     policyState,

@@ -1,29 +1,23 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   Home,
   MessageSquare,
   NotebookPen,
   BookOpen,
-  Upload,
   Blocks,
-  Gift,
+  CalendarDays,
+  Bot,
   Settings,
   HelpCircle,
-  UserCircle,
-  X,
   Search,
 } from "lucide-react";
-import logoIcon from "../assets/icon.png";
 import { useTranslation } from "react-i18next";
 import { cn } from "./lib/utils";
 import SupportDropdown from "./ui/SupportDropdown";
 import { getCachedPlatform } from "../utils/platform";
-import type { UpsellDecision } from "../lib/upsell";
-import { isAgentAllowed, isPolicyActionAllowed } from "../stores/policyRules";
-import { usePolicyStore } from "../stores/policyStore";
+import hiraSidebarLogo from "../assets/hira-sidebar-logo.png";
 
 const platform = getCachedPlatform();
-
 const rowIconClass =
   "shrink-0 text-foreground/60 group-hover:text-foreground/75 dark:text-foreground/50 dark:group-hover:text-foreground/65 transition-colors duration-150";
 const rowLabelClass =
@@ -32,22 +26,19 @@ const rowButtonClass =
   "group flex items-center gap-2.5 w-full h-8 px-2.5 rounded-md text-left outline-none hover:bg-foreground/4 dark:hover:bg-white/4 focus-visible:ring-1 focus-visible:ring-primary/30 transition-colors duration-150";
 
 export type ControlPanelView =
-  "home" | "chat" | "personal-notes" | "dictionary" | "upload" | "integrations";
+  | "home"
+  | "chat"
+  | "personal-notes"
+  | "dictionary"
+  | "calendar-reminders"
+  | "ai-receptionist"
+  | "integrations";
 
 interface ControlPanelSidebarProps {
   activeView: ControlPanelView;
   onViewChange: (view: ControlPanelView) => void;
   onOpenSettings: () => void;
   onOpenSearch?: () => void;
-  onOpenReferrals?: () => void;
-  onUpgrade?: () => void;
-  isOverLimit?: boolean;
-  userName?: string | null;
-  userEmail?: string | null;
-  userImage?: string | null;
-  isSignedIn?: boolean;
-  authLoaded?: boolean;
-  upsell: UpsellDecision;
   updateAction?: React.ReactNode;
 }
 
@@ -56,42 +47,20 @@ export default function ControlPanelSidebar({
   onViewChange,
   onOpenSettings,
   onOpenSearch,
-  onOpenReferrals,
-  onUpgrade,
-  isOverLimit,
-  userName,
-  userEmail,
-  userImage,
-  isSignedIn,
-  authLoaded,
-  upsell,
   updateAction,
 }: ControlPanelSidebarProps) {
   const { t } = useTranslation();
-  const [upgradeDismissed, setUpgradeDismissed] = useState(
-    () => localStorage.getItem("upgradeProDismissed") === "true"
-  );
-
-  const showLimitBanner = upsell === "show" && Boolean(isSignedIn) && Boolean(isOverLimit);
-  const showUpgradeBanner = upsell === "show" && !showLimitBanner && !upgradeDismissed;
-
-  const agentAllowed = usePolicyStore(isAgentAllowed);
-  const policyActionsAllowed = usePolicyStore((state) => isPolicyActionAllowed(state));
-
   const navItems: {
     id: ControlPanelView;
     label: string;
     icon: React.ComponentType<{ size?: number; className?: string }>;
   }[] = [
     { id: "home", label: t("sidebar.home"), icon: Home },
-    ...(agentAllowed
-      ? [{ id: "chat" as const, label: t("sidebar.chat"), icon: MessageSquare }]
-      : []),
+    { id: "chat" as const, label: t("sidebar.chat"), icon: MessageSquare },
     { id: "personal-notes", label: t("sidebar.notes"), icon: NotebookPen },
-    ...(policyActionsAllowed
-      ? [{ id: "upload" as const, label: t("sidebar.upload"), icon: Upload }]
-      : []),
     { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },
+    { id: "calendar-reminders", label: "Calendar & Reminders", icon: CalendarDays },
+    { id: "ai-receptionist", label: "AI Receptionist", icon: Bot },
     { id: "integrations", label: t("sidebar.integrations"), icon: Blocks },
   ];
 
@@ -101,6 +70,18 @@ export default function ControlPanelSidebar({
         className="w-full h-10 shrink-0"
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       />
+
+      <div
+        className="flex shrink-0 items-center justify-center px-4 pt-3 pb-4"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      >
+        <img
+          src={hiraSidebarLogo}
+          alt="HIRA Restorative Wellness Center"
+          className="h-auto w-full max-w-[156px] object-contain"
+          draggable={false}
+        />
+      </div>
 
       {onOpenSearch && (
         <div className="px-2 pt-2 pb-1">
@@ -128,7 +109,6 @@ export default function ControlPanelSidebar({
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
-
           return (
             <button
               key={item.id}
@@ -167,78 +147,12 @@ export default function ControlPanelSidebar({
 
       <div className="flex-1" />
 
-      {showLimitBanner && (
-        <div className="px-2 pb-2">
-          <div className="rounded-lg border border-destructive/25 bg-destructive/5 dark:bg-destructive/10 p-3">
-            <div className="flex flex-col items-center text-center">
-              <img src={logoIcon} alt="" className="w-7 h-7 rounded-md mb-2" />
-              <p className="text-xs font-medium text-foreground mb-0.5">
-                {t("sidebar.limitReached")}
-              </p>
-              <p className="text-[11px] leading-snug text-muted-foreground mb-2.5">
-                {t("sidebar.limitReachedDescription")}
-              </p>
-              <button
-                onClick={onUpgrade}
-                className="w-full h-7 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-              >
-                {t("sidebar.viewPlans")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showUpgradeBanner && (
-        <div className="px-2 pb-2">
-          <div className="relative rounded-lg border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3">
-            <button
-              onClick={() => {
-                setUpgradeDismissed(true);
-                localStorage.setItem("upgradeProDismissed", "true");
-              }}
-              aria-label={t("common.dismiss")}
-              className="absolute top-1.5 right-1.5 p-0.5 rounded-sm text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-            >
-              <X size={12} />
-            </button>
-            <div className="flex flex-col items-center text-center pt-1">
-              <img src={logoIcon} alt="" className="w-7 h-7 rounded-md mb-2" />
-              <p className="text-xs font-medium text-foreground mb-0.5">
-                {t("sidebar.upgradeTitle")}
-              </p>
-              <p className="text-[11px] leading-snug text-muted-foreground mb-2.5">
-                {t("sidebar.upgradeDescription")}
-              </p>
-              <button
-                onClick={onUpgrade}
-                className="w-full h-7 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-              >
-                {t("sidebar.learnMore")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="px-2 pb-2 space-y-0.5">
         {updateAction && (
           <div className="px-1 pb-1" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
             {updateAction}
           </div>
         )}
-
-        {isSignedIn && onOpenReferrals && (
-          <button
-            onClick={onOpenReferrals}
-            aria-label={t("sidebar.referral")}
-            className={rowButtonClass}
-          >
-            <Gift size={15} className={rowIconClass} />
-            <span className={rowLabelClass}>{t("sidebar.referral")}</span>
-          </button>
-        )}
-
         <button
           onClick={onOpenSettings}
           aria-label={t("sidebar.settings")}
@@ -247,7 +161,6 @@ export default function ControlPanelSidebar({
           <Settings size={15} className={rowIconClass} />
           <span className={rowLabelClass}>{t("sidebar.settings")}</span>
         </button>
-
         <SupportDropdown
           trigger={
             <button aria-label={t("sidebar.support")} className={rowButtonClass}>
@@ -256,34 +169,6 @@ export default function ControlPanelSidebar({
             </button>
           }
         />
-
-        <div className="mx-1 h-px bg-border/10 dark:bg-white/6 my-1.5!" />
-
-        <div className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md">
-          {userImage ? (
-            <img src={userImage} alt="" className="w-6 h-6 rounded-full shrink-0 object-cover" />
-          ) : (
-            <UserCircle size={18} className="shrink-0 text-foreground/50 dark:text-foreground/45" />
-          )}
-          <div className="flex-1 min-w-0">
-            {isSignedIn && (userName || userEmail) ? (
-              <>
-                <p className="text-xs text-foreground/80 dark:text-foreground/80 truncate leading-tight">
-                  {userName || t("sidebar.defaultUser")}
-                </p>
-                {userEmail && (
-                  <p className="text-xs text-foreground/55 dark:text-foreground/55 truncate leading-tight">
-                    {userEmail}
-                  </p>
-                )}
-              </>
-            ) : authLoaded && !isSignedIn ? (
-              <p className="text-xs text-foreground/45 dark:text-foreground/55">
-                {t("sidebar.notSignedIn")}
-              </p>
-            ) : null}
-          </div>
-        </div>
       </div>
     </div>
   );

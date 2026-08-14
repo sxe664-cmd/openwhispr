@@ -2,11 +2,6 @@
 // name, argument order and return value of its ipcHandlers.js passthrough, so a
 // drift between SyncService and the real IPC surface shows up as a test failure.
 
-// Fixed credential state for the whole test process; establishValidatedAuth()
-// in browserGlobals.js turns it into a validated renderer auth context.
-const AUTH_TOKEN = "harness-token";
-const AUTH_GENERATION = 0;
-
 // syncAll() asserts the whole dictionary and snippet surface exists before doing
 // any work and aborts the pass if a name is missing, so both are present but
 // inert — this harness covers notes and folders.
@@ -50,9 +45,6 @@ function createElectronApi(db, options = {}) {
       if (!cloud) throw new Error("no fake cloud wired into this electronAPI");
       return cloud.request(opts);
     },
-
-    // Auth
-    authGetTokenState: async () => ({ token: AUTH_TOKEN, generation: AUTH_GENERATION }),
 
     emitSyncEvent: async (name, payload) => {
       syncEvents.push({ name, payload });
@@ -112,20 +104,7 @@ function createElectronApi(db, options = {}) {
     getSpaces: async () => db.getSpaces(),
     upsertSpaceFromCloud: async (cloudSpace) => db.upsertSpaceFromCloud(cloudSpace),
     setSpaceSyncStatus: async (id, status) => db.setSpaceSyncStatus(id, status),
-    purgeSpace: async (id, purgeOptions) => {
-      // Mirrors the db-purge-space handler's stale-generation refusal.
-      if (
-        purgeOptions?.expectedAuthGeneration !== undefined &&
-        purgeOptions.expectedAuthGeneration !== AUTH_GENERATION
-      ) {
-        return {
-          success: false,
-          error: "Authentication context changed before account cleanup",
-          code: "AUTH_CONTEXT_CHANGED",
-        };
-      }
-      return db.purgeSpace(id, purgeOptions);
-    },
+    purgeSpace: async (id, purgeOptions) => db.purgeSpace(id, purgeOptions),
 
     // Conversations
     getAgentConversation: async (id) => db.getAgentConversation(id),
@@ -152,4 +131,4 @@ function createElectronApi(db, options = {}) {
   };
 }
 
-module.exports = { createElectronApi, AUTH_TOKEN, AUTH_GENERATION };
+module.exports = { createElectronApi };

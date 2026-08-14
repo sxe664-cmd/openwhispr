@@ -6,48 +6,6 @@
 
 const { classifyNetworkError } = require("./networkErrors");
 
-function mapManagedIdentityError(error, provider) {
-  const code = error?.code;
-  if (!code) return null;
-  if (["AUTH_CONTEXT_CHANGED", "AUTH_CONTEXT_UNVALIDATED", "AUTH_EXPIRED"].includes(code)) {
-    return {
-      message: "Your OpenWhispr session changed or expired.",
-      action: "Sign in again, then retry.",
-      retryable: true,
-    };
-  }
-  if (code === "SSO_REQUIRED") {
-    return {
-      message: "Company SSO is required for managed enterprise AI.",
-      action: "Sign out and sign back in with your company SSO account.",
-    };
-  }
-  if (code === "DIRECTORY_ASSIGNMENT_REQUIRED") {
-    return {
-      message: error.message,
-      action: "Ask your IT administrator to restore your directory assignment.",
-    };
-  }
-  if (
-    [
-      "PROVIDER_NOT_ALLOWED",
-      "PROVIDER_NOT_CONFIGURED",
-      "WORKSPACE_SUBSCRIPTION_REQUIRED",
-      "MANAGED_CONFIG_INVALID",
-    ].includes(code)
-  ) {
-    return { message: error.message, action: "Contact your IT administrator." };
-  }
-  if (code === "IDENTITY_EXCHANGE_FAILED") {
-    return {
-      message: `Could not obtain temporary ${provider === "bedrock" ? "AWS" : "Azure"} access.`,
-      action: "Ask your IT administrator to verify the configured federated identity trust.",
-      retryable: true,
-    };
-  }
-  return null;
-}
-
 function mapBedrockError(error, config = {}) {
   const msg = error?.message || error?.code || String(error);
   const profile = config.bedrockProfile || "default";
@@ -165,8 +123,6 @@ function mapVertexError(error, config = {}) {
  * @returns {{ message: string, action?: string, copyCommand?: string, retryable?: boolean }}
  */
 function mapEnterpriseError(provider, error, config = {}) {
-  const managed = mapManagedIdentityError(error, provider);
-  if (managed) return managed;
   switch (provider) {
     case "bedrock":
       return mapBedrockError(error, config);

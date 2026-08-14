@@ -135,29 +135,6 @@ async function acquireLock(name) {
   return () => release();
 }
 
-// syncAll() refuses to run without a validated auth context: a token
-// generation bound to a resolved get-session user. Drive the real
-// authRequestContext module through its exported surface so the harness holds
-// the same lease the renderer would after sign-in. Requires
-// window.electronAPI.authGetTokenState (the bridge provides it).
-async function establishValidatedAuth(userId = "user-harness") {
-  const auth = require("../../../src/lib/authRequestContext.ts");
-  auth.resetAuthRequestContextForTests();
-  const request = await auth.prepareAuthRequest({
-    url: `${windowStub.location.origin}/api/auth/get-session`,
-    headers: {},
-  });
-  await auth.handleAuthRequestSuccess({
-    data: { user: { id: userId } },
-    response: new Response(null),
-    request,
-  });
-  const { generation } = await auth.readAuthTokenState();
-  if (!auth.commitValidatedAuthContext(generation, userId)) {
-    throw new Error("harness auth bootstrap failed to validate the session");
-  }
-}
-
 // A failed team-spaces probe schedules a real-timer retry that would fire long
 // after the test closed its database; every SyncService a test creates must be
 // swept before the test ends.
@@ -179,7 +156,6 @@ module.exports = {
   installBrowserGlobals,
   resetBrowserGlobals,
   enableSync,
-  establishValidatedAuth,
   stopSyncTimers,
   acquireLock,
   localStorage: localStorageStub,

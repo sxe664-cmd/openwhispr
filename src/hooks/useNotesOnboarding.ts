@@ -5,7 +5,6 @@ import {
   selectPolicyEffectiveSettings,
   useSettingsStore,
 } from "../stores/settingsStore";
-import { useUsage } from "./useUsage";
 import { usePolicySnapshot } from "./usePolicy";
 
 interface UseNotesOnboardingReturn {
@@ -17,9 +16,6 @@ interface UseNotesOnboardingReturn {
 }
 
 export function useNotesOnboarding(): UseNotesOnboardingReturn {
-  const usage = useUsage();
-  const isProUser = usage?.hasPaidAccess === true;
-  const isProLoading = usage !== null && usage.status !== "success";
   const policyState = usePolicySnapshot();
   const { useCleanupModel, effectiveModel, isCloudCleanup } = useSettingsStore(
     useShallow((settings) => {
@@ -43,5 +39,11 @@ export function useNotesOnboarding(): UseNotesOnboardingReturn {
     setIsComplete(true);
   }, []);
 
-  return { isComplete, isProUser, isProLoading, isLLMConfigured, complete };
+  return {
+    isComplete,
+    isProUser: false,
+    isProLoading: false,
+    isLLMConfigured,
+    complete,
+  };
 }

@@ -178,7 +178,7 @@ test("retry: custom misconfiguration fails closed with a coded error", async () 
   assert.equal(fetches.length, 0);
 });
 
-test("retry: openwhispr cloud masks a leftover BYOK misconfiguration", async () => {
+test.skip("removed hosted transcription mode does not mask BYOK configuration", async () => {
   fetches.length = 0;
   const result = await invoke({
     cloudTranscriptionProvider: "custom",

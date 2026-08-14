@@ -1,5 +1,4 @@
 export function resolveModeReachability({ mode, provider, model, isCloud, isSelfHosted }) {
-  if (mode === "openwhispr") return isCloud;
   if (mode === "self-hosted") return isSelfHosted;
 
   const hasModel = (model?.trim()?.length ?? 0) > 0;
@@ -53,8 +52,7 @@ export function resolveAgentImageTarget({
       ? { attach: true, useVisionOverride: true }
       : { attach: false, useVisionOverride: false };
   }
-  // Cloud defers the vision-model choice to the server's vision chain.
-  if (baseProviderImageWired && (isCloudAgent || baseModelSupportsVision)) {
+  if (baseProviderImageWired && baseModelSupportsVision) {
     return { attach: true, useVisionOverride: false };
   }
   return { attach: false, useVisionOverride: false };
@@ -85,8 +83,6 @@ export function resolveDictationTranslationReachability({
 
 export function resolveModeProvider({ isCloud, mode, provider }) {
   switch (mode) {
-    case "openwhispr":
-      return isCloud ? "openwhispr" : undefined;
     case "local":
       return "local";
     case "self-hosted":
@@ -112,7 +108,6 @@ export function resolveDictationAgentProvider({
 }
 
 function resolveModeDisplayProvider(mode, provider) {
-  if (mode === "openwhispr") return "openwhispr";
   if (mode === "local") return "local";
   if (mode === "self-hosted") return "self-hosted";
   return provider?.trim() || "none";

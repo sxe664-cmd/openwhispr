@@ -17,7 +17,7 @@ interface NoteBottomBarProps {
   askDisabled?: boolean;
   actionPicker?: React.ReactNode;
   hideInput?: boolean;
-  /** False hides the record control (e.g. read-only shared notes). */
+  /** False hides the record control for read-only notes. */
   canRecord?: boolean;
 }
 

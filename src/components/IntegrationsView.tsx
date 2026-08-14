@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { CalendarDays, Code2, Info, Loader2, Mail, Plus, Unlink } from "lucide-react";
+import { CalendarDays, Loader2, Mail, Plus, Unlink } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { SettingsPanel, SettingsPanelRow, SettingsRow } from "./ui/SettingsSection";
@@ -8,29 +8,15 @@ import { Toggle } from "./ui/toggle";
 import {
   AlertDialog,
   ConfirmDialog,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
 } from "./ui/dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSystemAudioPermission } from "../hooks/useSystemAudioPermission";
 import { canManageSystemAudioInApp } from "../utils/systemAudioAccess";
 import type { CalendarAccount } from "../types/calendar";
-import ApiKeysSection from "./ApiKeysSection";
-import CliIntegrationCard from "./CliIntegrationCard";
-import McpIntegrationCard from "./McpIntegrationCard";
 import googleCalendarIcon from "../assets/icons/google-calendar.svg";
 import microsoftCalendarIcon from "../assets/icons/microsoft-calendar.svg";
 import appleCalendarIcon from "../assets/icons/apple-calendar.svg";
 
-const API_DOCS_URL = "https://docs.openwhispr.com/api/overview";
-
-interface IntegrationsViewProps {
-  isPaid: boolean;
-  onUpgrade: () => void;
-}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -45,10 +31,11 @@ interface ProviderRowProps {
   i18nKey: string;
   connected: boolean;
   isConnecting: boolean;
-  onConnect: () => void;
+  onConnect?: () => void;
+  managed?: boolean;
 }
 
-function ProviderRow({ icon, i18nKey, connected, isConnecting, onConnect }: ProviderRowProps) {
+function ProviderRow({ icon, i18nKey, connected, isConnecting, onConnect, managed = false }: ProviderRowProps) {
   const { t } = useTranslation();
   return (
     <SettingsPanelRow>
@@ -67,12 +54,16 @@ function ProviderRow({ icon, i18nKey, connected, isConnecting, onConnect }: Prov
             {t(`${i18nKey}.description`)}
           </p>
         </div>
-        {connected ? (
+        {managed ? (
+          <Badge variant="outline" className="shrink-0">
+            {t(`${i18nKey}.managed`, { defaultValue: "Managed by AIReceptionist" })}
+          </Badge>
+        ) : connected ? (
           <Badge variant="success" className="shrink-0">
             {t(`${i18nKey}.connected`)}
           </Badge>
         ) : (
-          <Button size="sm" onClick={onConnect} disabled={isConnecting} className="shrink-0">
+          <Button size="sm" onClick={onConnect} disabled={isConnecting || !onConnect} className="shrink-0">
             {isConnecting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -158,13 +149,13 @@ function CalendarAccountRows({
   );
 }
 
-export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsViewProps) {
+interface IntegrationsViewProps {
+  embedded?: boolean;
+}
+
+export default function IntegrationsView({ embedded = false }: IntegrationsViewProps) {
   const { t } = useTranslation();
   const {
-    gcalAccounts,
-    setGcalAccounts,
-    gcalPrimaryOnly,
-    setGcalPrimaryOnly,
     mcalAccounts,
     setMcalAccounts,
     mcalPrimaryOnly,
@@ -172,9 +163,6 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
     appleCalendarConnected,
     setAppleCalendarConnected,
   } = useSettingsStore();
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [disconnectingEmail, setDisconnectingEmail] = useState<string | null>(null);
-  const [confirmDisconnectEmail, setConfirmDisconnectEmail] = useState<string | null>(null);
   const [isMsConnecting, setIsMsConnecting] = useState(false);
   const [msDisconnectingEmail, setMsDisconnectingEmail] = useState<string | null>(null);
   const [confirmMsDisconnectEmail, setConfirmMsDisconnectEmail] = useState<string | null>(null);
@@ -185,31 +173,11 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
   const [appleConnectError, setAppleConnectError] = useState<"denied" | "failed" | null>(null);
   // i18n prefix of the provider whose OAuth flow failed, e.g. "integrations.googleCalendar"
   const [oauthErrorKey, setOauthErrorKey] = useState<string | null>(null);
-  const [apiKeysDialogOpen, setApiKeysDialogOpen] = useState(false);
+  const [googleCalendarManaged, setGoogleCalendarManaged] = useState(false);
   const systemAudio = useSystemAudioPermission();
   const { request: requestSystemAudioAccess } = systemAudio;
-  const hasAccounts = gcalAccounts.length > 0;
   const needsSystemAudioGrant = !systemAudio.granted && canManageSystemAudioInApp(systemAudio);
   const isMac = window.electronAPI?.getPlatform?.() === "darwin";
-
-  const startOAuth = useCallback(async () => {
-    setIsConnecting(true);
-    try {
-      const result = await window.electronAPI?.gcalStartOAuth?.();
-      if (result?.success && result.email) {
-        const current = useSettingsStore.getState().gcalAccounts;
-        setGcalAccounts([
-          ...current.filter((a) => a.email !== result.email),
-          { email: result.email },
-        ]);
-      } else if (!result?.error?.includes("access_denied")) {
-        // access_denied means the user cancelled on the consent screen
-        setOauthErrorKey("integrations.googleCalendar");
-      }
-    } finally {
-      setIsConnecting(false);
-    }
-  }, [setGcalAccounts]);
 
   const startMicrosoftOAuth = useCallback(async () => {
     setIsMsConnecting(true);
@@ -259,11 +227,6 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
     [needsSystemAudioGrant, requestSystemAudioAccess]
   );
 
-  const handleConnect = useCallback(
-    () => withSystemAudioGate(startOAuth),
-    [withSystemAudioGate, startOAuth]
-  );
-
   const handleMicrosoftConnect = useCallback(
     () => withSystemAudioGate(startMicrosoftOAuth),
     [withSystemAudioGate, startMicrosoftOAuth]
@@ -280,20 +243,6 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
     setAppleSourceNames([]);
   }, [setAppleCalendarConnected]);
 
-  const handleDisconnect = useCallback(
-    async (email: string) => {
-      setDisconnectingEmail(email);
-      try {
-        await window.electronAPI?.gcalDisconnect?.(email);
-        const current = useSettingsStore.getState().gcalAccounts;
-        setGcalAccounts(current.filter((a) => a.email !== email));
-      } finally {
-        setDisconnectingEmail(null);
-      }
-    },
-    [setGcalAccounts]
-  );
-
   const handleMicrosoftDisconnect = useCallback(
     async (email: string) => {
       setMsDisconnectingEmail(email);
@@ -309,25 +258,22 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
   );
 
   useEffect(() => {
+    window.electronAPI?.gcalGetConnectionStatus?.().then((status) => {
+      setGoogleCalendarManaged(status?.managed === true || status?.source === "ai-receptionist");
+    });
     const unsub = window.electronAPI?.onGcalConnectionChanged?.(
       (data: {
         accounts?: Array<{ email: string }>;
         connected?: boolean;
         email?: string | null;
+        managed?: boolean;
+        source?: string;
       }) => {
-        if (data.accounts) {
-          setGcalAccounts(data.accounts);
-        } else if (data.connected && data.email) {
-          const current = useSettingsStore.getState().gcalAccounts;
-          setGcalAccounts([
-            ...current.filter((a) => a.email !== data.email),
-            { email: data.email },
-          ]);
-        }
+        setGoogleCalendarManaged(data.managed === true || data.source === "ai-receptionist");
       }
     );
     return () => unsub?.();
-  }, [setGcalAccounts]);
+  }, []);
 
   useEffect(() => {
     const unsub = window.electronAPI?.onMcalConnectionChanged?.(
@@ -354,11 +300,17 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
   }, [isMac, setAppleCalendarConnected]);
 
   return (
-    <div className="max-w-lg mx-auto w-full px-6 py-6 space-y-5">
-      <div>
-        <h2 className="text-base font-semibold text-foreground">{t("integrations.title")}</h2>
-        <p className="text-xs text-muted-foreground/70 mt-0.5">{t("integrations.description")}</p>
-      </div>
+    <div
+      className={
+        embedded ? "w-full space-y-5" : "max-w-lg mx-auto w-full px-6 py-6 space-y-5"
+      }
+    >
+      {!embedded && (
+        <div>
+          <h2 className="text-base font-semibold text-foreground">{t("integrations.title")}</h2>
+          <p className="text-xs text-muted-foreground/70 mt-0.5">{t("integrations.description")}</p>
+        </div>
+      )}
 
       <div>
         <SectionLabel>{t("integrations.sections.calendar")}</SectionLabel>
@@ -366,19 +318,9 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
           <ProviderRow
             icon={googleCalendarIcon}
             i18nKey="integrations.googleCalendar"
-            connected={hasAccounts}
-            isConnecting={isConnecting}
-            onConnect={handleConnect}
-          />
-          <CalendarAccountRows
-            i18nKey="integrations.googleCalendar"
-            accounts={gcalAccounts}
-            disconnectingEmail={disconnectingEmail}
-            onUnlink={setConfirmDisconnectEmail}
-            primaryOnly={gcalPrimaryOnly}
-            onPrimaryOnlyChange={setGcalPrimaryOnly}
-            isConnecting={isConnecting}
-            onAddAnother={handleConnect}
+            connected={googleCalendarManaged}
+            managed={googleCalendarManaged}
+            isConnecting={false}
           />
 
           <ProviderRow
@@ -428,103 +370,6 @@ export default function IntegrationsView({ isPaid, onUpgrade }: IntegrationsView
           )}
         </SettingsPanel>
       </div>
-
-      <div>
-        <SectionLabel>{t("integrations.sections.api")}</SectionLabel>
-        <SettingsPanel>
-          <SettingsPanelRow>
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-primary/5 dark:bg-primary/10 flex items-center justify-center shrink-0">
-                <Code2 className="h-4 w-4 text-primary/80" strokeWidth={2} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-foreground">
-                  {t("integrations.api.title")}
-                </p>
-                <p className="text-xs text-muted-foreground/70 mt-0.5 leading-relaxed">
-                  {isPaid ? t("integrations.api.description") : t("integrations.api.proRequired")}
-                </p>
-              </div>
-              {isPaid ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setApiKeysDialogOpen(true)}
-                  className="shrink-0"
-                >
-                  {t("integrations.api.manage")}
-                </Button>
-              ) : (
-                <Button size="sm" onClick={onUpgrade} className="shrink-0">
-                  {t("integrations.api.viewPlans")}
-                </Button>
-              )}
-            </div>
-          </SettingsPanelRow>
-        </SettingsPanel>
-      </div>
-
-      <div>
-        <SectionLabel>{t("integrations.sections.mcp")}</SectionLabel>
-        <McpIntegrationCard isPaid={isPaid} onUpgrade={onUpgrade} />
-      </div>
-
-      <div>
-        <SectionLabel>{t("integrations.sections.cli")}</SectionLabel>
-        <CliIntegrationCard isPaid={isPaid} onUpgrade={onUpgrade} />
-      </div>
-
-      {!hasAccounts && (
-        <div className="rounded-lg border border-border/40 dark:border-border-subtle/40 bg-muted/20 dark:bg-surface-2/30 p-4 flex items-start gap-3">
-          <Info size={15} className="text-primary/60 shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-foreground/80">
-              {t("integrations.notABot.title")}
-            </p>
-            <p className="text-xs text-muted-foreground/60 mt-0.5 leading-relaxed">
-              {t("integrations.notABot.description")}
-            </p>
-          </div>
-        </div>
-      )}
-
-      <Dialog open={apiKeysDialogOpen} onOpenChange={setApiKeysDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{t("integrations.api.dialogTitle")}</DialogTitle>
-            <DialogDescription asChild>
-              <span className="text-xs text-muted-foreground/80 leading-relaxed">
-                {t("apiKeysSection.description")}
-                <span className="mx-1.5 text-muted-foreground/30">·</span>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-primary/80 hover:text-primary transition-colors"
-                  onClick={() => window.electronAPI?.openExternal?.(API_DOCS_URL)}
-                >
-                  {t("apiKeysSection.docsLink")}
-                </button>
-              </span>
-            </DialogDescription>
-          </DialogHeader>
-          <ApiKeysSection />
-        </DialogContent>
-      </Dialog>
-
-      <ConfirmDialog
-        open={!!confirmDisconnectEmail}
-        onOpenChange={(open) => {
-          if (!open) setConfirmDisconnectEmail(null);
-        }}
-        title={t("integrations.googleCalendar.disconnectConfirm", {
-          email: confirmDisconnectEmail,
-        })}
-        description={t("integrations.googleCalendar.disconnectDescription")}
-        confirmText={t("integrations.googleCalendar.disconnect")}
-        variant="destructive"
-        onConfirm={() => {
-          if (confirmDisconnectEmail) handleDisconnect(confirmDisconnectEmail);
-        }}
-      />
 
       <ConfirmDialog
         open={!!confirmMsDisconnectEmail}

@@ -196,6 +196,18 @@ class MeetingDetectionEngine {
           }
         }
 
+        const isRealEvent =
+          detection.event?.calendar_id &&
+          detection.event.calendar_id !== "__detected__" &&
+          detection.event.calendar_id !== "__manual__";
+        // Notification, Home, and hotkey starts all converge on the same
+        // encounter transaction, preventing duplicate meeting notes on retry.
+        if (isRealEvent) {
+          const result = await this.joinCalendarMeeting(detection.event.id, "calendar-join");
+          if (result?.success) this.audioActivityDetector.resetPrompt();
+          return result;
+        }
+
         const eventSummary = detection.event?.summary || "New note";
 
         const noteResult = this.databaseManager.saveNote(eventSummary, "", "meeting");
@@ -213,23 +225,6 @@ class MeetingDetectionEngine {
         this._meetingModeActive = true;
 
         broadcastToWindows("note-added", noteResult.note);
-
-        const isRealEvent =
-          detection.event?.calendar_id &&
-          detection.event.calendar_id !== "__detected__" &&
-          detection.event.calendar_id !== "__manual__";
-
-        if (isRealEvent) {
-          const calEvent = this.databaseManager.getCalendarEventById(detection.event.id);
-          const updates = { calendar_event_id: detection.event.id };
-          if (calEvent?.attendees) {
-            updates.participants = calEvent.attendees;
-          }
-          const updateResult = this.databaseManager.updateNote(noteResult.note.id, updates);
-          if (updateResult?.success && updateResult?.note) {
-            broadcastToWindows("note-updated", updateResult.note);
-          }
-        }
 
         await this.windowManager.queueMeetingNoteNavigation({
           noteId: noteResult.note.id,
@@ -294,9 +289,48 @@ class MeetingDetectionEngine {
     });
   }
 
-  async joinCalendarMeeting(eventId, trigger = "calendar-join") {
-    this._meetingModeActive = true;
+  async joinCalendarMeeting(eventId, trigger = "calendar-join", { meetingContext = null } = {}) {
     debugLogger.info("Joining calendar meeting", { eventId, trigger }, "meeting");
+
+    if (typeof this.databaseManager.startEncounterForCalendarEvent === "function") {
+      const startResult = this.databaseManager.startEncounterForCalendarEvent(eventId, {
+        meetingContext,
+      });
+      if (!startResult?.success || !startResult.note?.id) {
+        debugLogger.error(
+          "Join calendar meeting failed",
+          { eventId, error: startResult?.error || "Unable to start encounter" },
+          "meeting"
+        );
+        this._meetingModeActive = false;
+        return startResult || { success: false, error: "Unable to start encounter." };
+      }
+
+      const calEvent = this.databaseManager.getCalendarEventById(eventId);
+      const folderId = startResult.note.folder_id || this.databaseManager.getMeetingsFolder()?.id;
+      if (!folderId) {
+        this._meetingModeActive = false;
+        return { success: false, error: "Meetings folder not found." };
+      }
+
+      this._meetingModeActive = true;
+      if (startResult.createdNote) {
+        broadcastToWindows("note-added", startResult.note);
+      } else {
+        broadcastToWindows("note-updated", startResult.note);
+      }
+      await this.windowManager.queueMeetingNoteNavigation({
+        noteId: startResult.note.id,
+        folderId,
+        event: calEvent,
+        trigger,
+      });
+      return startResult;
+    }
+
+    // Compatibility fallback for injected legacy test doubles. Production uses
+    // the encounter transaction above.
+    this._meetingModeActive = true;
 
     const calEvent = this.databaseManager.getCalendarEventById(eventId);
     if (!calEvent) {

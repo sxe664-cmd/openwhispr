@@ -1,4 +1,3 @@
-import { withSessionRefresh } from "../lib/auth";
 import { resolveTranscriptionRoute } from "../helpers/transcriptionRoute";
 import { getTranscriptionProviders } from "../models/ModelRegistry";
 
@@ -9,7 +8,6 @@ export interface FileTranscriptionResult {
   code?: string;
   diarized?: boolean;
   warning?: string;
-  // Set alongside `warning` by the chunked cloud path: how much audio was lost.
   failedChunks?: number;
   totalChunks?: number;
 }
@@ -26,7 +24,6 @@ export interface FileTranscriptionConfig {
   localTranscriptionProvider: string;
   whisperModel: string;
   parakeetModel: string;
-  isOpenWhisprCloud: boolean;
   getApiKey: () => string;
   cloudTranscriptionProvider: string;
   cloudTranscriptionBaseUrl: string;
@@ -47,18 +44,6 @@ export async function transcribeFile(
   diarize: boolean,
   opts: { requestId?: string } = {}
 ): Promise<FileTranscriptionResult> {
-  if (cfg.isOpenWhisprCloud) {
-    return withSessionRefresh(async () => {
-      const r = await window.electronAPI.transcribeAudioFileCloud!(filePath, opts);
-      if (!r.success && r.code) {
-        throw Object.assign(new Error(r.error || "Cloud transcription failed"), {
-          code: r.code,
-        });
-      }
-      return r;
-    });
-  }
-
   if (cfg.useLocalWhisper) {
     return window.electronAPI.transcribeAudioFile(filePath, {
       provider: cfg.localTranscriptionProvider as "whisper" | "nvidia",
@@ -116,7 +101,6 @@ export function shouldUseByokDiarize(
   return (
     diarizationEnabled &&
     !cfg.useLocalWhisper &&
-    !cfg.isOpenWhisprCloud &&
     cfg.transcriptionMode !== "self-hosted" &&
     (cfg.cloudTranscriptionProvider === "openai" || cfg.cloudTranscriptionProvider === "mistral")
   );

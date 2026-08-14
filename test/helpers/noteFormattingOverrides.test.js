@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 const load = () => import("../../src/helpers/noteFormattingOverrides.js");
 
-test("cloud mode routes to openwhispr and ignores self-hosted fields", async () => {
+test("legacy cloud mode does not select the removed hosted provider", async () => {
   const { buildNoteFormattingOverrides } = await load();
   const overrides = buildNoteFormattingOverrides(
     { mode: "self-hosted", remoteUrl: "http://192.168.1.126:11434/v1", customApiKey: "secret" },
@@ -11,7 +11,7 @@ test("cloud mode routes to openwhispr and ignores self-hosted fields", async () 
   );
   assert.deepEqual(overrides, {
     inferenceScope: "noteFormatting",
-    provider: "openwhispr",
+    provider: undefined,
     baseUrl: undefined,
     customApiKey: undefined,
     lanUrl: undefined,

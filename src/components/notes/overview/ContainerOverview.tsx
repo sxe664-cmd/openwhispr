@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, UserPlus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import InviteTeammateDialog from "../../InviteTeammateDialog";
-import { useWorkspaceStore } from "../../../stores/workspaceStore";
-import { canManageSpace } from "../../../lib/spacePermissions";
 import {
   useNotes,
   useNotesByContainer,
@@ -36,14 +33,12 @@ export function ContainerOverview({
   onAddExisting,
 }: ContainerOverviewProps) {
   const { t } = useTranslation();
-  const workspaces = useWorkspaceStore((s) => s.workspaces);
   const folders = useFolders();
   const containerNotes = useNotes();
   const notesByContainer = useNotesByContainer();
   const folderCounts = useFolderCounts();
   const spaceRootCounts = useSpaceRootCounts();
   const [spaceNotes, setSpaceNotes] = useState<NoteItem[] | null>(null);
-  const [showInviteDialog, setShowInviteDialog] = useState(false);
 
   // Folder overviews mirror the store's active container; space overviews list
   // the whole space (foldered + root), which the store doesn't hold — fetched
@@ -68,15 +63,6 @@ export function ContainerOverview({
 
   const chat = useContainerChat({ space, folder, notes });
 
-  const workspace = space.workspace_id
-    ? workspaces.find((w) => w.id === space.workspace_id)
-    : undefined;
-  const canInvite =
-    space.kind === "team" &&
-    !!space.cloud_space_id &&
-    !!workspace &&
-    canManageSpace(space, workspace.role ?? null);
-
   const spaceFolders = useMemo(
     () => folders.filter((f) => f.space_id === space.id),
     [folders, space.id]
@@ -89,14 +75,10 @@ export function ContainerOverview({
       (spaceRootCounts[space.id] ?? 0);
 
   const metaParts: string[] = [];
-  if (space.kind === "team" && workspace) metaParts.push(workspace.name);
   if (!folder && spaceFolders.length > 0) {
     metaParts.push(t("notes.overview.meta.folders", { count: spaceFolders.length }));
   }
   metaParts.push(t("notes.spaces.noteCount", { count: noteCount }));
-  if (space.kind === "team" && space.member_count != null) {
-    metaParts.push(t("notes.overview.meta.members", { count: space.member_count }));
-  }
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
@@ -109,7 +91,7 @@ export function ContainerOverview({
             {folder?.name ?? space.name}
           </h1>
           <p className="text-[13px] text-foreground/50 dark:text-foreground/40">
-            {t(`notes.overview.subtitle.${space.kind === "team" ? "team" : "private"}`)}
+            {t("notes.overview.subtitle.private")}
           </p>
           <p className="text-xs text-foreground/35 dark:text-foreground/25">
             {metaParts.join(" · ")}
@@ -125,19 +107,10 @@ export function ContainerOverview({
                 {t("notes.list.newNote")}
               </button>
             )}
-            {canInvite && (
-              <button
-                onClick={() => setShowInviteDialog(true)}
-                className="inline-flex items-center gap-1.5 px-3 h-7 rounded-md border border-border/40 dark:border-white/10 text-xs font-medium text-foreground/60 hover:text-foreground/85 hover:border-border/70 hover:bg-foreground/3 dark:hover:bg-white/3 transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/30"
-              >
-                <UserPlus size={12} />
-                {t("notes.overview.invite")}
-              </button>
-            )}
           </div>
         </div>
 
-        <OverviewExplainerBanner kind={space.kind === "team" ? "team" : "private"} />
+        <OverviewExplainerBanner />
 
         <OverviewAskSection
           messages={chat.messages}
@@ -162,15 +135,6 @@ export function ContainerOverview({
         </div>
       </div>
 
-      {canInvite && workspace && space.cloud_space_id && (
-        <InviteTeammateDialog
-          open={showInviteDialog}
-          onOpenChange={setShowInviteDialog}
-          workspaceId={workspace.id}
-          workspaceName={workspace.name}
-          teamIds={space.teams.map((team) => team.id)}
-        />
-      )}
     </div>
   );
 }

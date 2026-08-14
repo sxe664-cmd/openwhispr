@@ -181,6 +181,16 @@ temp/
 out/
 dist/
 build/
+build/ai-receptionist-dad-stage/
+build/electron-builder.dad-*.json
+
+# Vendored AIReceptionist source is committed; its platform Python runtime is
+# generated during the build for the host architecture.
+vendor/ai-receptionist/python-runtime/
+
+# The private seed is intentionally part of the private OpenWhispr edition so
+# a clone can build without a sibling checkout or manual provider setup.
+!vendor/ai-receptionist/private-seed/.env.local
 *.dmg
 *.exe
 *.deb

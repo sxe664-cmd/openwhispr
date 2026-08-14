@@ -223,7 +223,7 @@ export default function DictationAgentSettings() {
           {screenContextActive && useDictationAgentVisionModel && (
             <InferenceConfigEditor
               scope="dictationAgentVision"
-              allowedModes={["openwhispr", "providers"]}
+                allowedModes={["providers", "local"]}
             />
           )}
         </div>
