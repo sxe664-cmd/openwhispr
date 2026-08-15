@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 ReminderChannel = Literal["email", "sms"]
-ReminderPhase = Literal["confirmation", "pre", "post", "manual"]
+ReminderPhase = Literal["confirmation", "pre", "post"]
 ReminderStatus = Literal["scheduled", "claimed", "sent", "failed", "skipped", "cancelled", "suppressed"]
 
 
@@ -22,7 +22,6 @@ class AppointmentEvent:
     notes: str = ""
     attendee_emails: tuple[str, ...] = ()
     contact_match_keys: tuple[str, ...] = ()
-    has_self_attendee: bool | None = None
     contact_email: str | None = None
     contact_email_source: str | None = None
     contact_email_recovered_at: str | None = None
@@ -35,6 +34,10 @@ class AppointmentEvent:
     original_start_time: str | None = None
     all_day: bool = False
     status: str = "confirmed"
+    # Managed appointments carry these opaque IDs in Google private
+    # extendedProperties. They are never inferred from title/description.
+    patient_id: str | None = None
+    appointment_id: str | None = None
 
     @property
     def event_key(self) -> str:

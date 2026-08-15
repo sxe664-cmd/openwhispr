@@ -8,6 +8,11 @@ const { normalizeStoredSpeakerCount } = require("./speakerCount");
 const { localDayRange, normalizeRange, MAX_CALENDAR_ROWS } = require("./calendarContract");
 const {
   formatEncounterAutoTitle,
+  normalizeAppointmentId,
+  normalizeOpaqueId,
+  normalizePatientDob,
+  normalizePatientEmail,
+  normalizePatientPhone,
   parsePatientMetadata,
   resolvePatientIdentity,
 } = require("./patientIdentity");
@@ -21,7 +26,11 @@ const ENCOUNTER_OUTPUT_STATUSES = new Set(["pending", "processing", "ready", "fa
 const PATIENT_RESOLUTIONS = [
   "created",
   "matched",
+  "unassigned_review",
   "unassigned_missing_email",
+  "unassigned_missing_demographics",
+  "unassigned_no_exact_match",
+  "unassigned_unknown_patient_id",
   "unassigned_multiple_attendees",
   "unassigned_conflict",
   "unassigned_invalid_metadata",
@@ -131,6 +140,8 @@ const CALENDAR_EVENT_PUBLIC_COLUMNS = [
   "timezone",
   "recurrence",
   "capabilities",
+  "patient_id",
+  "appointment_id",
   "synced_at",
 ].join(", ");
 
@@ -140,7 +151,15 @@ const CALENDAR_EVENT_PUBLIC_COLUMNS_QUALIFIED = CALENDAR_EVENT_PUBLIC_COLUMNS.sp
 
 function normalizePatientMetadataForStorage(value, { allowLegacySource = false } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const allowedKeys = new Set(["name", "email", "phone", "source"]);
+  const allowedKeys = new Set([
+    "name",
+    "email",
+    "phone",
+    "dob",
+    "patient_id",
+    "appointment_id",
+    "source",
+  ]);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
   if (
     value.source != null &&
@@ -218,6 +237,7 @@ class DatabaseManager {
       this.db = new Database(dbPath);
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("foreign_keys = ON");
+      this._attachPatientRegistry();
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS transcriptions (
@@ -647,6 +667,11 @@ class DatabaseManager {
           conference_data TEXT,
           organizer_email TEXT,
           attendees_count INTEGER DEFAULT 0,
+          patient_id TEXT,
+          dob TEXT,
+          normalized_phone TEXT,
+          normalized_email TEXT,
+          appointment_id TEXT,
           synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
@@ -719,6 +744,11 @@ class DatabaseManager {
         "timezone TEXT",
         "recurrence TEXT",
         "capabilities TEXT",
+        "patient_id TEXT",
+        "dob TEXT",
+        "normalized_phone TEXT",
+        "normalized_email TEXT",
+        "appointment_id TEXT",
         "patient_metadata TEXT",
       ]) {
         try {
@@ -733,6 +763,11 @@ class DatabaseManager {
             REFERENCES calendar_events(id) ON DELETE CASCADE,
           metadata_json TEXT NOT NULL,
           source TEXT NOT NULL CHECK (source = 'structured_description'),
+          patient_id TEXT,
+          dob TEXT,
+          normalized_phone TEXT,
+          normalized_email TEXT,
+          appointment_id TEXT,
           self_attendee_present INTEGER
             CHECK (self_attendee_present IN (0, 1) OR self_attendee_present IS NULL),
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -748,6 +783,19 @@ class DatabaseManager {
         `);
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
+      }
+      for (const column of [
+        "patient_id TEXT",
+        "dob TEXT",
+        "normalized_phone TEXT",
+        "normalized_email TEXT",
+        "appointment_id TEXT",
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE calendar_patient_metadata ADD COLUMN ${column}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
       }
 
       // Earlier development builds wrote an already-sanitized JSON payload to
@@ -831,6 +879,11 @@ class DatabaseManager {
             CHECK (meeting_context IS NULL OR meeting_context IN ('in_person', 'telehealth')),
           attendees_count INTEGER NOT NULL DEFAULT 0,
           attendees TEXT,
+          patient_id TEXT,
+          dob TEXT,
+          normalized_phone TEXT,
+          normalized_email TEXT,
+          appointment_id TEXT,
           patient_profile_id INTEGER REFERENCES patient_profiles(id),
           patient_resolution TEXT NOT NULL DEFAULT 'unassigned_missing_email'
             CHECK (patient_resolution IN (${PATIENT_RESOLUTION_SQL})),
@@ -850,6 +903,11 @@ class DatabaseManager {
       for (const [column, definition] of [
         ["patient_profile_id", "INTEGER REFERENCES patient_profiles(id)"],
         ["patient_resolution", "TEXT NOT NULL DEFAULT 'unassigned_missing_email'"],
+        ["patient_id", "TEXT"],
+        ["dob", "TEXT"],
+        ["normalized_phone", "TEXT"],
+        ["normalized_email", "TEXT"],
+        ["appointment_id", "TEXT"],
       ]) {
         try {
           this.db.exec(`ALTER TABLE encounters ADD COLUMN ${column} ${definition}`);
@@ -908,6 +966,21 @@ class DatabaseManager {
       `);
       this.db.exec(
         "CREATE INDEX IF NOT EXISTS idx_patient_profiles_folder ON patient_profiles(folder_id)"
+      );
+
+      // Managed patient demographics stay in the shared registry. This local
+      // table owns only the Hira workspace mapping, so notes/folders remain
+      // entirely inside transcriptions.db without copying a registry row.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS patient_workspaces (
+          patient_id TEXT PRIMARY KEY,
+          folder_id INTEGER NOT NULL UNIQUE REFERENCES folders(id),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_patient_workspaces_folder ON patient_workspaces(folder_id)"
       );
 
       // Clinical encounter outputs deliberately live beside, rather than in,
@@ -1436,6 +1509,98 @@ class DatabaseManager {
       debugLogger.error("Database initialization failed", { error: error.message }, "database");
       throw error;
     }
+  }
+
+  _attachPatientRegistry() {
+    this.patientRegistryPath = null;
+    this.patientRegistryTables = null;
+    const configuredPath = String(process.env.HIRA_PATIENT_REGISTRY_PATH || "").trim();
+    if (!configuredPath) return;
+
+    const registryPath = path.resolve(configuredPath);
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+    this.db.prepare("ATTACH DATABASE ? AS hira_registry").run(registryPath);
+    this.patientRegistryPath = registryPath;
+
+    // This is the shared v1 contract. The Python receptionist owns writes,
+    // while Hira reads it through SQLite's same-file attachment. Keep these
+    // names identical across both runtimes; a similar-but-different schema
+    // would make identity resolution appear to work while silently dropping
+    // appointment links.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS hira_registry.patients (
+        patient_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        dob TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        normalized_name TEXT NOT NULL,
+        normalized_dob TEXT NOT NULL,
+        normalized_phone TEXT,
+        normalized_email TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE IF NOT EXISTS hira_registry.appointments (
+        appointment_id TEXT PRIMARY KEY,
+        patient_id TEXT NOT NULL,
+        start TEXT NOT NULL,
+        end TEXT NOT NULL,
+        type TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        google_event_id TEXT,
+        status TEXT NOT NULL,
+        source TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    const columns = (table) =>
+      this.db.prepare(`SELECT name FROM hira_registry.pragma_table_info(?)`).all(table).map((column) => column.name);
+    const ensureColumn = (table, name, definition) => {
+      if (!columns(table).includes(name)) {
+        this.db.exec(`ALTER TABLE hira_registry.${table} ADD COLUMN ${name} ${definition}`);
+      }
+    };
+    // Upgrade the short-lived prototype schema without dropping a local
+    // registry. Newly created databases already have these columns; older
+    // databases get nullable compatibility columns and are then safe for the
+    // Python writer's explicit INSERT statements.
+    for (const [name, definition] of [
+      ["name", "TEXT"], ["phone", "TEXT"], ["email", "TEXT"],
+      ["normalized_name", "TEXT"], ["normalized_dob", "TEXT"],
+      ["normalized_phone", "TEXT"], ["normalized_email", "TEXT"],
+      ["active", "INTEGER DEFAULT 1"],
+    ]) ensureColumn("patients", name, definition);
+    for (const [name, definition] of [
+      ["start", "TEXT"], ["end", "TEXT"], ["type", "TEXT"],
+      ["provider", "TEXT"], ["calendar_id", "TEXT"], ["google_event_id", "TEXT"],
+      ["status", "TEXT"], ["source", "TEXT"], ["idempotency_key", "TEXT"],
+    ]) ensureColumn("appointments", name, definition);
+    if (columns("patients").includes("display_name")) {
+      this.db.exec("UPDATE hira_registry.patients SET name = COALESCE(name, display_name) WHERE name IS NULL");
+    }
+    if (columns("patients").includes("date_of_birth")) {
+      this.db.exec("UPDATE hira_registry.patients SET dob = COALESCE(dob, date_of_birth) WHERE dob IS NULL");
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_dob_phone
+        ON patients(normalized_dob, normalized_phone);
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_dob_email
+        ON patients(normalized_dob, normalized_email);
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_appointments_patient
+        ON appointments(patient_id);
+    `);
+    this.patientRegistryTables = {
+      patients: "patients",
+      appointments: "appointments",
+      patientColumns: columns("patients"),
+      appointmentColumns: columns("appointments"),
+    };
   }
 
   saveTranscription(
@@ -3826,13 +3991,25 @@ class DatabaseManager {
 
         const upsertMetadata = this.db.prepare(`
           INSERT INTO calendar_patient_metadata (
-            calendar_event_id, metadata_json, source, self_attendee_present, updated_at
-          ) VALUES (?, ?, 'structured_description', ?, CURRENT_TIMESTAMP)
+            calendar_event_id, metadata_json, source, patient_id, dob,
+            normalized_phone, normalized_email, appointment_id,
+            self_attendee_present, updated_at
+          ) VALUES (?, ?, 'structured_description', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
           ON CONFLICT(calendar_event_id) DO UPDATE SET
             metadata_json = excluded.metadata_json,
             source = excluded.source,
+            patient_id = excluded.patient_id,
+            dob = excluded.dob,
+            normalized_phone = excluded.normalized_phone,
+            normalized_email = excluded.normalized_email,
+            appointment_id = excluded.appointment_id,
             self_attendee_present = excluded.self_attendee_present,
             updated_at = CURRENT_TIMESTAMP
+        `);
+        const updatePrivateEventFields = this.db.prepare(`
+          UPDATE calendar_events
+          SET patient_id = ?, dob = ?, normalized_phone = ?, normalized_email = ?, appointment_id = ?
+          WHERE id = ?
         `);
         const deleteMetadata = this.db.prepare(
           "DELETE FROM calendar_patient_metadata WHERE calendar_event_id = ?"
@@ -3844,10 +4021,24 @@ class DatabaseManager {
             upsertMetadata.run(
               publicEvent.id,
               JSON.stringify(metadata),
+              metadata.patient_id || null,
+              metadata.dob || null,
+              metadata.phone || null,
+              metadata.email || null,
+              metadata.appointment_id || null,
               normalizeSelfAttendeePresentForStorage(selfAttendeePresent)
+            );
+            updatePrivateEventFields.run(
+              metadata.patient_id || null,
+              metadata.dob || null,
+              metadata.phone || null,
+              metadata.email || null,
+              metadata.appointment_id || null,
+              publicEvent.id
             );
           } else {
             deleteMetadata.run(publicEvent.id);
+            updatePrivateEventFields.run(null, null, null, null, null, publicEvent.id);
           }
         }
       });
@@ -3869,8 +4060,9 @@ class DatabaseManager {
         const stmt = this.db.prepare(`
           INSERT INTO encounters (
             calendar_event_id, provider, calendar_id, title, start_time, end_time,
-            source_status, attendees_count, attendees, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            source_status, attendees_count, attendees, patient_id, dob,
+            normalized_phone, normalized_email, appointment_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
           ON CONFLICT(calendar_event_id) DO UPDATE SET
             provider = excluded.provider,
             calendar_id = excluded.calendar_id,
@@ -3880,6 +4072,11 @@ class DatabaseManager {
             source_status = excluded.source_status,
             attendees_count = excluded.attendees_count,
             attendees = excluded.attendees,
+            patient_id = COALESCE(excluded.patient_id, encounters.patient_id),
+            dob = COALESCE(excluded.dob, encounters.dob),
+            normalized_phone = COALESCE(excluded.normalized_phone, encounters.normalized_phone),
+            normalized_email = COALESCE(excluded.normalized_email, encounters.normalized_email),
+            appointment_id = COALESCE(excluded.appointment_id, encounters.appointment_id),
             lifecycle_state = CASE
               WHEN encounters.note_id IS NULL
                 AND encounters.lifecycle_state = 'scheduled'
@@ -3898,6 +4095,9 @@ class DatabaseManager {
         `);
         for (const event of eventList || []) {
           if (!event?.id || !event.start_time || !event.end_time) continue;
+          const privateFields = this.db
+            .prepare("SELECT patient_id, dob, normalized_phone, normalized_email, appointment_id FROM calendar_events WHERE id = ?")
+            .get(event.id) || {};
           stmt.run(
             event.id,
             event.provider || null,
@@ -3907,7 +4107,12 @@ class DatabaseManager {
             event.end_time,
             event.status || "confirmed",
             Number(event.attendees_count) || 0,
-            event.attendees || null
+            event.attendees || null,
+            privateFields.patient_id || event.patient_id || null,
+            privateFields.dob || event.dob || null,
+            privateFields.normalized_phone || event.normalized_phone || null,
+            privateFields.normalized_email || event.normalized_email || null,
+            privateFields.appointment_id || event.appointment_id || event.id || null
           );
         }
       });
@@ -4095,6 +4300,7 @@ class DatabaseManager {
   }
 
   _resolvePatientForEncounter(calendarEvent, encounter) {
+    if (this.patientRegistryPath) return this._resolveManagedPatientForEncounter(calendarEvent, encounter);
     const privateSpaceId = this.getPrivateSpaceId();
     const loadProfile = (where, value) =>
       this.db
@@ -4195,6 +4401,129 @@ class DatabaseManager {
     };
   }
 
+  _getManagedRegistryPatients() {
+    if (!this.patientRegistryPath) return [];
+    try {
+      return this.db
+        .prepare("SELECT patient_id, name, dob, normalized_dob, normalized_phone, normalized_email, phone, email, active FROM hira_registry.patients WHERE active = 1")
+        .all();
+    } catch {
+      // A partially initialized registry should fail closed. Returning a
+      // guessed legacy projection here could attach an encounter to a
+      // patient without the v1 identity evidence.
+      return [];
+    }
+  }
+
+  _getManagedAppointmentPatient(appointmentId) {
+    if (!this.patientRegistryPath || !appointmentId) return null;
+    return this.db
+      .prepare("SELECT appointment_id, patient_id FROM hira_registry.appointments WHERE appointment_id = ?")
+      .get(appointmentId) || null;
+  }
+
+  _getOrCreateUnlinkedEncountersFolder() {
+    const privateSpaceId = this.getPrivateSpaceId();
+    let folder = this.db
+      .prepare("SELECT * FROM folders WHERE name = ? AND space_id = ? AND deleted_at IS NULL LIMIT 1")
+      .get("Unlinked Encounters", privateSpaceId);
+    if (folder) return folder;
+    const maxOrder = this.db
+      .prepare("SELECT MAX(sort_order) AS max_order FROM folders WHERE space_id = ?")
+      .get(privateSpaceId);
+    const result = this.db
+      .prepare("INSERT INTO folders (name, sort_order, space_id, client_folder_id) VALUES (?, ?, ?, ?)")
+      .run("Unlinked Encounters", (maxOrder?.max_order ?? 0) + 1, privateSpaceId, randomUUID());
+    return this.db.prepare("SELECT * FROM folders WHERE id = ?").get(result.lastInsertRowid);
+  }
+
+  _resolveManagedPatientForEncounter(calendarEvent, encounter) {
+    const metadata = parseLegacyPatientMetadata(calendarEvent.patient_metadata) || {
+      patient_id: calendarEvent.patient_id || null,
+      appointment_id: calendarEvent.appointment_id || null,
+      dob: calendarEvent.dob || null,
+      phone: calendarEvent.normalized_phone || null,
+      email: calendarEvent.normalized_email || null,
+      source: "structured_description",
+    };
+    if (!metadata.patient_id && calendarEvent.patient_id) metadata.patient_id = calendarEvent.patient_id;
+    if (!metadata.appointment_id && calendarEvent.appointment_id) metadata.appointment_id = calendarEvent.appointment_id;
+    const appointmentPatient = this._getManagedAppointmentPatient(metadata.appointment_id);
+    const identity = resolvePatientIdentity({
+      patientMetadata: metadata,
+      registryPatients: this._getManagedRegistryPatients(),
+      appointmentPatient,
+    });
+    const privateSpaceId = this.getPrivateSpaceId();
+
+    if (!identity.patientId) {
+      const folder = this._getOrCreateUnlinkedEncountersFolder();
+      return {
+        profile: null,
+        patientId: null,
+        appointmentId: normalizeAppointmentId(identity.appointmentId || calendarEvent.appointment_id),
+        dob: identity.normalizedDob || metadata.dob || null,
+        normalizedEmail: identity.normalizedEmail || metadata.email || null,
+        normalizedPhone: identity.phone || metadata.phone || null,
+        resolution: "unassigned_review",
+        folderAvailable: !!folder,
+        folderId: folder?.id || null,
+      };
+    }
+
+    let workspace = this.db
+      .prepare(
+        `SELECT pw.*, f.space_id, f.deleted_at AS folder_deleted_at
+         FROM patient_workspaces pw JOIN folders f ON f.id = pw.folder_id
+         WHERE pw.patient_id = ?`
+      )
+      .get(identity.patientId);
+    if (workspace && (workspace.folder_deleted_at != null || workspace.space_id !== privateSpaceId)) {
+      return {
+        profile: null,
+        patientId: identity.patientId,
+        appointmentId: normalizeAppointmentId(identity.appointmentId || calendarEvent.appointment_id),
+        dob: identity.normalizedDob,
+        normalizedEmail: identity.normalizedEmail,
+        normalizedPhone: identity.phone,
+        resolution: "unassigned_folder_unavailable",
+        folderAvailable: false,
+        folderId: null,
+      };
+    }
+
+    if (!workspace) {
+      const registryPatient = this._getManagedRegistryPatients().find(
+        (patient) => String(patient.patient_id) === identity.patientId
+      );
+      const labelBase = String(identity.displayName || registryPatient?.name || `Patient ${identity.patientId.slice(0, 12)}`)
+        .replace(/[\\/:*?"<>|]/g, "-")
+        .trim()
+        .slice(0, 100) || "Patient";
+      let label = labelBase;
+      let counter = 2;
+      while (this.db.prepare("SELECT id FROM folders WHERE name = ? AND space_id = ? AND deleted_at IS NULL").get(label, privateSpaceId)) {
+        label = `${labelBase} (${counter})`;
+        counter += 1;
+      }
+      const maxOrder = this.db.prepare("SELECT MAX(sort_order) AS max_order FROM folders WHERE space_id = ?").get(privateSpaceId);
+      const folderResult = this.db.prepare("INSERT INTO folders (name, sort_order, space_id, client_folder_id) VALUES (?, ?, ?, ?)").run(label, (maxOrder?.max_order ?? 0) + 1, privateSpaceId, randomUUID());
+      this.db.prepare("INSERT INTO patient_workspaces (patient_id, folder_id) VALUES (?, ?)").run(identity.patientId, folderResult.lastInsertRowid);
+      workspace = this.db.prepare("SELECT * FROM patient_workspaces WHERE patient_id = ?").get(identity.patientId);
+    }
+    return {
+      profile: null,
+      patientId: identity.patientId,
+      appointmentId: normalizeAppointmentId(identity.appointmentId || calendarEvent.appointment_id),
+      dob: identity.normalizedDob,
+      normalizedEmail: identity.normalizedEmail,
+      normalizedPhone: identity.phone,
+      resolution: "matched",
+      folderAvailable: true,
+      folderId: workspace.folder_id,
+    };
+  }
+
   _getCalendarEventForPatientResolution(eventId) {
     return (
       this.db
@@ -4239,8 +4568,9 @@ class DatabaseManager {
               `
               INSERT INTO encounters (
                 calendar_event_id, provider, calendar_id, title, start_time, end_time,
-                source_status, lifecycle_state, note_id, attendees_count, attendees, started_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_status, lifecycle_state, note_id, attendees_count, attendees,
+                patient_id, dob, normalized_phone, normalized_email, appointment_id, started_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
             )
             .run(
@@ -4255,6 +4585,11 @@ class DatabaseManager {
               linkedNote?.id || null,
               Number(calendarEvent.attendees_count) || 0,
               calendarEvent.attendees || null,
+              calendarEvent.patient_id || null,
+              calendarEvent.dob || null,
+              calendarEvent.normalized_phone || null,
+              calendarEvent.normalized_email || null,
+              calendarEvent.appointment_id || null,
               linkedNote ? linkedNote.created_at : null
             );
           encounter = this.db
@@ -4297,7 +4632,7 @@ class DatabaseManager {
             "meeting",
             null,
             null,
-            patient.folderAvailable ? patient.profile?.folder_id || null : null
+            patient.folderAvailable ? patient.folderId || patient.profile?.folder_id || null : this._getOrCreateUnlinkedEncountersFolder()?.id || null
           );
           note = noteResult?.note || null;
           createdNote = !!note;
@@ -4315,6 +4650,9 @@ class DatabaseManager {
         if (calendarEvent.attendees && note.participants !== calendarEvent.attendees) {
           noteUpdates.participants = calendarEvent.attendees;
         }
+        if (patient.folderAvailable && patient.folderId && note.folder_id !== patient.folderId) {
+          noteUpdates.folder_id = patient.folderId;
+        }
         if (context && note.meeting_context !== context) noteUpdates.meeting_context = context;
         if (Object.keys(noteUpdates).length > 0) {
           note = this.updateNote(note.id, noteUpdates)?.note || note;
@@ -4326,6 +4664,11 @@ class DatabaseManager {
             UPDATE encounters
             SET note_id = ?,
               patient_profile_id = COALESCE(patient_profile_id, ?),
+              patient_id = COALESCE(patient_id, ?),
+              dob = COALESCE(dob, ?),
+              normalized_phone = COALESCE(normalized_phone, ?),
+              normalized_email = COALESCE(normalized_email, ?),
+              appointment_id = COALESCE(appointment_id, ?),
               patient_resolution = ?,
               lifecycle_state = CASE
                 WHEN lifecycle_state = 'completed' THEN 'completed'
@@ -4340,7 +4683,19 @@ class DatabaseManager {
             WHERE id = ?
           `
           )
-          .run(note.id, patient.profile?.id || null, patient.resolution, context, context, encounter.id);
+          .run(
+            note.id,
+            patient.profile?.id || null,
+            patient.patientId || calendarEvent.patient_id || null,
+            patient.dob || calendarEvent.dob || null,
+            patient.normalizedPhone || calendarEvent.normalized_phone || null,
+            patient.normalizedEmail || calendarEvent.normalized_email || null,
+            patient.appointmentId || calendarEvent.appointment_id || null,
+            patient.resolution,
+            context,
+            context,
+            encounter.id
+          );
 
         encounter = this.db.prepare("SELECT * FROM encounters WHERE id = ?").get(encounter.id);
         const token = this._getNoteTranscriptToken(note.id);
@@ -4351,9 +4706,16 @@ class DatabaseManager {
              ON CONFLICT(encounter_id) DO NOTHING`
           )
           .run(encounter.id, token.transcriptHash, token.transcriptRevision);
+        const rendererEncounter = { ...encounter };
+        // Demographics are needed for the local resolver, not for renderer
+        // consumers. Keep only opaque linkage in the IPC result so contact
+        // data and DOB never cross the calendar/renderer boundary.
+        delete rendererEncounter.dob;
+        delete rendererEncounter.normalized_phone;
+        delete rendererEncounter.normalized_email;
         return {
           success: true,
-          encounter,
+          encounter: rendererEncounter,
           note,
           createdNote,
           // The resolver profile contains contact data and stays main-process
@@ -4361,6 +4723,10 @@ class DatabaseManager {
           // controlled review state, never the profile/folder payload.
           patientProfileId: encounter.patient_profile_id || null,
           patientResolution: encounter.patient_resolution,
+          patient_id: encounter.patient_id || null,
+          appointment_id: encounter.appointment_id || null,
+          patientId: encounter.patient_id || null,
+          appointmentId: encounter.appointment_id || null,
         };
       });
       return transaction();

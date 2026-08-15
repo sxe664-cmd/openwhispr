@@ -26,3 +26,5 @@ class BookingResult:
     start_iso: str
     end_iso: str
     html_link: str
+    patient_id: str | None = None
+    appointment_id: str | None = None

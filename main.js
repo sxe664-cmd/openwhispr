@@ -304,6 +304,15 @@ function initializeCoreManagers() {
 
   windowManager = new WindowManager();
   hotkeyManager = windowManager.hotkeyManager;
+  // The main-process database and the local receptionist sidecar must attach
+  // the same registry file. Set this before DatabaseManager opens SQLite;
+  // an explicit environment override remains useful for controlled tests.
+  if (!process.env.HIRA_PATIENT_REGISTRY_PATH) {
+    process.env.HIRA_PATIENT_REGISTRY_PATH = path.join(
+      app.getPath("userData"),
+      "patient-registry.sqlite3"
+    );
+  }
   databaseManager = new DatabaseManager();
   clipboardManager = new ClipboardManager();
   whisperManager = new WhisperManager();

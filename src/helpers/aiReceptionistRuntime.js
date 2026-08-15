@@ -176,6 +176,10 @@ class AIReceptionistRuntime {
 
   createEnvironment(overrides = {}) {
     const paths = this.resolvePaths();
+    const userDataPath = this.getUserDataPath();
+    const patientRegistryPath = userDataPath
+      ? this.path.join(userDataPath, "patient-registry.sqlite3")
+      : "";
     const pythonPath = [
       paths.sourceRoot,
       ...this._sitePackages(paths.pythonRuntimeRoot),
@@ -190,6 +194,10 @@ class AIReceptionistRuntime {
       RECEPTIONIST_RUNTIME_ROOT: paths.runtimeRoot || "",
       RECEPTIONIST_SEED_ROOT: paths.seedRoot || "",
       RECEPTIONIST_LEGACY_ROOT: paths.runtimeRoot ? this.path.join(paths.runtimeRoot, "legacy") : "",
+      // Hira and its local AI receptionist intentionally share one local,
+      // app-owned registry. Standalone receptionist processes must provide
+      // this explicitly; they must never silently create a second ledger.
+      HIRA_PATIENT_REGISTRY_PATH: patientRegistryPath,
       ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
       ...overrides,
     };

@@ -25,13 +25,9 @@ from receptionist.booking.auth import build_credentials
 from receptionist.booking.appointments import AppointmentChangeError, AppointmentChangeService
 from receptionist.booking.client import GoogleCalendarClient
 from receptionist.config import AppConfig, ConfigError, load_app_config
+from receptionist.patient_registry import PatientRegistry, PatientRegistryError
 from receptionist.reminders.contacts import ContactResolver, load_contacts
-from receptionist.reminders.identity import (
-    normalize_contact_keys,
-    normalize_email,
-    normalize_emails,
-    split_stored_values,
-)
+from receptionist.reminders.identity import normalize_email
 from receptionist.reminders.__main__ import _load_configured_events
 from receptionist.reminders.phone import extract_phone, normalize_us_phone
 from receptionist.reminders.models import AppointmentEvent
@@ -72,22 +68,6 @@ def _rel(path: Path) -> str:
         return str(path.resolve().relative_to(PROJECT_ROOT)).replace("\\", "/")
     except ValueError:
         return str(path)
-
-
-def _claim_manual_reminder(config, event: AppointmentEvent, channel: str):
-    claim = ReminderStore(config.reminders.store_path).claim_manual_slot(
-        event=event,
-        channel=channel,
-    )
-    if claim is None or claim.get("already_sent"):
-        raise ValueError(f"appointment {channel} reminder was already sent")
-    if claim.get("busy"):
-        raise RuntimeError(f"appointment {channel} reminder is already being sent")
-    return ReminderStore(config.reminders.store_path), claim
-
-
-def _manual_result_detail(result: dict[str, Any]) -> str:
-    return json.dumps(result, default=str, sort_keys=True)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -425,14 +405,13 @@ def _calendar_feed_event(
     *,
     contacts: list[Any] | None = None,
     appointment_changes: Any | None = None,
-    include_private_provenance: bool = False,
+    patient_registry: PatientRegistry | None = None,
 ) -> dict[str, Any]:
-    """Project a synced appointment event into a safe or bridge-private feed.
+    """Project a synced appointment event into the bridge's public contract.
 
     Keep this separate from the desktop appointment projection: reminder
     workflows need raw descriptions and recovered contact fields internally,
-    but neither belongs in either feed. The default is safe for Hira; the
-    calendar-events command explicitly opts into the private bridge fields.
+    but neither belongs in the calendar bridge response.
     """
     start_iso = event.start.isoformat()
     projected = {
@@ -451,17 +430,30 @@ def _calendar_feed_event(
         "conference_url": _calendar_feed_conference_url(event.conference_url),
         "html_link": _calendar_feed_link(event.html_link),
     }
-    if include_private_provenance:
-        # The sidecar is the only component allowed to inspect descriptions.
-        # Export a bounded, validated patient block when present; never raw notes.
-        from receptionist.reminders.identity import extract_patient_metadata
-
-        patient_metadata = extract_patient_metadata(event.notes)
-        if patient_metadata:
-            projected["patient_metadata"] = patient_metadata
-        self_attendee_present = getattr(event, "has_self_attendee", None)
-        projected["self_attendee_present"] = (
-            self_attendee_present if type(self_attendee_present) is bool else None
+    # Google-managed events carry the authoritative link in private
+    # extendedProperties; never parse title/description to recover identity.
+    if event.patient_id and event.appointment_id:
+        projected.update(
+            {
+                "patient_id": event.patient_id,
+                "appointment_id": event.appointment_id,
+            }
+        )
+    registry_record = None
+    if not (event.patient_id and event.appointment_id) and patient_registry is not None:
+        try:
+            registry_record = patient_registry.get_appointment_by_google_event_id(
+                calendar_id=event.calendar_id,
+                google_event_id=event.event_id,
+            )
+        except PatientRegistryError:
+            registry_record = None
+    if registry_record is not None:
+        projected.update(
+            {
+                "patient_id": registry_record.patient_id,
+                "appointment_id": registry_record.appointment_id,
+            }
         )
     if contacts is not None:
         appointment = {
@@ -482,6 +474,18 @@ def _calendar_feed_event(
             }
         )
     return projected
+
+
+def _load_patient_registry_for_feed() -> PatientRegistry | None:
+    """Load the shared local registry when the desktop bridge is configured."""
+    if not os.environ.get("HIRA_PATIENT_REGISTRY_PATH"):
+        return None
+    try:
+        registry = PatientRegistry.from_env()
+        registry.init_db()
+        return registry
+    except PatientRegistryError:
+        return None
 
 
 def _calendar_window(
@@ -542,6 +546,7 @@ def calendar_events(args: argparse.Namespace) -> None:
             raise ValueError("calendar-events requires an end after the start")
         load_kwargs.update(window_start=requested_start, window_end=requested_end)
     batch = asyncio.run(_load_configured_events(config, **load_kwargs))
+    patient_registry = _load_patient_registry_for_feed()
     contacts = load_contacts(config.reminders.contacts_path)
     for tombstone in batch.tombstones:
         store.cancel_event(
@@ -559,7 +564,7 @@ def calendar_events(args: argparse.Namespace) -> None:
                 event,
                 contacts=contacts,
                 appointment_changes=getattr(config, "appointment_changes", None),
-                include_private_provenance=True,
+                patient_registry=patient_registry,
             )
             for event in batch.events
         ),
@@ -592,18 +597,6 @@ def calendar_events(args: argparse.Namespace) -> None:
 
 
 def _stored_appointment_event(record: dict[str, Any]) -> AppointmentEvent:
-    stored_attendees = record.get("attendee_emails") or ()
-    attendee_values = (
-        split_stored_values(stored_attendees)
-        if isinstance(stored_attendees, str)
-        else tuple(stored_attendees)
-    )
-    stored_contact_keys = record.get("contact_match_keys") or ()
-    contact_key_values = (
-        split_stored_values(stored_contact_keys)
-        if isinstance(stored_contact_keys, str)
-        else tuple(stored_contact_keys)
-    )
     return AppointmentEvent(
         source=record.get("source") or "google",
         calendar_id=record.get("calendar_id") or "primary",
@@ -614,13 +607,7 @@ def _stored_appointment_event(record: dict[str, Any]) -> AppointmentEvent:
         start=datetime.fromisoformat(record["start_iso"]),
         end=datetime.fromisoformat(record["end_iso"]),
         timezone=record.get("timezone") or "UTC",
-        attendee_emails=normalize_emails(attendee_values),
-        contact_match_keys=normalize_contact_keys(contact_key_values),
-        has_self_attendee=(
-            record.get("self_attendee_present")
-            if type(record.get("self_attendee_present")) is bool
-            else None
-        ),
+        attendee_emails=tuple(record.get("attendee_emails") or ()),
         contact_email=record.get("contact_email"),
         contact_email_source=record.get("contact_email_source"),
         contact_email_recovered_at=record.get("contact_email_recovered_at"),
@@ -670,6 +657,7 @@ def calendar_feed(args: argparse.Namespace) -> None:
     store.init_db()
     current = parse_now(args.now, config.business.timezone)
     batch = asyncio.run(_load_configured_events(config, current=current))
+    patient_registry = _load_patient_registry_for_feed()
     # Calendar browsing is independent from reminder delivery. Persist the
     # normalized event projection even when reminder automation is disabled;
     # sync_events intentionally skips reminder jobs in that mode.
@@ -684,7 +672,10 @@ def calendar_feed(args: argparse.Namespace) -> None:
         tombstones=batch.tombstones,
     )
     events = sorted(
-        (_calendar_feed_event(event) for event in batch.events),
+        (
+            _calendar_feed_event(event, patient_registry=patient_registry)
+            for event in batch.events
+        ),
         key=lambda event: (event["calendar_id"], event["event_id"], event["start_iso"]),
     )[:limit]
     tombstones = [
@@ -871,34 +862,13 @@ def send_appointment_email(args: argparse.Namespace) -> None:
         allowed_emails.add(event.contact_email)
     if attendee_email not in allowed_emails:
         raise ValueError("appointment email recipient is not an attendee or recovered contact for the stored event")
-    store, claim = _claim_manual_reminder(config, event, "email")
-    job = claim["job"]
-    try:
-        result = asyncio.run(
-            send_manual_appointment_email(
-                config=config,
-                event=event,
-                attendee_email=attendee_email,
-            )
+    result = asyncio.run(
+        send_manual_appointment_email(
+            config=config,
+            event=event,
+            attendee_email=attendee_email,
         )
-    except Exception as exc:
-        store.release_manual_slot(
-            job_id=job.id or 0,
-            claim_token=claim["claim_token"],
-            previous_status=claim.get("previous_status"),
-            previous_reason=claim.get("previous_reason"),
-            created=bool(claim.get("created")),
-            provider="email",
-            detail=str(exc),
-        )
-        raise
-    if not store.complete_manual_slot(
-        job_id=job.id or 0,
-        claim_token=claim["claim_token"],
-        provider="email",
-        detail=_manual_result_detail(result),
-    ):
-        raise RuntimeError("appointment email was sent but could not be recorded")
+    )
     _print_json(
         {
             "ok": True,
@@ -918,33 +888,12 @@ def send_appointment_sms(args: argparse.Namespace) -> None:
     )
     if event is None:
         raise ValueError("appointment SMS requires one active stored Google event")
-    store, claim = _claim_manual_reminder(config, event, "sms")
-    job = claim["job"]
-    try:
-        result = asyncio.run(
-            send_manual_appointment_sms(
-                config=config,
-                event=event,
-            )
+    result = asyncio.run(
+        send_manual_appointment_sms(
+            config=config,
+            event=event,
         )
-    except Exception as exc:
-        store.release_manual_slot(
-            job_id=job.id or 0,
-            claim_token=claim["claim_token"],
-            previous_status=claim.get("previous_status"),
-            previous_reason=claim.get("previous_reason"),
-            created=bool(claim.get("created")),
-            provider="sms",
-            detail=str(exc),
-        )
-        raise
-    if not store.complete_manual_slot(
-        job_id=job.id or 0,
-        claim_token=claim["claim_token"],
-        provider="sms",
-        detail=_manual_result_detail(result),
-    ):
-        raise RuntimeError("appointment SMS was sent but could not be recorded")
+    )
     _print_json(
         {
             "ok": True,
@@ -952,18 +901,6 @@ def send_appointment_sms(args: argparse.Namespace) -> None:
             "recipient_phone": result["recipient_phone"],
         }
     )
-
-
-def get_reminder_status(args: argparse.Namespace) -> None:
-    config = _load_app_config()
-    try:
-        events = json.loads(args.events_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError("reminder status requires valid event JSON") from exc
-    if not isinstance(events, list):
-        raise ValueError("reminder status requires an event array")
-    statuses = ReminderStore(config.reminders.store_path).get_reminder_statuses(events)
-    _print_json({"ok": True, "statuses": statuses})
 
 
 def get_email_setup(args: argparse.Namespace) -> None:
@@ -1527,13 +1464,6 @@ def build_parser() -> argparse.ArgumentParser:
     send_sms_parser.add_argument("--event-uid", default="")
     send_sms_parser.add_argument("--calendar-id", default="primary")
     send_sms_parser.set_defaults(func=send_appointment_sms)
-
-    reminder_status_parser = subparsers.add_parser(
-        "reminder-status",
-        help="Read persisted pre-appointment reminder send status",
-    )
-    reminder_status_parser.add_argument("--events-json", required=True)
-    reminder_status_parser.set_defaults(func=get_reminder_status)
 
     email_get_parser = subparsers.add_parser("email-setup")
     email_get_parser.set_defaults(func=get_email_setup)

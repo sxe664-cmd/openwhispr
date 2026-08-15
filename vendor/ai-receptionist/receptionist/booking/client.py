@@ -70,6 +70,10 @@ class GoogleCalendarClient:
         time_zone: str,
         location: str | None = None,
         attendee_email: str | None = None,
+        patient_id: str | None = None,
+        appointment_id: str | None = None,
+        source: str = "ai_receptionist",
+        private_extended_properties: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Create a calendar event. Returns {id, htmlLink, ...}.
 
@@ -97,6 +101,16 @@ class GoogleCalendarClient:
         }
         if location:
             body["location"] = location
+
+        private = dict(private_extended_properties or {})
+        if patient_id is not None:
+            private["patient_id"] = str(patient_id)
+        if appointment_id is not None:
+            private["appointment_id"] = str(appointment_id)
+        if patient_id is not None or appointment_id is not None:
+            private.setdefault("source", source)
+        if private:
+            body["extendedProperties"] = {"private": private}
 
         # If a caller email is provided, add them as an optional attendee.
         # optional=True keeps the event off-impact in the organizer's free/busy:

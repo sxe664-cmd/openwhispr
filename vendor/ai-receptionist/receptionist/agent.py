@@ -33,6 +33,7 @@ from receptionist.config import AppConfig, load_app_config
 from receptionist.lifecycle import CallLifecycle
 from receptionist.messaging.dispatcher import Dispatcher
 from receptionist.messaging.models import DispatchContext, Message
+from receptionist.patient_registry import PatientIdentityError, normalize_dob
 from receptionist.prompts import build_system_prompt
 from receptionist.reminders.phone import normalize_us_phone
 from receptionist.voice_auth import resolve_voice_bearer_async
@@ -1136,6 +1137,8 @@ class Receptionist(Agent):
         proposed_start_iso: str,
         notes: str | None = None,
         caller_email: str | None = None,
+        caller_dob: str | None = None,
+        new_patient: bool = False,
         sms_consent_opted_in: bool = False,
         details_confirmed: bool = False,
     ) -> str:
@@ -1152,6 +1155,11 @@ class Receptionist(Agent):
                 Google sends them the standard invite email with .ics file and
                 accept/decline. Leave None if the caller didn't volunteer an
                 email â€” never make one up.
+            caller_dob: the caller's date of birth in YYYY-MM-DD format. This
+                is required for strict patient identity resolution and is never
+                written to Google Calendar.
+            new_patient: set to True only when the caller explicitly says they
+                are a new patient and no exact existing identity match exists.
             details_confirmed: set to True only after the caller explicitly
                 confirms the read-back of their full name, callback number,
                 and the offered appointment time.
@@ -1210,6 +1218,15 @@ class Receptionist(Agent):
                 "digit-by-digit, and the offered time, then wait for a clear yes."
             )
 
+        try:
+            caller_dob = normalize_dob(caller_dob)
+        except PatientIdentityError:
+            logger.info("book_appointment: missing or invalid caller_dob")
+            return (
+                "I still need the caller's date of birth in YYYY-MM-DD format "
+                "before I can verify the patient record."
+            )
+
         # Light email-shape validation. Google rejects malformed emails too,
         # but catching obvious mishearings here gives a friendlier error.
         if caller_email is not None:
@@ -1242,6 +1259,9 @@ class Receptionist(Agent):
                 client=client,
                 notes=notes,
                 caller_email=caller_email,
+                caller_dob=caller_dob,
+                create_if_missing=new_patient,
+                invite_caller=False,
             )
         except SlotNoLongerAvailableError:
             # Slot just got taken. Find fresh alternatives.
@@ -1287,6 +1307,18 @@ class Receptionist(Agent):
                 "nearby alternatives right now. Would you like me to take a "
                 "message so someone can call you back with options?"
             )
+        except PatientIdentityError as exc:
+            logger.info(
+                "book_appointment: patient identity rejected code=%s",
+                exc.code,
+                extra={"call_id": self.lifecycle.metadata.call_id},
+            )
+            return (
+                "I could not safely verify that patient record. Please confirm "
+                "the date of birth and matching phone or email. If the caller "
+                "is new, explicitly confirm that and then try again; otherwise "
+                "I will transfer you to the Front Desk."
+            )
         except Exception:
             logger.exception("book_appointment: unexpected error")
             return (
@@ -1301,6 +1333,8 @@ class Receptionist(Agent):
             "end_iso": result.end_iso,
             "html_link": result.html_link,
             "attendee_email": caller_email,
+            "patient_id": result.patient_id,
+            "appointment_id": result.appointment_id,
         })
         if self.config.reminders.enabled:
             try:

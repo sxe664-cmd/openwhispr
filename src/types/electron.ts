@@ -33,7 +33,11 @@ export type EncounterOutputType = "summary" | "soap" | "focus" | "all";
 export type PatientResolution =
   | "created"
   | "matched"
+  | "unassigned_review"
   | "unassigned_missing_email"
+  | "unassigned_missing_demographics"
+  | "unassigned_no_exact_match"
+  | "unassigned_unknown_patient_id"
   | "unassigned_multiple_attendees"
   | "unassigned_conflict"
   | "unassigned_invalid_metadata"
@@ -51,6 +55,11 @@ export interface LocalEncounter {
   source_status: string;
   lifecycle_state: EncounterLifecycleState;
   note_id: number | null;
+  patient_id: string | null;
+  appointment_id: string | null;
+  dob: string | null;
+  normalized_phone: string | null;
+  normalized_email: string | null;
   patient_profile_id: number | null;
   patient_resolution: PatientResolution;
   meeting_context: MeetingContext | null;
@@ -1968,6 +1977,8 @@ declare global {
         success: boolean;
         encounter?: LocalEncounter;
         note?: { id: number; folder_id: number | null };
+        patient_id?: string | null;
+        appointment_id?: string | null;
         createdNote?: boolean;
         error?: string;
         code?: string;

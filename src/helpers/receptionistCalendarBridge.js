@@ -8,7 +8,11 @@ const {
   normalizeRange,
   redactSecrets,
 } = require("./calendarContract");
-const { parsePatientMetadata } = require("./patientIdentity");
+const {
+  normalizeAppointmentId,
+  normalizeOpaqueId,
+  parsePatientMetadata,
+} = require("./patientIdentity");
 
 const DEFAULT_SYNC_INTERVAL_MS = 2 * 60 * 1000;
 const DEFAULT_SYNC_TIMEOUT_MS = 90 * 1000;
@@ -113,15 +117,35 @@ function projectCalendarIngress(appointment) {
   if (!appointment || typeof appointment !== "object") return null;
   const {
     patient_metadata: rawPatientMetadata,
+    patient_id: rawPatientId,
+    appointment_id: rawAppointmentId,
+    dob: rawDob,
+    date_of_birth: rawDateOfBirth,
+    normalized_phone: rawNormalizedPhone,
+    normalized_email: rawNormalizedEmail,
     self_attendee_present: rawSelfAttendeePresent,
     ...sidecarPublic
   } = appointment;
   const publicEvent = projectCalendarRow(sidecarPublic);
   if (!publicEvent) return null;
-  const { metadata: patientMetadata } = parsePatientMetadata(rawPatientMetadata);
+  const parsedMetadata =
+    typeof rawPatientMetadata === "string"
+      ? parsePatientMetadata(rawPatientMetadata)
+      : parsePatientMetadata({
+          ...(rawPatientMetadata && typeof rawPatientMetadata === "object" ? rawPatientMetadata : {}),
+          patient_id: rawPatientId ?? rawPatientMetadata?.patient_id,
+          appointment_id: rawAppointmentId ?? rawPatientMetadata?.appointment_id,
+          dob: rawDob ?? rawDateOfBirth ?? rawPatientMetadata?.dob ?? rawPatientMetadata?.date_of_birth,
+          phone: rawNormalizedPhone ?? rawPatientMetadata?.phone,
+          email: rawNormalizedEmail ?? rawPatientMetadata?.email,
+          name: rawPatientMetadata?.name,
+        });
+  const patientMetadata = parsedMetadata.metadata;
   return {
     publicEvent,
     patientMetadata,
+    patientId: normalizeOpaqueId(patientMetadata?.patient_id),
+    appointmentId: normalizeAppointmentId(patientMetadata?.appointment_id),
     selfAttendeePresent: normalizeSelfAttendeePresent(rawSelfAttendeePresent),
   };
 }

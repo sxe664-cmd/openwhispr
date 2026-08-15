@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -21,6 +22,12 @@ from receptionist.reminders.models import (
 
 logger = logging.getLogger("receptionist")
 _MAX_RESULTS_PER_PAGE = 2500
+_OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+
+
+def _managed_id(value: object) -> str | None:
+    candidate = str(value or "").strip()
+    return candidate if _OPAQUE_ID_RE.fullmatch(candidate) else None
 
 
 def _safe_conference_url(value: object) -> str | None:
@@ -223,17 +230,21 @@ def event_from_google(
         raise ValueError("Google event missing start/end")
     start = _parse_google_dt(start_raw, tz)
     end = _parse_google_dt(end_raw, tz)
-    has_self_attendee = _self_attendee_presence(item)
-    attendee_records = item.get("attendees")
-    if not isinstance(attendee_records, list):
-        attendee_records = ()
     raw_attendees = tuple(
         attendee.get("email")
-        for attendee in attendee_records
-        if isinstance(attendee, dict) and attendee.get("self") is not True
+        for attendee in item.get("attendees", [])
+        if isinstance(attendee, dict)
     )
     attendees = normalize_emails(raw_attendees)
     recovered_email = extract_structured_email(item.get("description") or "")
+    private = ((item.get("extendedProperties") or {}).get("private") or {})
+    patient_id = _managed_id(private.get("patient_id"))
+    appointment_id = _managed_id(private.get("appointment_id"))
+    # A partially populated pair is not a managed link. Do not let a malformed
+    # provider field become an identity hint for Hira.
+    if not (patient_id and appointment_id):
+        patient_id = None
+        appointment_id = None
     return AppointmentEvent(
         source="google",
         calendar_id=calendar_id,
@@ -246,7 +257,6 @@ def event_from_google(
         timezone=item.get("start", {}).get("timeZone") or timezone_name,
         attendee_emails=attendees,
         contact_match_keys=normalize_contact_keys(raw_attendees),
-        has_self_attendee=has_self_attendee,
         contact_email=recovered_email,
         contact_email_source=RECOVERED_CONTACT_SOURCE if recovered_email else None,
         cancelled=item.get("status") == "cancelled",
@@ -261,27 +271,9 @@ def event_from_google(
         ) if item.get("originalStartTime") else None,
         all_day="dateTime" not in item.get("start", {}),
         status=item.get("status") or "confirmed",
+        patient_id=patient_id,
+        appointment_id=appointment_id,
     )
-
-
-def _self_attendee_presence(item: dict) -> bool | None:
-    """Return private Google self-attendee provenance without inferring it."""
-    attendees = item.get("attendees")
-    if not isinstance(attendees, list):
-        return None
-
-    has_self_attendee = False
-    for attendee in attendees:
-        if not isinstance(attendee, dict):
-            return None
-        if "self" not in attendee:
-            continue
-        is_self = attendee["self"]
-        if type(is_self) is not bool:
-            return None
-        if is_self is True:
-            has_self_attendee = True
-    return has_self_attendee
 
 
 def _start_value(item: dict) -> str:
