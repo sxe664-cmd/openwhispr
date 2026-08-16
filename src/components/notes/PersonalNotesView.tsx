@@ -9,6 +9,7 @@ import { ContainerOverview } from "./overview/ContainerOverview";
 import ActionPicker from "./ActionPicker";
 import ActionManagerDialog from "./ActionManagerDialog";
 import AddNotesToFolderDialog from "./AddNotesToFolderDialog";
+import ClinicalNoteExportDialog from "./ClinicalNoteExportDialog";
 import { useActionProcessing } from "../../hooks/useActionProcessing";
 import type { NoteMoveTarget } from "../../hooks/useNoteDragAndDrop";
 import { normalizeMeetingContext, type MeetingContext, type NoteItem } from "../../types/electron";
@@ -129,6 +130,7 @@ export default function PersonalNotesView({
   const draftRef = useRef<NoteEditorDraft | null>(null);
   const [showActionManager, setShowActionManager] = useState(false);
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
+  const [showClinicalExport, setShowClinicalExport] = useState(false);
   const pendingDocumentRef = useRef<PendingDocumentSave | null>(null);
   const pendingEnhancedRef = useRef<PendingEnhancedSave | null>(null);
 
@@ -791,6 +793,7 @@ export default function PersonalNotesView({
               onStopRecording={stopRecording}
               onExportNote={handleExportNote}
               onExportTranscript={handleExportTranscript}
+              onExportClinicalNote={() => setShowClinicalExport(true)}
               enhancement={
                 editorEnhancedContent
                   ? {
@@ -893,6 +896,15 @@ export default function PersonalNotesView({
                 />
               }
             />
+            {activeNoteId &&
+              activeNote?.note_type === "meeting" &&
+              activeNote?.calendar_event_id && (
+                <ClinicalNoteExportDialog
+                  noteId={activeNoteId}
+                  open={showClinicalExport}
+                  onOpenChange={setShowClinicalExport}
+                />
+              )}
             <ActionManagerDialog open={showActionManager} onOpenChange={setShowActionManager} />
           </>
         ) : activeContext && overviewSpace ? (

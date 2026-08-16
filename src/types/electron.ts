@@ -30,6 +30,22 @@ export function normalizeMeetingContext(value: unknown): MeetingContext {
 export type EncounterLifecycleState = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type EncounterOutputStatus = "pending" | "processing" | "ready" | "failed" | "stale";
 export type EncounterOutputType = "summary" | "soap" | "focus" | "all";
+export type ClinicalNoteExportSection =
+  "summary" | "soap" | "encounterDetails" | "participants" | "transcript";
+
+export interface ClinicalNoteExportOptions {
+  sections: ClinicalNoteExportSection[];
+}
+
+export interface ClinicalNoteExportPreview {
+  success: boolean;
+  encounterId?: number | null;
+  title?: string;
+  date?: string;
+  duration?: number | null;
+  sections?: Record<ClinicalNoteExportSection, { available: boolean; status: string }>;
+  error?: string;
+}
 export type PatientResolution =
   | "created"
   | "matched"
@@ -967,6 +983,11 @@ declare global {
         noteId: number,
         format: "txt" | "srt" | "json" | "md"
       ) => Promise<{ success: boolean; error?: string }>;
+      getClinicalNoteExportPreview?: (noteId: number) => Promise<ClinicalNoteExportPreview>;
+      exportClinicalNotePdf?: (
+        noteId: number,
+        options: ClinicalNoteExportOptions
+      ) => Promise<{ success: boolean; filePath?: string; error?: string }>;
       exportDictionary: (words: string[]) => Promise<{ success: boolean; error?: string }>;
       searchNotes: (
         query: string,
@@ -1111,6 +1132,13 @@ declare global {
       // Note event listeners
       onNoteAdded?: (callback: (note: NoteItem) => void) => () => void;
       onNoteUpdated?: (callback: (note: NoteItem) => void) => () => void;
+      onEncounterRecordingCompleted?: (
+        callback: (payload: {
+          encounterId?: number | null;
+          noteId?: number | null;
+          transcriptRevision?: number;
+        }) => void
+      ) => () => void;
       onNoteDeleted?: (callback: (payload: { id: number }) => void) => () => void;
       onFolderDeleted?: (callback: (payload: { id: number }) => void) => () => void;
 
@@ -2020,6 +2048,9 @@ declare global {
         error?: string;
         code?: string;
       }>;
+      onEncounterOutputRetryRequested?: (
+        callback: (payload: { encounterId?: number | null }) => void
+      ) => () => void;
       completeEncounterRecording?: (
         noteId: number,
         transcript: string

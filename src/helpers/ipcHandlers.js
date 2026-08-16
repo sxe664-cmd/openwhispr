@@ -1668,6 +1668,91 @@ class IPCHandlers {
       }
     });
 
+    ipcMain.handle("clinical-note-export-preview", async (_event, noteId) => {
+      try {
+        const note = this.databaseManager.getNote(noteId);
+        if (!note || note.note_type !== "meeting" || !note.calendar_event_id) {
+          return { success: false, error: "Clinical export is only available for encounter notes." };
+        }
+        const encounter = this.databaseManager.getEncounterByNoteId(note.id);
+        const output = encounter ? this.databaseManager.getEncounterOutput(encounter.id) : null;
+        const { buildClinicalNotePreview } = require("./clinicalNoteExport");
+        return buildClinicalNotePreview({ note, encounter, output });
+      } catch (error) {
+        debugLogger.error("Error building clinical note export preview", { error: error.message }, "notes");
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("clinical-note-export-pdf", async (event, noteId, options = {}) => {
+      let exportWindow = null;
+      try {
+        const note = this.databaseManager.getNote(noteId);
+        if (!note || note.note_type !== "meeting" || !note.calendar_event_id) {
+          return { success: false, error: "Clinical export is only available for encounter notes." };
+        }
+        const encounter = this.databaseManager.getEncounterByNoteId(note.id);
+        const output = encounter ? this.databaseManager.getEncounterOutput(encounter.id) : null;
+        if (!encounter || !output) return { success: false, error: "Encounter output is unavailable." };
+
+        const sections = Array.isArray(options?.sections) ? options.sections : ["summary", "soap", "encounterDetails"];
+        for (const required of ["summary", "soap"]) {
+          if (sections.includes(required) && output[`${required}_status`] !== "ready") {
+            return { success: false, error: `${required === "summary" ? "Summary" : "SOAP note"} is not ready yet.` };
+          }
+        }
+
+        const segments = JSON.parse(note.transcript || "[]");
+        const speakerMappings = this._buildSpeakerMappings(note.id);
+        const { buildClinicalNoteDocument, renderClinicalNoteHtml } = require("./clinicalNoteExport");
+        const document = buildClinicalNoteDocument({
+          note,
+          encounter,
+          output,
+          speakerMappings,
+          sections,
+          segments,
+        });
+        const html = renderClinicalNoteHtml(document);
+        const { dialog } = require("electron");
+        const fs = require("fs");
+        const path = require("path");
+        const safeName = (note.title || "Clinical encounter")
+          .replace(/[/\\?%*:|"<>]/g, "-")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120) || "Clinical encounter";
+        const datePrefix = new Date().toISOString().slice(0, 10);
+        const parent = BrowserWindow.fromWebContents(event.sender);
+        const result = await dialog.showSaveDialog(parent, {
+          defaultPath: path.join(`${datePrefix}_${safeName}_clinical-note.pdf`),
+          filters: [{ name: "PDF document", extensions: ["pdf"] }],
+        });
+        if (result.canceled || !result.filePath) return { success: false };
+
+        exportWindow = new BrowserWindow({
+          show: false,
+          width: 900,
+          height: 1200,
+          webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+        });
+        await exportWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+        const pdf = await exportWindow.webContents.printToPDF({
+          printBackground: true,
+          preferCSSPageSize: true,
+          pageSize: "Letter",
+          margins: { marginType: "default" },
+        });
+        fs.writeFileSync(result.filePath, pdf);
+        return { success: true, filePath: result.filePath };
+      } catch (error) {
+        debugLogger.error("Error exporting clinical note PDF", { error: error.message }, "notes");
+        return { success: false, error: error.message };
+      } finally {
+        if (exportWindow && !exportWindow.isDestroyed()) exportWindow.close();
+      }
+    });
+
     ipcMain.handle("export-dictionary", async (event, words) => {
       try {
         const { dialog } = require("electron");
@@ -7742,6 +7827,7 @@ class IPCHandlers {
           const error = encounterIpcError("ENCOUNTER_NOT_FOUND");
           return { success: false, output: null, error: error.message, code: error.code };
         }
+        broadcastToWindows("encounter-output-retry-requested", { encounterId: Number(encounterId) });
         return { success: true, output };
       } catch {
         const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
@@ -7761,6 +7847,13 @@ class IPCHandlers {
           return { success: false, error: error.message, code: error.code };
         }
         if (result.note) this._publishNoteUpdated(result.note);
+        if (result.encounter?.id && result.note?.id) {
+          broadcastToWindows("encounter-recording-completed", {
+            encounterId: result.encounter.id,
+            noteId: result.note.id,
+            transcriptRevision: Number(result.note.transcript_revision) || 0,
+          });
+        }
         return result;
       } catch {
         const error = encounterIpcError("ENCOUNTER_RECORDING_SAVE_FAILED");

@@ -8,6 +8,7 @@ import { useTheme } from "./hooks/useTheme";
 import { isControlPanelWindow } from "./utils/windowContext.ts";
 import { runLocalOnlyMigration } from "./helpers/localOnlyMigration";
 import { BrandLogo } from "./components/ui/BrandLogo.tsx";
+import { createEncounterOutputCoordinator } from "./helpers/encounterOutputCoordinator";
 
 const ControlPanel = React.lazy(() => import("./components/ControlPanel.tsx"));
 const OnboardingFlow = React.lazy(() => import("./components/OnboardingFlow.tsx"));
@@ -101,12 +102,25 @@ function MainApp() {
   }
 
   return isControlPanel ? (
-    <Suspense fallback={<LoadingFallback />}>
-      <ControlPanel initialSettingsSection={postOnboardingSettingsSection} />
-    </Suspense>
+    <>
+      <EncounterOutputCoordinatorHost />
+      <Suspense fallback={<LoadingFallback />}>
+        <ControlPanel initialSettingsSection={postOnboardingSettingsSection} />
+      </Suspense>
+    </>
   ) : (
     <App />
   );
+}
+
+function EncounterOutputCoordinatorHost() {
+  useEffect(() => {
+    const coordinator = createEncounterOutputCoordinator({
+      bridge: window.electronAPI || {},
+    });
+    return coordinator.start();
+  }, []);
+  return null;
 }
 
 function LoadingFallback({ message }) {

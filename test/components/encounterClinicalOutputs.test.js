@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 async function load() {
-  return import("../../src/components/notes/EncounterClinicalOutputs.tsx");
+  return import("../../src/helpers/encounterOutputGeneration.ts");
 }
 
 function output(overrides = {}) {

@@ -148,6 +148,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteNote: (id) => ipcRenderer.invoke("db-delete-note", id),
   exportNote: (noteId, format) => ipcRenderer.invoke("export-note", noteId, format),
   exportTranscript: (noteId, format) => ipcRenderer.invoke("export-transcript", noteId, format),
+  getClinicalNoteExportPreview: (noteId) =>
+    ipcRenderer.invoke("clinical-note-export-preview", noteId),
+  exportClinicalNotePdf: (noteId, options) =>
+    ipcRenderer.invoke("clinical-note-export-pdf", noteId, options),
   exportDictionary: (words) => ipcRenderer.invoke("export-dictionary", words),
   searchNotes: (query, limit, spaceId, folderId) =>
     ipcRenderer.invoke("db-search-notes", query, limit, spaceId, folderId),
@@ -226,6 +230,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const listener = (_event, note) => callback?.(note);
     ipcRenderer.on("note-updated", listener);
     return () => ipcRenderer.removeListener("note-updated", listener);
+  },
+  onEncounterRecordingCompleted: (callback) => {
+    const listener = (_event, payload) => callback?.(payload);
+    ipcRenderer.on("encounter-recording-completed", listener);
+    return () => ipcRenderer.removeListener("encounter-recording-completed", listener);
   },
   onNoteDeleted: (callback) => {
     const listener = (_event, data) => callback?.(data);
@@ -899,6 +908,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("encounter-output-finish", encounterId, token, updates),
   retryEncounterOutput: (encounterId, outputType) =>
     ipcRenderer.invoke("encounter-output-retry", encounterId, outputType),
+  onEncounterOutputRetryRequested: (callback) => {
+    const listener = (_event, payload) => callback?.(payload);
+    ipcRenderer.on("encounter-output-retry-requested", listener);
+    return () => ipcRenderer.removeListener("encounter-output-retry-requested", listener);
+  },
   completeEncounterRecording: (noteId, transcript) =>
     ipcRenderer.invoke("encounter-recording-complete", noteId, transcript),
   aiReceptionistGetStatus: () => ipcRenderer.invoke("ai-receptionist-status"),

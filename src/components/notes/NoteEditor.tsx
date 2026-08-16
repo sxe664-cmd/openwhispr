@@ -159,6 +159,7 @@ interface NoteEditorProps {
   meetingContext?: MeetingContext;
   onMeetingContextChange?: (context: MeetingContext) => void;
   onExportNote?: (format: "md" | "txt") => void;
+  onExportClinicalNote?: () => void;
   onExportTranscript?: (format: "txt" | "srt" | "json" | "md") => void;
   enhancement?: Enhancement;
   actionPicker?: React.ReactNode;
@@ -194,6 +195,7 @@ export default function NoteEditor({
   meetingContext = "telehealth",
   onMeetingContextChange,
   onExportNote,
+  onExportClinicalNote,
   onExportTranscript,
   enhancement,
   actionPicker,
@@ -892,6 +894,20 @@ export default function NoteEditor({
                       </>
                     ) : (
                       <>
+                        {onExportClinicalNote &&
+                          note.note_type === "meeting" &&
+                          note.calendar_event_id && (
+                            <>
+                              <DropdownMenuItem
+                                onClick={onExportClinicalNote}
+                                className="text-xs gap-2"
+                              >
+                                <Download size={13} className="text-primary/70" />
+                                Clinical note PDF
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
                         <DropdownMenuItem
                           onClick={() => onExportNote?.("md")}
                           className="text-xs gap-2"
