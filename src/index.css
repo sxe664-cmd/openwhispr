@@ -1011,6 +1011,21 @@ body:has(.agent-overlay-window) #root {
   background: oklch(0.62 0.22 260 / 0.15);
 }
 
+/* Clinical encounter medication/supplement spans. This is intentionally a
+   quiet text treatment, not a link affordance. The source markers stay in the
+   Markdown value while the custom mark supplies this visual-only decoration. */
+.rich-text-editor-content [data-ow-medication="true"] {
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-color: oklch(0.55 0.12 155 / 0.5);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.16em;
+}
+
+.dark .rich-text-editor-content [data-ow-medication="true"] {
+  text-decoration-color: oklch(0.72 0.12 155 / 0.55);
+}
+
 /* Task list (checkboxes) */
 .rich-text-editor-content ul[data-type="taskList"] {
   list-style: none;

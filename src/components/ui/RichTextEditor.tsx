@@ -6,6 +6,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Markdown } from "tiptap-markdown";
 import { cn } from "../lib/utils";
+import { MedicationMarkerMark } from "./medicationMarkerMark";
 
 interface RichTextEditorProps {
   value: string;
@@ -40,6 +41,7 @@ export function RichTextEditor({
         placeholder: placeholder || "",
         emptyEditorClass: "is-editor-empty",
       }),
+      MedicationMarkerMark,
       Markdown.configure({
         html: false,
         transformPastedText: true,
