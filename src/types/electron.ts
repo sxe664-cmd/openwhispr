@@ -1,6 +1,11 @@
 import type { ModelDefinition } from "../models/ModelRegistry";
 import type { TinfoilCatalogModel } from "../models/tinfoilModels";
 import type { CalendarEvent } from "./calendar";
+import type {
+  PatientEncounterHistoryItem,
+  PatientRegistryPayload,
+  PatientRegistryRecord,
+} from "./patientRegistry";
 
 export interface CalendarRangeRequest {
   startIso: string;
@@ -121,6 +126,8 @@ export interface EncounterOutput {
 export interface EncounterTranscriptToken {
   transcriptRevision: number;
   transcriptHash: string;
+  /** Present for a claimed generation; omitted for read-only transcript snapshots. */
+  generationId?: string;
 }
 
 export interface EncounterOutputGenerationUpdate {
@@ -224,6 +231,7 @@ export interface NoteItem {
   enhanced_content: string | null;
   enhancement_prompt: string | null;
   enhanced_at_content_hash: string | null;
+  enhanced_template_revision_id?: number | null;
   note_type: "personal" | "meeting" | "upload";
   source_file: string | null;
   audio_duration_seconds: number | null;
@@ -259,6 +267,52 @@ export interface NoteItem {
   // 1 while a cloud-backed row that left a team space still owes its scope
   // retraction push (D6); cleared when the row settles.
   left_team?: number;
+  encounter_start_time?: string | null;
+  encounter_title?: string | null;
+}
+
+export type NoteTemplateKind = "generic" | "encounter";
+
+export interface NoteTemplateRevision {
+  id: number;
+  template_id: number;
+  version: number;
+  created_at: string;
+}
+
+export interface NoteTemplate {
+  id: number;
+  template_key: string;
+  name: string;
+  description: string;
+  kind: NoteTemplateKind;
+  is_builtin: boolean;
+  is_default: boolean;
+  active_revision_id: number | null;
+  active_revision: NoteTemplateRevision | null;
+  revisions: NoteTemplateRevision[];
+  created_at: string;
+  updated_at: string;
+  /** Returned only when getNoteTemplate(..., { includeRaw: true }) is used. */
+  template_text?: string;
+}
+
+export interface NoteGenerationCandidate {
+  candidate_id: string;
+  note_id: number;
+  template_id: number;
+  template_name?: string | null;
+  template_revision_id: number;
+  template_revision_version: number | null;
+  base_content_hash: string;
+  base_enhanced_content_hash: string;
+  generated_content: string;
+  status: "pending" | "applied" | "discarded";
+  has_clinical_source: boolean;
+  created_at: string;
+  updated_at: string;
+  applied_at: string | null;
+  discarded_at: string | null;
 }
 
 export interface NoteUpdateAckResult {
@@ -975,6 +1029,65 @@ declare global {
         }
       ) => Promise<{ success: boolean; note?: NoteItem }>;
       deleteNote: (id: number) => Promise<{ success: boolean }>;
+      listNoteTemplates?: (kind?: NoteTemplateKind) => Promise<NoteTemplate[]>;
+      getNoteTemplate?: (
+        idOrKey: number | string,
+        options?: { includeRaw?: boolean }
+      ) => Promise<NoteTemplate | null>;
+      getDefaultNoteTemplate?: (
+        kind?: NoteTemplateKind,
+        options?: { includeRaw?: boolean }
+      ) => Promise<NoteTemplate | null>;
+      createNoteTemplate?: (input: {
+        templateKey?: string;
+        name: string;
+        description?: string;
+        kind: NoteTemplateKind;
+        templateText: string;
+      }) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
+      updateNoteTemplate?: (
+        id: number,
+        updates: { name?: string; description?: string; templateText?: string }
+      ) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
+      deleteNoteTemplate?: (id: number) => Promise<{ success: boolean; code?: string; error?: string }>;
+      activateNoteTemplate?: (
+        id: number,
+        revisionId?: number | null
+      ) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
+      setDefaultNoteTemplate?: (
+        id: number,
+        revisionId?: number | null
+      ) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
+      createNoteGenerationCandidate?: (input: {
+        noteId: number;
+        generatedContent: string;
+        templateRevisionId?: number;
+        clinicalSource?: string | null;
+        confirmed?: boolean;
+      }) => Promise<{
+        success: boolean;
+        candidate?: NoteGenerationCandidate;
+        code?: string;
+        error?: string;
+      }>;
+      getNoteGenerationCandidate?: (candidateId: string) => Promise<NoteGenerationCandidate | null>;
+      applyNoteGenerationCandidate?: (
+        candidateId: string,
+        options?: { confirmed?: boolean }
+      ) => Promise<{
+        success: boolean;
+        applied?: boolean;
+        note?: NoteItem;
+        candidate?: NoteGenerationCandidate;
+        code?: string;
+        error?: string;
+      }>;
+      discardNoteGenerationCandidate?: (candidateId: string) => Promise<{
+        success: boolean;
+        candidate?: NoteGenerationCandidate;
+        code?: string;
+        error?: string;
+      }>;
       exportNote: (
         noteId: number,
         format: "txt" | "md"
@@ -1913,7 +2026,14 @@ declare global {
         error?: { code: string; message: string };
       }>;
       onGcalConnectionChanged?: (callback: (data: any) => void) => () => void;
-      onGcalEventsSynced?: (callback: (payload?: { provider?: string; eventCount?: number }) => void) => () => void;
+      onGcalEventsSynced?: (
+        callback: (payload?: {
+          provider?: string;
+          eventCount?: number;
+          success?: boolean;
+          errorCode?: string | null;
+        }) => void
+      ) => () => void;
       gcalGetCalendarStatus?: () => Promise<{
         connected: boolean;
         managed?: boolean;
@@ -1945,6 +2065,41 @@ declare global {
           html_link: string | null;
         } | null;
       }>;
+      listPatientRegistry?: (query?: string) => Promise<{
+        success: boolean;
+        patients: PatientRegistryRecord[];
+        error?: { code: string; message: string };
+      }>;
+      getPatientRegistryPatient?: (patientId: string) => Promise<{
+        success: boolean;
+        patient: PatientRegistryRecord | null;
+        error?: { code: string; message: string };
+      }>;
+      savePatientRegistryPatient?: (payload: PatientRegistryPayload) => Promise<{
+        success: boolean;
+        patient: PatientRegistryRecord | null;
+        error?: { code: string; message: string };
+      }>;
+      getPatientEncounterHistory?: (patientId: string, limit?: number) => Promise<{
+        success: boolean;
+        encounters: PatientEncounterHistoryItem[];
+        error?: { code: string; message: string };
+      }>;
+      getPatientMergeCandidates?: (patientId: string) => Promise<{
+        success: boolean;
+        patients: PatientRegistryRecord[];
+        error?: { code: string; message: string };
+      }>;
+      mergePatientRegistryPatients?: (payload: {
+        survivorPatientId: string;
+        duplicatePatientId: string;
+        phone?: string | null;
+        email?: string | null;
+      }) => Promise<{
+        success: boolean;
+        patient: PatientRegistryRecord | null;
+        error?: { code: string; message: string; field?: string; survivorValue?: string | null; duplicateValue?: string | null };
+      }>;
       getEncounters?: (limit?: number) => Promise<{
         success: boolean;
         encounters: LocalEncounter[];
@@ -1955,7 +2110,10 @@ declare global {
         encounters: LocalEncounter[];
         error?: string;
       }>;
-      getEncountersForLocalDay?: (dateIso?: string, limit?: number) => Promise<{
+      getEncountersForLocalDay?: (
+        dateIso?: string,
+        limit?: number
+      ) => Promise<{
         success: boolean;
         encounters: LocalEncounter[];
         error?: string;
@@ -1984,17 +2142,62 @@ declare global {
         newStartIso: string;
         confirmed?: boolean;
       }) => Promise<CalendarActionResult>;
-      getReceptionistConfig?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      saveReceptionistConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; requiresRestart?: boolean; error?: { code: string; message: string } }>;
-      getMessageConfig?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      saveMessageConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      getPostAppointmentWorkspace?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      savePostAppointmentConfig?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      getEmailSetup?: () => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
-      saveEmailSetup?: (config: Record<string, unknown>) => Promise<{ success: boolean; config: Record<string, unknown> | null; error?: { code: string; message: string } }>;
+      getReceptionistConfig?: () => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      saveReceptionistConfig?: (config: Record<string, unknown>) => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        requiresRestart?: boolean;
+        error?: { code: string; message: string };
+      }>;
+      getMessageConfig?: () => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      saveMessageConfig?: (config: Record<string, unknown>) => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      getPostAppointmentWorkspace?: () => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      savePostAppointmentConfig?: (config: Record<string, unknown>) => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      getEmailSetup?: () => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
+      saveEmailSetup?: (config: Record<string, unknown>) => Promise<{
+        success: boolean;
+        config: Record<string, unknown> | null;
+        error?: { code: string; message: string };
+      }>;
       getEncounter?: (encounterId: number) => Promise<{
         success: boolean;
         encounter: LocalEncounter | null;
+        error?: string;
+        code?: string;
+      }>;
+      getEncounterByNote?: (noteId: number) => Promise<{
+        success: boolean;
+        encounter: LocalEncounter | null;
+        error?: string;
+        code?: string;
+      }>;
+      getEncountersNeedingOutputGeneration?: (limit?: number) => Promise<{
+        success: boolean;
+        encounters: LocalEncounter[];
         error?: string;
         code?: string;
       }>;
@@ -2025,6 +2228,7 @@ declare global {
         output: EncounterOutput | null;
         transcript: string | null;
         token: EncounterTranscriptToken | null;
+        busy?: boolean;
         error?: string;
         code?: string;
       }>;
@@ -2050,6 +2254,9 @@ declare global {
       }>;
       onEncounterOutputRetryRequested?: (
         callback: (payload: { encounterId?: number | null }) => void
+      ) => () => void;
+      onEncounterOutputUpdated?: (
+        callback: (payload: { encounterId?: number | null; applied?: boolean }) => void
       ) => () => void;
       completeEncounterRecording?: (
         noteId: number,

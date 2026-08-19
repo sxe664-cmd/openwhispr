@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalEncounter } from "../types/electron";
 
 export type EncounterSyncState = "ready" | "syncing" | "stale" | "unavailable" | "error";
@@ -20,7 +20,15 @@ function normalizeSyncState(value: unknown): EncounterSyncState {
 }
 
 function safeError(error: unknown): string {
-  return String(error instanceof Error ? error.message : error || "Unable to load encounters")
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : error && typeof error === "object" && "message" in error
+          ? String(error.message)
+          : "Unable to load encounters";
+  return message
     .replace(/[\r\n]+/g, " ")
     .slice(0, 240);
 }
@@ -31,42 +39,90 @@ export function useEncounters(limit = 100): UseEncountersReturn {
   const [syncState, setSyncState] = useState<EncounterSyncState>("unavailable");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const encountersRef = useRef<LocalEncounter[]>([]);
+
+  const loadLocal = useCallback(async () => {
+    const [encounterAttempt, statusAttempt] = await Promise.allSettled([
+      window.electronAPI?.getEncountersForLocalDay?.(new Date().toISOString(), limit),
+      window.electronAPI?.gcalGetConnectionStatus?.(),
+    ]);
+
+    const encounterResult = encounterAttempt.status === "fulfilled" ? encounterAttempt.value : null;
+    const connectionStatus = statusAttempt.status === "fulfilled" ? statusAttempt.value : null;
+    const connectionState = normalizeSyncState(connectionStatus?.state);
+    const localReadFailed =
+      encounterAttempt.status === "rejected"
+      || encounterResult?.success !== true
+      || !Array.isArray(encounterResult?.encounters);
+
+    if (!localReadFailed) {
+      const nextEncounters = encounterResult.encounters;
+      encountersRef.current = nextEncounters;
+      setEncounters(nextEncounters);
+    }
+
+    const localError =
+      encounterAttempt.status === "rejected"
+        ? encounterAttempt.reason
+        : encounterResult?.error;
+    const statusError = connectionStatus?.error?.message;
+    if (localReadFailed || statusError) {
+      setError(safeError(localError || statusError));
+    } else {
+      setError(null);
+    }
+
+    if (localReadFailed) {
+      const failureState =
+        connectionState === "ready"
+          ? encountersRef.current.length > 0
+            ? "stale"
+            : "error"
+          : connectionState;
+      setSyncState(failureState);
+    } else {
+      setSyncState(connectionState);
+    }
+    setLastSyncedAt(connectionStatus?.lastSuccessfulSyncAt || connectionStatus?.lastSyncAt || null);
+    setIsLoading(false);
+  }, [limit]);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [encounterResult, connectionStatus] = await Promise.all([
-        window.electronAPI?.getEncountersForLocalDay?.(new Date().toISOString(), limit),
-        window.electronAPI?.gcalGetConnectionStatus?.(),
-      ]);
-
-      if (encounterResult?.success && Array.isArray(encounterResult.encounters)) {
-        setEncounters(encounterResult.encounters);
-        setError(null);
-      } else if (encounterResult?.error) {
-        setError(safeError(encounterResult.error));
+      // A manual refresh also re-runs managed calendar ingestion. This lets a
+      // registry edit repair encounters that were projected before the patient
+      // record existed, while the sync listener below only reloads local data
+      // to avoid a sync/broadcast loop.
+      const syncResult = await window.electronAPI?.gcalSyncEvents?.();
+      if (syncResult && syncResult.success !== true) {
+        setError(safeError(syncResult.error));
+        setSyncState((current) => {
+          if (current === "ready") return encountersRef.current.length > 0 ? "stale" : "error";
+          return current === "unavailable" ? "error" : current;
+        });
       }
-
-      setSyncState(normalizeSyncState(connectionStatus?.state));
-      setLastSyncedAt(connectionStatus?.lastSuccessfulSyncAt || connectionStatus?.lastSyncAt || null);
-    } catch (loadError) {
-      setError(safeError(loadError));
-      setSyncState((current) => (current === "ready" ? "stale" : current === "unavailable" ? "error" : current));
+    } catch (syncError) {
+      setError(safeError(syncError));
+      setSyncState((current) => {
+        if (current === "ready") return encountersRef.current.length > 0 ? "stale" : "error";
+        return current === "unavailable" ? "error" : current;
+      });
     } finally {
-      setIsLoading(false);
+      await loadLocal();
     }
-  }, [limit]);
+  }, [loadLocal]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadLocal();
+  }, [loadLocal]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI?.onGcalEventsSynced?.(() => {
-      void refresh();
+      void loadLocal();
     });
     return () => unsubscribe?.();
-  }, [refresh]);
+  }, [loadLocal]);
 
   return { encounters, isLoading, syncState, lastSyncedAt, error, refresh };
 }

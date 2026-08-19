@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import os
 import re
 import secrets
 import unicodedata
@@ -29,6 +30,7 @@ from receptionist.reminders.models import AppointmentEvent
 from receptionist.reminders.phone import extract_phone, normalize_us_phone
 from receptionist.reminders.scheduler import sync_events
 from receptionist.reminders.store import ReminderStore
+from receptionist.patient_registry import PatientRegistry
 
 logger = logging.getLogger("receptionist")
 
@@ -914,6 +916,7 @@ class AppointmentChangeService:
                 event_id=previous.event_id,
                 start_iso=previous.start.isoformat(),
             )
+            self._update_shared_registry_appointment(action, previous, updated)
             return
         self.store.cancel_event_occurrence(
             source=previous.source,
@@ -926,6 +929,27 @@ class AppointmentChangeService:
         if self.config.reminders.enabled:
             contacts = load_contacts(self.config.reminders.contacts_path)
             sync_events(config=self.config, store=self.store, events=[updated], contacts=contacts)
+        self._update_shared_registry_appointment(action, previous, updated)
+
+    def _update_shared_registry_appointment(
+        self,
+        action: str,
+        previous: AppointmentEvent,
+        updated: AppointmentEvent,
+    ) -> None:
+        appointment_id = updated.appointment_id or previous.appointment_id
+        if not appointment_id or not os.environ.get("HIRA_PATIENT_REGISTRY_PATH"):
+            return
+        registry = PatientRegistry.from_env()
+        if action == "cancel":
+            registry.update_appointment_status(appointment_id, "cancelled")
+        else:
+            registry.update_appointment_schedule(
+                appointment_id,
+                start=updated.start.isoformat(),
+                end=updated.end.isoformat(),
+                status=updated.status or "confirmed",
+            )
 
     def _queue_notifications(
         self,

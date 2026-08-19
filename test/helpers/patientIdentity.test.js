@@ -5,6 +5,7 @@ const {
   formatEncounterAutoTitle,
   normalizeAttendees,
   normalizePatientEmail,
+  normalizePatientPhone,
   parsePatientMetadata,
   resolvePatientIdentity,
 } = require("../../src/helpers/patientIdentity");
@@ -30,6 +31,14 @@ test("normalizes only valid email identities and never uses names", () => {
   assert.equal(normalizePatientEmail(""), null);
 });
 
+test("normalizes US phone numbers to E.164 without double-prefixing", () => {
+  assert.equal(normalizePatientPhone("561-405-5898"), "+15614055898");
+  assert.equal(normalizePatientPhone("1 (561) 405-5898"), "+15614055898");
+  assert.equal(normalizePatientPhone("+1 561 405 5898"), "+15614055898");
+  assert.equal(normalizePatientPhone("56140558989"), null);
+  assert.equal(normalizePatientPhone("+44 20 7946 0958"), null);
+});
+
 test("parses one exact bounded patient block into sanitized data", () => {
   assert.deepEqual(parsePatientMetadata(block), {
     metadata: {
@@ -48,6 +57,55 @@ test("parses one exact bounded patient block into sanitized data", () => {
   });
 });
 
+test("parses compact manual calendar details without requiring the name in the description", () => {
+  assert.deepEqual(parsePatientMetadata(`DOB: 1990-04-12\nPhone: +1 (555) 123-4567\nEmail: alex@example.com`), {
+    metadata: {
+      name: null,
+      dob: "1990-04-12",
+      email: "alex@example.com",
+      phone: "+15551234567",
+      source: "structured_description",
+    },
+    reason: null,
+  });
+  assert.deepEqual(parsePatientMetadata("DOB: 04/12/1990"), {
+    metadata: {
+      name: null,
+      dob: "1990-04-12",
+      email: null,
+      phone: null,
+      source: "structured_description",
+    },
+    reason: null,
+  });
+});
+
+test("parses US DOBs entered with dot separators", () => {
+  assert.deepEqual(parsePatientMetadata("DOB: 07.24.1969\nEmail: jairo@example.com"), {
+    metadata: {
+      name: null,
+      dob: "1969-07-24",
+      email: "jairo@example.com",
+      phone: null,
+      source: "structured_description",
+    },
+    reason: null,
+  });
+});
+
+test("normalizes structured US phone metadata for reminder recipients", () => {
+  assert.deepEqual(parsePatientMetadata("DOB: 07/24/1969\nPhone: 561-405-5898\nEmail: jairo@example.com"), {
+    metadata: {
+      name: null,
+      dob: "1969-07-24",
+      email: "jairo@example.com",
+      phone: "+15614055898",
+      source: "structured_description",
+    },
+    reason: null,
+  });
+});
+
 test("rejects missing closing markers, duplicate fields, unknown fields, invalid values, and multiple blocks", () => {
   const secondBlock = `${block}\n${block}`;
   for (const value of [
@@ -56,6 +114,7 @@ test("rejects missing closing markers, duplicate fields, unknown fields, invalid
     "[OpenWhispr Patient]\nunknown: Alex\nemail: alex@example.com\n[/OpenWhispr Patient]",
     "[OpenWhispr Patient]\nemail: not-an-email\n[/OpenWhispr Patient]",
     "[OpenWhispr Patient]\nname: Alex\n[/OpenWhispr Patient]",
+    "DOB: 707.24.1969\nEmail: jairo@example.com",
     `[OpenWhispr Patient]\nname: ${"A".repeat(121)}\nemail: alex@example.com\n[/OpenWhispr Patient]`,
     secondBlock,
     `${"x".repeat(4097)}`,
@@ -74,7 +133,7 @@ test("accepts sanitized object input while discarding untrusted extra fields", (
     metadata: {
       name: "Alex Morgan",
       email: "alex@example.com",
-      phone: "5551234567",
+      phone: "+15551234567",
       source: "structured_description",
     },
     reason: null,
@@ -145,6 +204,41 @@ test("uses structured metadata only with explicit no-self provenance", () => {
     patientMetadata: { name: "Alex Morgan" },
     selfAttendeePresent: false,
   }).status, "unassigned_invalid_metadata");
+});
+
+test("managed registry resolution uses exact normalized name and DOB", () => {
+  const patients = [
+    {
+      patient_id: "patient-alex",
+      name: "Alex Morgan",
+      normalized_name: "alex morgan",
+      dob: "1990-04-12",
+      normalized_dob: "1990-04-12",
+      email: "alex@example.com",
+      phone: "+15551234567",
+    },
+  ];
+  const resolved = resolvePatientIdentity({
+    registryPatients: patients,
+    patientMetadata: {
+      name: "  alex   morgan ",
+      dob: "1990-04-12",
+      email: "different@example.com",
+    },
+  });
+  assert.equal(resolved.status, "resolved_registry");
+  assert.equal(resolved.patientId, "patient-alex");
+  assert.equal(resolved.identitySource, "registry_exact_name_dob");
+  assert.equal(resolved.normalizedEmail, "alex@example.com");
+
+  assert.equal(resolvePatientIdentity({
+    registryPatients: patients,
+    patientMetadata: { name: "Alex Morgan", dob: "1990-04-13" },
+  }).status, "unassigned_no_exact_match");
+  assert.equal(resolvePatientIdentity({
+    registryPatients: patients,
+    patientMetadata: { name: "Alex Morgan" },
+  }).status, "unassigned_missing_demographics");
 });
 
 test("one external attendee remains authoritative regardless of self provenance", () => {

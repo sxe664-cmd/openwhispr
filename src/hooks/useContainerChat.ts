@@ -33,6 +33,7 @@ interface UseContainerChatReturn {
   activeConversationId: number | null;
   switchConversation: (id: number) => Promise<void>;
   startNewChat: () => void;
+  deleteConversation: (id: number) => Promise<void>;
 }
 
 /**
@@ -57,10 +58,17 @@ export function useContainerChat({
     const header = folder
       ? `The user is viewing the folder "${folder.name}" in the space "${space.name}" (${notes.length} notes).`
       : `The user is viewing the space "${space.name}" (${notes.length} notes).`;
-    const noteBlocks = notes.slice(0, MAX_CONTEXT_NOTES).map((note) => {
-      const body = (note.enhanced_content || note.content || "").slice(0, NOTE_SNIPPET_LENGTH);
-      return `<note id="${note.id}" title="${note.title}" updated="${note.updated_at}">\n${body}\n</note>`;
-    });
+    const noteBlocks = [...notes]
+      .sort((a, b) => {
+        const aTime = Date.parse(a.updated_at || a.created_at || "") || 0;
+        const bTime = Date.parse(b.updated_at || b.created_at || "") || 0;
+        return bTime - aTime;
+      })
+      .slice(0, MAX_CONTEXT_NOTES)
+      .map((note) => {
+        const body = (note.enhanced_content || note.content || "").slice(0, NOTE_SNIPPET_LENGTH);
+        return `<note id="${note.id}" title="${note.title}" updated="${note.updated_at}">\n${body}\n</note>`;
+      });
     return [header, ...noteBlocks].join("\n\n");
   }, [folder, space.name, notes]);
 
@@ -113,6 +121,20 @@ export function useContainerChat({
     setConversationId(null);
   }, [persistence]);
 
+  const deleteConversation = useCallback(
+    async (id: number) => {
+      const result = await window.electronAPI?.deleteAgentConversation?.(id);
+      if (result && !result.success) return;
+
+      if (conversationId === id) {
+        persistence.handleNewChat();
+        setConversationId(null);
+      }
+      await fetchConversations();
+    },
+    [conversationId, fetchConversations, persistence]
+  );
+
   const createConversation = useCallback(
     async (text: string) => {
       const title = deriveConversationTitle(text, folder?.name ?? space.name);
@@ -141,5 +163,6 @@ export function useContainerChat({
     activeConversationId: conversationId,
     switchConversation,
     startNewChat,
+    deleteConversation,
   };
 }

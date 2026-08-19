@@ -1819,6 +1819,7 @@
       "asTranscriptMarkdown": "Как Markdown (.md)",
       "raw": "Исходный",
       "enhanced": "Улучшенный",
+      "clinicalNote": "Клиническая заметка",
       "saving": "Сохранение",
       "startWriting": "Начните писать...",
       "staleIndicator": "Содержимое изменилось после улучшения",

@@ -51,12 +51,69 @@ const MAX_TRANSCRIPT_CHARS = 24_000;
 const MAX_SUMMARY_CHARS = 8_000;
 const MAX_SOAP_FIELD_CHARS = 4_000;
 const MAX_FOCUS_CHARS = 120;
+const NOT_DOCUMENTED = "Not documented";
 
 const PUBLIC_ERRORS: Record<ClinicalOutputErrorCode, string> = {
   LOCAL_MODEL_NOT_CONFIGURED: "Choose a downloaded local note model before generating clinical notes.",
   BYOK_NOT_CONFIGURED: "Configure a BYOK note provider before generating clinical notes.",
   GENERATION_FAILED: "Clinical note generation could not be completed. Your transcript is saved; try again.",
 };
+
+const SOAP_SECTION_LABELS = ["Subjective", "Objective", "Assessment", "Plan"] as const;
+
+function soapSectionHeader(line: string): (typeof SOAP_SECTION_LABELS)[number] | null {
+  const normalized = line
+    .trim()
+    .replace(/^#{1,3}\s*/, "")
+    .replace(/^\*\*(.+)\*\*:?$/, "$1")
+    .replace(/:$/, "")
+    .trim()
+    .toLowerCase();
+  return SOAP_SECTION_LABELS.find((label) => label.toLowerCase() === normalized) || null;
+}
+
+/**
+ * SOAP is generated as concise plain text, but it is displayed in the same
+ * rich editor as Enhanced notes. Normalize only its known section boundaries;
+ * never reinterpret clinical prose or invent list structure.
+ */
+export function formatClinicalOutputForDisplay(
+  kind: ClinicalOutputKind,
+  content: string | null | undefined
+): string {
+  const clean = typeof content === "string" ? content.trim() : "";
+  if (!clean || kind !== "soap") return clean;
+
+  const lines = clean.split(/\r?\n/);
+  const sections: Array<{ label: (typeof SOAP_SECTION_LABELS)[number]; lines: string[] }> = [];
+  let current: { label: (typeof SOAP_SECTION_LABELS)[number]; lines: string[] } | null = null;
+
+  for (const line of lines) {
+    const label = soapSectionHeader(line);
+    if (label) {
+      current = { label, lines: [] };
+      sections.push(current);
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+
+  if (sections.length === 0) return clean;
+
+  const firstSectionIndex = lines.findIndex((line) => soapSectionHeader(line) !== null);
+  const preamble = firstSectionIndex > 0 ? lines.slice(0, firstSectionIndex).join("\n").trim() : "";
+  const renderedSections = sections
+    .map(({ label, lines: sectionLines }) => {
+      const body = sectionLines.join("\n").trim() || NOT_DOCUMENTED;
+      return `## ${label}\n\n${body}`;
+    })
+    .join("\n\n");
+
+  // Preserve any model text before the first recognized section. The formatter
+  // only normalizes known SOAP boundaries; it must never silently delete an
+  // unexpected preamble or unsupported content.
+  return preamble ? `## SOAP note\n\n${preamble}\n\n${renderedSections}` : renderedSections;
+}
 
 function boundedTranscript(transcript: string): string {
   const clean = transcript.trim();

@@ -14,6 +14,8 @@ interface RichTextEditorProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  /** Read-only presentation without the disabled/low-opacity treatment. */
+  readOnly?: boolean;
   editorRef?: MutableRefObject<Editor | null>;
 }
 
@@ -23,6 +25,7 @@ export function RichTextEditor({
   placeholder,
   className,
   disabled,
+  readOnly = false,
   editorRef,
 }: RichTextEditorProps) {
   const internalValueRef = useRef(value);
@@ -49,7 +52,7 @@ export function RichTextEditor({
       }),
     ],
     content: value,
-    editable: !disabled,
+    editable: !disabled && !readOnly,
     onUpdate: ({ editor: ed }) => {
       if (suppressUpdateRef.current) return;
 
@@ -94,15 +97,15 @@ export function RichTextEditor({
   // Sync editable state
   useEffect(() => {
     if (editor && !editor.isDestroyed) {
-      editor.setEditable(!disabled, false);
+      editor.setEditable(!disabled && !readOnly, false);
     }
-  }, [disabled, editor]);
+  }, [disabled, editor, readOnly]);
 
   const handleClick = useCallback(() => {
-    if (editor && !editor.isFocused && !disabled) {
+    if (editor && !editor.isFocused && !disabled && !readOnly) {
       editor.commands.focus();
     }
-  }, [editor, disabled]);
+  }, [editor, disabled, readOnly]);
 
   return (
     <div className={cn("relative w-full h-full", className)} onClick={handleClick}>

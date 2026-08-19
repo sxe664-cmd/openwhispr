@@ -1011,6 +1011,22 @@ body:has(.agent-overlay-window) #root {
   background: oklch(0.62 0.22 260 / 0.15);
 }
 
+/* Read-only clinical outputs use the same Markdown/Tiptap semantics as
+   Enhanced notes, but sit inside the output pane rather than the editable
+   note canvas. */
+.clinical-output-richtext .rich-text-editor-content {
+  min-height: 100%;
+  padding: 0.25rem 0 5rem;
+  color: color-mix(in oklab, var(--color-foreground) 82%, transparent);
+}
+
+.clinical-output-richtext .rich-text-editor-content h2 {
+  margin-top: 1.15rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-border) 65%, transparent);
+  letter-spacing: -0.01em;
+}
+
 /* Clinical encounter medication/supplement spans. This is intentionally a
    quiet text treatment, not a link affordance. The source markers stay in the
    Markdown value while the custom mark supplies this visual-only decoration. */

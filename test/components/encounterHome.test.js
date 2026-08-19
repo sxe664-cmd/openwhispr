@@ -53,3 +53,16 @@ test("Home start and open actions reuse existing encounter IPC/navigation paths"
   assert.match(upcoming, /EncounterCard/);
   assert.doesNotMatch(home, /startRecording|diariz|transcri/i);
 });
+
+test("Home keeps cached cards visible and avoids a false empty state on sync/read failure", () => {
+  const hook = read("src/hooks/useEncounters.ts");
+  const home = read("src/components/EncounterHomeView.tsx");
+
+  assert.match(hook, /Promise\.allSettled/);
+  assert.match(hook, /syncResult\.success !== true/);
+  assert.match(hook, /encountersRef\.current/);
+  assert.match(home, /role="alert"/);
+  assert.match(home, /encounters\.length === 0 && error/);
+  assert.match(home, /!error/);
+  assert.doesNotMatch(home, /error && encounters\.length === 0 && syncState === "error"/);
+});

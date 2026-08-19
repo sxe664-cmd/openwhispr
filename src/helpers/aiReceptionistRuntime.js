@@ -35,6 +35,9 @@ const PUBLIC_ERROR_MESSAGES = Object.freeze({
   AI_RECEPTIONIST_EVENT_NOT_FOUND: "That appointment is no longer available.",
   AI_RECEPTIONIST_EMAIL_NOT_ELIGIBLE: "Email is unavailable for this appointment.",
   AI_RECEPTIONIST_SMS_NOT_ELIGIBLE: "SMS is unavailable for this appointment.",
+  CALENDAR_SCHEMA_VERSION_UNSUPPORTED: "Calendar data needs an app update before it can be synchronized.",
+  CALENDAR_PROJECTION_MIGRATION_FAILED: "Calendar data could not be prepared for synchronization.",
+  CALENDAR_PROJECTION_FAILED: "Calendar encounters could not be updated. Cached encounters remain available.",
 });
 
 function serializedError(code) {

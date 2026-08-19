@@ -224,6 +224,7 @@ export default function NoteEditor({
   const [isDiarizing, setIsDiarizing] = useState(false);
   const canEditNote = true;
   const canMoveToFolders = true;
+  const isClinicalEncounter = note.note_type === "meeting" && Boolean(note.calendar_event_id);
   const [diarizedSegments, setDiarizedSegments] = useState<TranscriptSegment[] | null>(null);
   const [speakerMappings, setSpeakerMappings] = useState<Record<string, string>>({});
   const [speakerProfiles, setSpeakerProfiles] = useState<
@@ -837,7 +838,9 @@ export default function NoteEditor({
                       )}
                     >
                       <Sparkles size={9} />
-                      {t("notes.editor.enhanced")}
+                      {isClinicalEncounter
+                        ? t("notes.editor.clinicalNote")
+                        : t("notes.editor.enhanced")}
                       {enhancement.isStale && (
                         <span
                           className="w-1 h-1 rounded-full bg-amber-400/60"
@@ -933,7 +936,7 @@ export default function NoteEditor({
           <div className="h-full overflow-y-auto">
             {viewMode === "summary" || viewMode === "soap" ? (
               <EncounterClinicalOutputs
-                calendarEventId={note.calendar_event_id as string}
+                noteId={note.id}
                 mode={viewMode}
                 isRecording={isRecording}
                 isProcessingTranscript={isProcessing}

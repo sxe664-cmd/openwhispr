@@ -121,6 +121,7 @@ export function ContainerOverview({
           activeConversationId={chat.activeConversationId}
           onSwitchConversation={chat.switchConversation}
           onNewChat={chat.startNewChat}
+          onDeleteConversation={chat.deleteConversation}
           onOpenNote={onOpenNote}
         />
 
@@ -134,7 +135,6 @@ export function ContainerOverview({
           />
         </div>
       </div>
-
     </div>
   );
 }

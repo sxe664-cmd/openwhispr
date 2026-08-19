@@ -27,10 +27,10 @@ from receptionist.booking.client import GoogleCalendarClient
 from receptionist.config import AppConfig, ConfigError, load_app_config
 from receptionist.patient_registry import PatientRegistry, PatientRegistryError
 from receptionist.reminders.contacts import ContactResolver, load_contacts
-from receptionist.reminders.identity import normalize_email
+from receptionist.reminders.identity import extract_patient_metadata, normalize_email
 from receptionist.reminders.__main__ import _load_configured_events
 from receptionist.reminders.phone import extract_phone, normalize_us_phone
-from receptionist.reminders.models import AppointmentEvent
+from receptionist.reminders.models import AppointmentEvent, ReminderRecipient
 from receptionist.reminders.scheduler import parse_now, sync_events
 from receptionist.reminders.store import ReminderStore
 from receptionist.reminders.service import (
@@ -406,6 +406,7 @@ def _calendar_feed_event(
     contacts: list[Any] | None = None,
     appointment_changes: Any | None = None,
     patient_registry: PatientRegistry | None = None,
+    include_private_provenance: bool = False,
 ) -> dict[str, Any]:
     """Project a synced appointment event into the bridge's public contract.
 
@@ -432,15 +433,17 @@ def _calendar_feed_event(
     }
     # Google-managed events carry the authoritative link in private
     # extendedProperties; never parse title/description to recover identity.
-    if event.patient_id and event.appointment_id:
+    event_patient_id = getattr(event, "patient_id", None)
+    event_appointment_id = getattr(event, "appointment_id", None)
+    if event_patient_id and event_appointment_id:
         projected.update(
             {
-                "patient_id": event.patient_id,
-                "appointment_id": event.appointment_id,
+                "patient_id": event_patient_id,
+                "appointment_id": event_appointment_id,
             }
         )
     registry_record = None
-    if not (event.patient_id and event.appointment_id) and patient_registry is not None:
+    if not (event_patient_id and event_appointment_id) and patient_registry is not None:
         try:
             registry_record = patient_registry.get_appointment_by_google_event_id(
                 calendar_id=event.calendar_id,
@@ -455,6 +458,13 @@ def _calendar_feed_event(
                 "appointment_id": registry_record.appointment_id,
             }
         )
+    if include_private_provenance:
+        patient_metadata = extract_patient_metadata(event.notes)
+        if patient_metadata is not None:
+            if not patient_metadata.get("name") and event.summary:
+                patient_metadata = {**patient_metadata, "name": event.summary.strip()}
+            projected["patient_metadata"] = patient_metadata
+        projected["self_attendee_present"] = getattr(event, "has_self_attendee", None)
     if contacts is not None:
         appointment = {
             "event_id": event.event_id,
@@ -565,6 +575,7 @@ def calendar_events(args: argparse.Namespace) -> None:
                 contacts=contacts,
                 appointment_changes=getattr(config, "appointment_changes", None),
                 patient_registry=patient_registry,
+                include_private_provenance=True,
             )
             for event in batch.events
         ),
@@ -608,9 +619,11 @@ def _stored_appointment_event(record: dict[str, Any]) -> AppointmentEvent:
         end=datetime.fromisoformat(record["end_iso"]),
         timezone=record.get("timezone") or "UTC",
         attendee_emails=tuple(record.get("attendee_emails") or ()),
+        contact_match_keys=tuple(record.get("contact_match_keys") or ()),
         contact_email=record.get("contact_email"),
         contact_email_source=record.get("contact_email_source"),
         contact_email_recovered_at=record.get("contact_email_recovered_at"),
+        has_self_attendee=record.get("has_self_attendee", record.get("self_attendee_present")),
         recurring=bool(record.get("recurring")),
     )
 
@@ -619,6 +632,7 @@ def reminders_sync(args: argparse.Namespace) -> None:
     """Reconcile reminder jobs from the already-cached local event ledger."""
     config = _load_app_config()
     store = ReminderStore(config.reminders.store_path)
+    patient_registry = _load_patient_registry_for_feed()
     current = parse_now(args.now, config.business.timezone)
     lookback = current - timedelta(days=getattr(config.reminders, "lookback_days", 7))
     lookahead = current + timedelta(days=getattr(config.reminders, "lookahead_days", 30))
@@ -633,6 +647,7 @@ def reminders_sync(args: argparse.Namespace) -> None:
         events=(_stored_appointment_event(record) for record in records),
         contacts=load_contacts(config.reminders.contacts_path),
         now=current,
+        patient_registry=patient_registry,
     )
     _print_json({"ok": True, "synced_events": synced_events, "source": "local-cache"})
 
@@ -670,6 +685,7 @@ def calendar_feed(args: argparse.Namespace) -> None:
         contacts=load_contacts(config.reminders.contacts_path),
         now=current,
         tombstones=batch.tombstones,
+        patient_registry=patient_registry,
     )
     events = sorted(
         (
@@ -846,7 +862,15 @@ def reschedule_appointment(args: argparse.Namespace) -> None:
 
 
 def send_appointment_email(args: argparse.Namespace) -> None:
-    attendee_email = normalize_email(args.attendee_email)
+    registry_patient = None
+    if getattr(args, "patient_id", ""):
+        registry = _load_patient_registry_for_feed()
+        if registry is None:
+            raise ValueError("patient registry is unavailable")
+        registry_patient = registry.get_patient(args.patient_id)
+        if registry_patient is None:
+            raise ValueError("patient registry record was not found")
+    attendee_email = normalize_email(registry_patient.email if registry_patient is not None else args.attendee_email)
     if attendee_email is None:
         raise ValueError("appointment email requires a valid attendee email")
     config = _load_app_config()
@@ -860,6 +884,8 @@ def send_appointment_email(args: argparse.Namespace) -> None:
     allowed_emails = set(event.attendee_emails)
     if event.contact_email:
         allowed_emails.add(event.contact_email)
+    if registry_patient is not None and registry_patient.email:
+        allowed_emails.add(normalize_email(registry_patient.email) or "")
     if attendee_email not in allowed_emails:
         raise ValueError("appointment email recipient is not an attendee or recovered contact for the stored event")
     result = asyncio.run(
@@ -867,6 +893,19 @@ def send_appointment_email(args: argparse.Namespace) -> None:
             config=config,
             event=event,
             attendee_email=attendee_email,
+            registry_recipient=(
+                ReminderRecipient(
+                    recipient_id=registry_patient.patient_id,
+                    display_name=registry_patient.name,
+                    email=registry_patient.email,
+                    phone=registry_patient.phone,
+                    preferred_channels=("email",),
+                    sms_consent_status=registry_patient.sms_consent_status,
+                    consent_source="patient_registry",
+                )
+                if registry_patient is not None
+                else None
+            ),
         )
     )
     _print_json(
@@ -888,10 +927,28 @@ def send_appointment_sms(args: argparse.Namespace) -> None:
     )
     if event is None:
         raise ValueError("appointment SMS requires one active stored Google event")
+    registry_recipient = None
+    if getattr(args, "patient_id", ""):
+        registry = _load_patient_registry_for_feed()
+        if registry is None:
+            raise ValueError("patient registry is unavailable")
+        patient = registry.get_patient(args.patient_id)
+        if patient is None:
+            raise ValueError("patient registry record was not found")
+        registry_recipient = ReminderRecipient(
+            recipient_id=patient.patient_id,
+            display_name=patient.name,
+            email=patient.email,
+            phone=patient.phone,
+            preferred_channels=("sms",),
+            sms_consent_status=patient.sms_consent_status,
+            consent_source="patient_registry",
+        )
     result = asyncio.run(
         send_manual_appointment_sms(
             config=config,
             event=event,
+            registry_recipient=registry_recipient,
         )
     )
     _print_json(
@@ -1457,12 +1514,14 @@ def build_parser() -> argparse.ArgumentParser:
     send_email_parser.add_argument("--end-iso", required=True)
     send_email_parser.add_argument("--timezone", required=True)
     send_email_parser.add_argument("--attendee-email", default="")
+    send_email_parser.add_argument("--patient-id", default="")
     send_email_parser.set_defaults(func=send_appointment_email)
 
     send_sms_parser = subparsers.add_parser("send-sms")
     send_sms_parser.add_argument("--event-id", required=True)
     send_sms_parser.add_argument("--event-uid", default="")
     send_sms_parser.add_argument("--calendar-id", default="primary")
+    send_sms_parser.add_argument("--patient-id", default="")
     send_sms_parser.set_defaults(func=send_appointment_sms)
 
     email_get_parser = subparsers.add_parser("email-setup")

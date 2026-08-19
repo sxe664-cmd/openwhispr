@@ -184,13 +184,54 @@ test("upgrade migration maps legacy resolutions and triggers reject invalid writ
       cancelled_at DATETIME
     );
     INSERT INTO encounters (patient_resolution) VALUES ('obsolete_resolution');
+    CREATE TRIGGER validate_encounters_patient_resolution_insert
+    BEFORE INSERT ON encounters
+    FOR EACH ROW
+    WHEN NEW.patient_resolution IS NULL
+      OR NEW.patient_resolution NOT IN (
+        'created', 'matched', 'unassigned_missing_email',
+        'unassigned_multiple_attendees', 'unassigned_conflict',
+        'unassigned_invalid_metadata', 'unassigned_folder_unavailable',
+        'unassigned_legacy'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid patient_resolution');
+    END;
+    CREATE TRIGGER validate_encounters_patient_resolution_update
+    BEFORE UPDATE OF patient_resolution ON encounters
+    FOR EACH ROW
+    WHEN NEW.patient_resolution IS NULL
+      OR NEW.patient_resolution NOT IN (
+        'created', 'matched', 'unassigned_missing_email',
+        'unassigned_multiple_attendees', 'unassigned_conflict',
+        'unassigned_invalid_metadata', 'unassigned_folder_unavailable',
+        'unassigned_legacy'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'invalid patient_resolution');
+    END;
+    PRAGMA user_version = 1;
   `);
   legacy.close();
 
   const db = new DatabaseManager();
+  assert.equal(db.db.pragma("user_version", { simple: true }), 3);
   assert.equal(
     db.db.prepare("SELECT patient_resolution FROM encounters WHERE id = 1").get().patient_resolution,
     "unassigned_legacy"
+  );
+  const triggers = db.db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'validate_encounters_patient_resolution_%' ORDER BY name"
+    )
+    .all()
+    .map(({ sql }) => sql)
+    .join("\\n");
+  assert.match(triggers, /unassigned_missing_demographics/);
+  assert.doesNotThrow(() =>
+    db.db
+      .prepare("INSERT INTO encounters (patient_resolution) VALUES ('unassigned_missing_demographics')")
+      .run()
   );
   assert.throws(
     () => db.db.prepare("INSERT INTO encounters (patient_resolution) VALUES ('not-a-resolution')").run(),
@@ -200,6 +241,188 @@ test("upgrade migration maps legacy resolutions and triggers reject invalid writ
     () => db.db.prepare("UPDATE encounters SET patient_resolution = 'not-a-resolution' WHERE id = 1").run(),
     /invalid patient_resolution/i
   );
+  db.db.close();
+});
+
+test("v2 rebuild preserves legacy encounter outputs, indexes, and custom triggers", (t) => {
+  userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openwhispr-calendar-db-"));
+  let legacy;
+  try {
+    const SqliteDatabase = require("better-sqlite3");
+    legacy = new SqliteDatabase(path.join(userDataDir, "transcriptions.db"));
+  } catch (error) {
+    if (isNativeBindingUnavailable(error)) {
+      if (process.env.REQUIRE_DB_TESTS === "1") throw error;
+      t.skip("better-sqlite3 native binding is not available for this Node runtime");
+      return;
+    }
+    throw error;
+  }
+  legacy.exec([
+    "CREATE TABLE encounters (",
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
+    "  calendar_event_id TEXT UNIQUE,",
+    "  provider TEXT, calendar_id TEXT, title TEXT NOT NULL DEFAULT 'Encounter',",
+    "  start_time TEXT, end_time TEXT, source_status TEXT NOT NULL DEFAULT 'confirmed',",
+    "  lifecycle_state TEXT NOT NULL DEFAULT 'scheduled' CHECK (lifecycle_state IN ('scheduled', 'in_progress', 'completed', 'cancelled')),",
+    "  note_id INTEGER UNIQUE, meeting_context TEXT, attendees_count INTEGER NOT NULL DEFAULT 0, attendees TEXT,",
+    "  patient_resolution TEXT NOT NULL DEFAULT 'unassigned_missing_email' CHECK (patient_resolution IN ('created', 'matched', 'unassigned_missing_email', 'unassigned_legacy')),",
+    "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, started_at DATETIME, completed_at DATETIME, cancelled_at DATETIME",
+    ");",
+    "CREATE INDEX idx_legacy_encounters_title ON encounters(title);",
+    "CREATE TRIGGER legacy_encounter_audit AFTER UPDATE OF title ON encounters BEGIN SELECT 1; END;",
+    "CREATE TABLE encounter_outputs (encounter_id INTEGER PRIMARY KEY REFERENCES encounters(id) ON DELETE CASCADE, transcript_hash TEXT NOT NULL);",
+    "INSERT INTO encounters (calendar_event_id, title, patient_resolution) VALUES ('legacy-event', 'Legacy', 'created');",
+    "INSERT INTO encounter_outputs (encounter_id, transcript_hash) VALUES (1, 'legacy-hash');",
+    "PRAGMA user_version = 1;"
+  ].join("\n"));
+  legacy.close();
+
+  const db = new DatabaseManager();
+  assert.equal(db.db.pragma("user_version", { simple: true }), 3);
+  assert.deepEqual(
+    db.db.prepare("SELECT title, patient_resolution FROM encounters WHERE id = 1").get(),
+    { title: "Legacy", patient_resolution: "created" }
+  );
+  assert.deepEqual(
+    db.db.prepare("SELECT transcript_hash FROM encounter_outputs WHERE encounter_id = 1").get(),
+    { transcript_hash: "legacy-hash" }
+  );
+  assert.ok(db.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_legacy_encounters_title'").get());
+  assert.ok(db.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'legacy_encounter_audit'").get());
+  assert.deepEqual(db.db.pragma("foreign_key_check"), []);
+  db.db.close();
+});
+
+test("failed v2 migration rolls back and leaves the schema version unchanged", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+  db.db.pragma("user_version = 1");
+  const originalCreateTriggers = db._createPatientResolutionTriggers;
+  db._createPatientResolutionTriggers = () => {
+    throw new Error("forced migration failure");
+  };
+  assert.throws(() => db._migrateCalendarSchemaToV2(), /forced migration failure/);
+  assert.equal(db.db.pragma("user_version", { simple: true }), 1);
+  assert.ok(
+    db.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'validate_encounters_patient_resolution_insert'")
+      .get()
+  );
+  db._createPatientResolutionTriggers = originalCreateTriggers;
+  db.db.close();
+});
+
+test("future calendar schema versions fail closed without downgrade", () => {
+  assert.match(DATABASE_SOURCE, /currentVersion > CALENDAR_SCHEMA_VERSION/);
+  assert.match(DATABASE_SOURCE, /CALENDAR_SCHEMA_VERSION_UNSUPPORTED/);
+  assert.match(DATABASE_SOURCE, /schemaVersion: currentVersion/);
+});
+
+test("v1 startup migration failure leaves rows, stale triggers, and version unchanged", (t) => {
+  userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openwhispr-calendar-db-"));
+  let legacy;
+  try {
+    const SqliteDatabase = require("better-sqlite3");
+    legacy = new SqliteDatabase(path.join(userDataDir, "transcriptions.db"));
+  } catch (error) {
+    if (isNativeBindingUnavailable(error)) {
+      if (process.env.REQUIRE_DB_TESTS === "1") throw error;
+      t.skip("better-sqlite3 native binding is not available for this Node runtime");
+      return;
+    }
+    throw error;
+  }
+  legacy.exec([
+    "CREATE TABLE encounters (id INTEGER PRIMARY KEY AUTOINCREMENT, calendar_event_id TEXT UNIQUE, provider TEXT, calendar_id TEXT, title TEXT NOT NULL DEFAULT 'Encounter', start_time TEXT, end_time TEXT, source_status TEXT NOT NULL DEFAULT 'confirmed', lifecycle_state TEXT NOT NULL DEFAULT 'scheduled', note_id INTEGER UNIQUE, meeting_context TEXT, attendees_count INTEGER NOT NULL DEFAULT 0, attendees TEXT, patient_resolution TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, started_at DATETIME, completed_at DATETIME, cancelled_at DATETIME);",
+    "INSERT INTO encounters (calendar_event_id, patient_resolution) VALUES ('pre-migration-event', 'obsolete_resolution');",
+    "CREATE TRIGGER validate_encounters_patient_resolution_insert BEFORE INSERT ON encounters FOR EACH ROW WHEN NEW.patient_resolution IS NULL OR NEW.patient_resolution NOT IN ('created', 'matched', 'unassigned_missing_email', 'unassigned_legacy') BEGIN SELECT RAISE(ABORT, 'invalid patient_resolution'); END;",
+    "CREATE TRIGGER validate_encounters_patient_resolution_update BEFORE UPDATE OF patient_resolution ON encounters FOR EACH ROW WHEN NEW.patient_resolution IS NULL OR NEW.patient_resolution NOT IN ('created', 'matched', 'unassigned_missing_email', 'unassigned_legacy') BEGIN SELECT RAISE(ABORT, 'invalid patient_resolution'); END;",
+    "PRAGMA user_version = 1;",
+  ].join("\n"));
+  const preMigrationTriggerSql = legacy
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'validate_encounters_patient_resolution_%' ORDER BY name"
+    )
+    .all()
+    .map(({ sql }) => sql)
+    .join("\n");
+  legacy.close();
+
+  const originalCreateTriggers = DatabaseManager.prototype._createPatientResolutionTriggers;
+  DatabaseManager.prototype._createPatientResolutionTriggers = () => {
+    throw new Error("forced startup migration failure");
+  };
+  let db;
+  try {
+    db = new DatabaseManager();
+    assert.deepEqual(
+      db.db.prepare("SELECT patient_resolution FROM encounters WHERE id = 1").get(),
+      { patient_resolution: "obsolete_resolution" }
+    );
+    assert.equal(db.db.pragma("user_version", { simple: true }), 1);
+    const postMigrationTriggerSql = db.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'validate_encounters_patient_resolution_insert'")
+      .get().sql;
+    const allPostMigrationTriggerSql = db.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'validate_encounters_patient_resolution_%' ORDER BY name"
+      )
+      .all()
+      .map(({ sql }) => sql)
+      .join("\n");
+    assert.equal(allPostMigrationTriggerSql, preMigrationTriggerSql);
+    assert.doesNotMatch(postMigrationTriggerSql, /unassigned_missing_demographics/);
+    assert.deepEqual(db.getCalendarProjectionHealth(), {
+      ready: false,
+      schemaVersion: 1,
+      errorCode: "CALENDAR_PROJECTION_MIGRATION_FAILED",
+    });
+  } finally {
+    DatabaseManager.prototype._createPatientResolutionTriggers = originalCreateTriggers;
+    db?.db.close();
+  }
+});
+
+test("foreign-key validation failure rolls back the legacy rebuild before version 2", (t) => {
+  userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "openwhispr-calendar-db-"));
+  let legacy;
+  try {
+    const SqliteDatabase = require("better-sqlite3");
+    legacy = new SqliteDatabase(path.join(userDataDir, "transcriptions.db"));
+  } catch (error) {
+    if (isNativeBindingUnavailable(error)) {
+      if (process.env.REQUIRE_DB_TESTS === "1") throw error;
+      t.skip("better-sqlite3 native binding is not available for this Node runtime");
+      return;
+    }
+    throw error;
+  }
+  legacy.exec([
+    "PRAGMA foreign_keys = OFF;",
+    "CREATE TABLE encounters (id INTEGER PRIMARY KEY AUTOINCREMENT, calendar_event_id TEXT UNIQUE, provider TEXT, calendar_id TEXT, title TEXT NOT NULL DEFAULT 'Encounter', start_time TEXT, end_time TEXT, source_status TEXT NOT NULL DEFAULT 'confirmed', lifecycle_state TEXT NOT NULL DEFAULT 'scheduled', note_id INTEGER UNIQUE, meeting_context TEXT, attendees_count INTEGER NOT NULL DEFAULT 0, attendees TEXT, patient_resolution TEXT NOT NULL DEFAULT 'unassigned_missing_email' CHECK (patient_resolution IN ('created', 'matched', 'unassigned_missing_email', 'unassigned_legacy')), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, started_at DATETIME, completed_at DATETIME DEFAULT NULL, cancelled_at DATETIME DEFAULT NULL);",
+    "CREATE TABLE encounter_outputs (encounter_id INTEGER PRIMARY KEY REFERENCES encounters(id) ON DELETE CASCADE, transcript_hash TEXT NOT NULL);",
+    "INSERT INTO encounters (calendar_event_id, patient_resolution) VALUES ('valid-event', 'created');",
+    "INSERT INTO encounter_outputs (encounter_id, transcript_hash) VALUES (999, 'orphan-output');",
+    "CREATE TRIGGER legacy_encounter_audit AFTER UPDATE OF title ON encounters BEGIN SELECT 1; END;",
+    "PRAGMA user_version = 1;",
+  ].join("\n"));
+  legacy.close();
+
+  const db = new DatabaseManager();
+  assert.equal(db.db.pragma("user_version", { simple: true }), 1);
+  assert.deepEqual(
+    db.db.prepare("SELECT calendar_event_id, patient_resolution FROM encounters WHERE id = 1").get(),
+    { calendar_event_id: "valid-event", patient_resolution: "created" }
+  );
+  assert.deepEqual(
+    db.db.prepare("SELECT transcript_hash FROM encounter_outputs WHERE encounter_id = 999").get(),
+    { transcript_hash: "orphan-output" }
+  );
+  assert.ok(db.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'legacy_encounter_audit'").get());
+  assert.match(db.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'encounters'").get().sql, /unassigned_missing_email/);
+  assert.equal(db.db.pragma("foreign_keys", { simple: true }), 1);
+  assert.equal(db.getCalendarProjectionHealth().errorCode, "CALENDAR_PROJECTION_MIGRATION_FAILED");
   db.db.close();
 });
 
@@ -443,7 +666,7 @@ test("upgrade relocation moves valid legacy metadata without historical assignme
     null
   );
   assert.equal(reloaded.db.prepare("SELECT COUNT(*) AS count FROM patient_profiles").get().count, 0);
-  assert.equal(reloaded.db.prepare("SELECT COUNT(*) AS count FROM encounters").get().count, 0);
+  assert.equal(reloaded.db.prepare("SELECT COUNT(*) AS count FROM encounters").get().count, 1);
   reloaded.db.close();
 });
 
@@ -501,6 +724,42 @@ test("tentative Apple events remain visible in upcoming meetings", (t) => {
     events.some((event) => event.id === "tentative-event"),
     true
   );
+  db.db.close();
+});
+
+test("note generation candidates require a real encounter link", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Regular meeting note", "", "meeting").note;
+  const withoutEncounter = db.createNoteGenerationCandidate({
+    noteId: note.id,
+    generatedContent: "# Candidate",
+  });
+  assert.equal(withoutEncounter.success, false);
+  assert.equal(withoutEncounter.code, "ENCOUNTER_REQUIRED");
+
+  db.db
+    .prepare(
+      `INSERT INTO encounters
+        (calendar_event_id, provider, calendar_id, title, note_id, patient_resolution)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      "ai_receptionist:primary:encounter-candidate-test",
+      "ai_receptionist",
+      "primary",
+      "Encounter candidate test",
+      note.id,
+      "unassigned_legacy"
+    );
+
+  const linked = db.createNoteGenerationCandidate({
+    noteId: note.id,
+    generatedContent: "# Candidate",
+  });
+  assert.equal(linked.success, true);
+  assert.equal(linked.candidate.note_id, note.id);
   db.db.close();
 });
 
@@ -669,6 +928,38 @@ test("final encounter transcript is persisted before the encounter is completed"
   db.db.close();
 });
 
+test("direct encounter resolution and output reconciliation do not depend on scheduled-list size", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const completedEvent = restEvent("ai_receptionist", "primary", "direct-completed");
+  db.upsertCalendarEvents([completedEvent]);
+  db.upsertEncountersFromCalendarEvents([completedEvent]);
+  const started = db.startEncounterForCalendarEvent(completedEvent.id);
+  const completed = db.completeEncounterRecording(
+    started.note.id,
+    '[{"text":"The patient reports improvement."}]'
+  );
+  assert.equal(completed.success, true);
+
+  const scheduledEvents = Array.from({ length: 225 }, (_, index) =>
+    restEvent("ai_receptionist", "primary", `scheduled-overflow-${index}`)
+  );
+  db.upsertCalendarEvents(scheduledEvents);
+  db.upsertEncountersFromCalendarEvents(scheduledEvents);
+
+  const listed = db.getEncounters(200);
+  assert.equal(listed.some((encounter) => encounter.id === started.encounter.id), false);
+
+  const direct = db.getEncounterByNoteId(started.note.id);
+  assert.equal(direct.id, started.encounter.id);
+
+  const pending = db.getEncountersNeedingOutputGeneration(50);
+  assert.equal(pending.some((encounter) => encounter.id === started.encounter.id), true);
+  assert.equal(pending.some((encounter) => encounter.note_id == null), false);
+  db.db.close();
+});
+
 test("bounded encounter and calendar queries use an exclusive end boundary", (t) => {
   const db = createDb(t);
   if (!db) return;
@@ -724,6 +1015,51 @@ test("guarded output completion rejects a generation raced by a transcript edit"
   assert.equal(finished.output.summary, null);
   assert.equal(finished.output.summary_status, "pending");
   assert.equal(finished.output.transcript_revision, begun.token.transcriptRevision + 1);
+  db.db.close();
+});
+
+test("output generation claims prevent duplicate work and reclaim stale claims safely", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const { encounterId, noteId } = startEncounterOutputFixture(db, "output-claim");
+  db.updateNote(noteId, { transcript: '[{"text":"Current transcript"}]' });
+
+  const first = db.beginEncounterOutputGeneration(encounterId);
+  assert.equal(typeof first.token.generationId, "string");
+  assert.equal("generation_id" in first.output, false);
+
+  const duplicate = db.beginEncounterOutputGeneration(encounterId);
+  assert.equal(duplicate.busy, true);
+  assert.equal(duplicate.token, null);
+
+  db.db
+    .prepare("UPDATE encounter_outputs SET generation_started_at = '2000-01-01 00:00:00' WHERE encounter_id = ?")
+    .run(encounterId);
+  const reclaimed = db.beginEncounterOutputGeneration(encounterId);
+  assert.equal(reclaimed.busy, false);
+  assert.notEqual(reclaimed.token.generationId, first.token.generationId);
+
+  const oldFinish = db.finishEncounterOutputGeneration(encounterId, first.token, {
+    summary: "Old summary",
+    summary_status: "ready",
+    soap: "Old SOAP",
+    soap_status: "ready",
+    focus: "Old focus",
+    focus_status: "ready",
+  });
+  assert.equal(oldFinish.applied, false);
+
+  const currentFinish = db.finishEncounterOutputGeneration(encounterId, reclaimed.token, {
+    summary: "Current summary",
+    summary_status: "ready",
+    soap: "Current SOAP",
+    soap_status: "ready",
+    focus: "Current focus",
+    focus_status: "ready",
+  });
+  assert.equal(currentFinish.applied, true);
+  assert.equal(currentFinish.output.summary, "Current summary");
   db.db.close();
 });
 

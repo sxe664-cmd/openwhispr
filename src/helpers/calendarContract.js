@@ -1,3 +1,5 @@
+const { normalizePatientPhone } = require("./patientIdentity");
+
 const MAX_CALENDAR_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
 const MAX_CALENDAR_ROWS = 500;
 
@@ -66,6 +68,20 @@ function canonicalOccurrenceId({ provider = "ai_receptionist", calendarId, event
   return [provider, encodePart(calendarId), encodePart(eventId), encodePart(startTime)].join(":");
 }
 
+function canonicalCalendarIdentityKey({
+  provider = "ai_receptionist",
+  calendarId,
+  eventId,
+  recurringEventId = null,
+  originalStartTime = null,
+}) {
+  if (!calendarId || !eventId) throw new TypeError("calendar identity is incomplete");
+  const identityParts = recurringEventId && originalStartTime
+    ? [recurringEventId, originalStartTime]
+    : [eventId];
+  return [provider, calendarId, ...identityParts].map(encodePart).join(":");
+}
+
 function parseAttendees(value) {
   if (Array.isArray(value)) return value;
   if (typeof value !== "string" || !value) return [];
@@ -95,15 +111,46 @@ function canonicalEventFromAppointment(appointment) {
   const endTime = appointment.end_iso || appointment.endTime;
   const calendarId = appointment.calendar_id || appointment.calendarId || "primary";
   if (!eventId || !startTime || !endTime) return null;
+  const recurringEventId = appointment.recurring_event_id
+    || appointment.recurringEventId
+    || null;
+  const originalStartTime = appointment.original_start_time
+    || appointment.originalStartTime
+    || appointment.original_start_iso
+    || appointment.originalStartIso
+    || null;
   const attendees = parseAttendees(appointment.attendees || appointment.attendee_emails)
     .map(normalizeAttendee)
     .filter((attendee) => attendee?.email);
   const provider = appointment.provider || "ai_receptionist";
+  const patientEmail = typeof appointment.patient_email === "string" && appointment.patient_email.trim()
+    ? appointment.patient_email.trim().toLowerCase()
+    : null;
+  const patientPhone = normalizePatientPhone(appointment.patient_phone);
+  const patientSmsConsentStatus = appointment.patient_sms_consent_status === "opted_out"
+    ? "opted_out"
+    : "opted_in";
+  const linkedPatient = Boolean(appointment.patient_id || appointment.patientId);
+  const patientReady = appointment.patient_link_status == null
+    || appointment.patient_link_status === "linked"
+    || appointment.patient_link_status === "created";
+  const patientIdentityBlocked = appointment.patient_link_status === "patient_details_required"
+    || appointment.patient_link_status === "identity_conflict"
+    || appointment.patient_link_status === "unknown_patient_id";
   return {
     provider,
     calendarId,
     eventId: String(eventId),
     eventUid: String(appointment.event_uid || appointment.eventUid || eventId),
+    calendarIdentityKey: appointment.calendar_identity_key
+      || appointment.calendarIdentityKey
+      || canonicalCalendarIdentityKey({
+        provider,
+        calendarId,
+        eventId: String(eventId),
+        recurringEventId,
+        originalStartTime,
+      }),
     occurrenceId: appointment.occurrence_id || appointment.occurrenceId
       || canonicalOccurrenceId({ provider, calendarId, eventId, startTime }),
     summary: appointment.summary || appointment.title || "Appointment",
@@ -115,12 +162,35 @@ function canonicalEventFromAppointment(appointment) {
     recurrence: typeof appointment.recurrence === "string"
       ? parseJson(appointment.recurrence)
       : appointment.recurrence || (appointment.recurring ? { recurring: true } : null),
+    recurringEventId,
+    originalStartTime,
     attendees,
     conferenceUrl: appointment.conference_url || appointment.hangout_link || null,
     calendarUrl: appointment.html_link || appointment.calendar_url || null,
+    patientId: appointment.patient_id || appointment.patientId || null,
+    appointmentId: appointment.appointment_id || appointment.appointmentId || null,
+    patientName: appointment.patient_name || appointment.patientName || null,
+    patientDob: appointment.patient_dob || appointment.patientDob || null,
+    patientEmail,
+    patientPhone,
+    patientSmsConsentStatus,
+    patientLinkStatus: appointment.patient_link_status || appointment.patientLinkStatus || null,
+    patientLinkSource: appointment.patient_link_source || appointment.patientLinkSource || null,
     capabilities: {
-      canSendEmail: appointment.capabilities?.canSendEmail ?? attendees.length > 0,
-      canSendSms: appointment.capabilities?.canSendSms ?? appointment.sms_available === true,
+      canSendEmail: patientIdentityBlocked
+        ? false
+        : linkedPatient && patientReady
+        ? Boolean(patientEmail)
+        : patientEmail
+          ? true
+          : appointment.capabilities?.canSendEmail ?? attendees.length > 0,
+      canSendSms: patientIdentityBlocked
+        ? false
+        : linkedPatient && patientReady
+        ? Boolean(patientPhone && patientSmsConsentStatus === "opted_in")
+        : patientPhone && patientSmsConsentStatus === "opted_in"
+          ? true
+          : appointment.capabilities?.canSendSms ?? appointment.sms_available === true,
       canRename: appointment.capabilities?.canRename ?? (appointment.appointment_changes_enabled === undefined ? true : appointment.appointment_changes_enabled === true),
       canCancel: appointment.capabilities?.canCancel ?? (appointment.can_cancel === undefined ? true : appointment.can_cancel === true),
       canReschedule: appointment.capabilities?.canReschedule ?? (appointment.can_reschedule === undefined ? true : appointment.can_reschedule === true),
@@ -135,7 +205,12 @@ function canonicalEventFromRow(row) {
     calendar_id: row.calendar_id,
     event_id: row.event_id || row.event_uid || row.id,
     event_uid: row.event_uid,
-    occurrence_id: row.occurrence_id || row.id,
+    calendar_identity_key: row.calendar_identity_key,
+    // Reminder actions resolve through the local calendar_events primary key.
+    // Older/provider-ingested rows can carry a provider-less occurrence_id,
+    // which is useful recurrence metadata but is not a resolvable local row
+    // identifier. Keep the durable row id as the renderer action key.
+    occurrence_id: row.id || row.occurrence_id,
     start_iso: row.start_time,
     end_iso: row.end_time,
     timezone: row.timezone,
@@ -146,7 +221,18 @@ function canonicalEventFromRow(row) {
     conference_url: row.hangout_link,
     html_link: row.html_link,
     recurrence: row.recurrence,
+    recurring_event_id: row.recurring_event_id,
+    original_start_time: row.original_start_time,
     capabilities: row.capabilities ? parseJson(row.capabilities) : undefined,
+    patient_id: row.patient_id,
+    appointment_id: row.appointment_id,
+    patient_name: row.patient_name,
+    patient_dob: row.patient_dob,
+    patient_email: row.patient_email,
+    patient_phone: row.patient_phone,
+    patient_sms_consent_status: row.patient_sms_consent_status,
+    patient_link_status: row.patient_link_status,
+    patient_link_source: row.patient_link_source,
   });
   return event;
 }
@@ -171,6 +257,7 @@ function redactSecrets(value) {
 }
 
 module.exports = {
+  canonicalCalendarIdentityKey,
   MAX_CALENDAR_RANGE_MS,
   MAX_CALENDAR_ROWS,
   canonicalEventFromAppointment,

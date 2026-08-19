@@ -1813,6 +1813,7 @@
       "asTranscriptMarkdown": "Como Markdown (.md)",
       "raw": "Sin procesar",
       "enhanced": "Mejorado",
+      "clinicalNote": "Nota clínica",
       "saving": "Guardando",
       "startWriting": "Comienza a escribir...",
       "staleIndicator": "El contenido ha cambiado desde la mejora",

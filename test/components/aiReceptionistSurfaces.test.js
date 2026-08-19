@@ -43,7 +43,7 @@ test("sidebar and settings point to dedicated Calendar & Reminders and AI Recept
   assert.match(sidebar, /id: "ai-receptionist"/);
   assert.match(panel, /CalendarRemindersView/);
   assert.match(panel, /AIReceptionistView/);
-  assert.match(settings, /case "calendarReminders":\s*return \(\s*<CalendarRemindersView embedded \/>\s*\)/);
+  assert.doesNotMatch(settings, /case "calendarReminders":/);
   assert.match(settings, /case "aiReceptionist":\s*return <AIReceptionistView embedded \/>;/);
 });
 

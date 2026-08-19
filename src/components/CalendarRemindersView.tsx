@@ -122,8 +122,13 @@ interface AppointmentCardProps {
  */
 function AppointmentCard({ event, cached, actionState, sentChannels, onSend }: AppointmentCardProps) {
   const key = eventKey(event);
-  const attendeeEmail = event.attendees.find((attendee) => attendee.email)?.email || "";
-  const emailReady = Boolean(attendeeEmail) && event.capabilities.canSendEmail;
+  const attendee = event.attendees.find((candidate) => candidate.email);
+  const attendeeEmail = attendee?.email || "";
+  const registryLinked = event.patientLinkStatus === "linked" || event.patientLinkStatus === "created";
+  const patientEmail = registryLinked ? event.patientEmail || "" : event.patientEmail || attendeeEmail;
+  const patientPhone = event.patientPhone || "";
+  const patientName = event.patientName || null;
+  const emailReady = Boolean(patientEmail) && event.capabilities.canSendEmail;
   const smsReady = event.capabilities.canSendSms;
   const emailUsed = sentChannels.has(`${key}:email`);
   const smsUsed = sentChannels.has(`${key}:sms`);
@@ -143,10 +148,19 @@ function AppointmentCard({ event, cached, actionState, sentChannels, onSend }: A
         <small className="appointment-card__metadata">
           <span className="appointment-card__time"><Clock3 size={12} />{formatAppointmentTime(event)}</span>
           <span className="appointment-card__metadata-separator" aria-hidden="true">&middot;</span>
-          <span className={cn("appointment-card__recipient", !attendeeEmail && "appointment-card__recipient--missing")}>
-            {attendeeEmail ? <><Users size={12} />{attendeeEmail}</> : <><Mail size={12} />No email on event</>}
+          <span className={cn("appointment-card__recipient", !patientName && "appointment-card__recipient--missing")}>
+            {patientName ? <><Users size={12} />{patientName}</> : <><Users size={12} />Patient details required</>}
           </span>
         </small>
+        <small className="appointment-card__metadata">
+          {patientEmail ? <><Mail size={12} />{patientEmail}</> : <span className="appointment-card__recipient--missing"><Mail size={12} />No email in patient registry</span>}
+          {patientPhone && <><span className="appointment-card__metadata-separator" aria-hidden="true">&middot;</span><span>{patientPhone}</span></>}
+        </small>
+        {!registryLinked && (
+          <small className="appointment-card__recipient--missing">
+            Use the calendar title for the patient name and add DOB as MM/DD/YYYY in the description. New patients also need Phone and Email.
+          </small>
+        )}
         {cancelled && <small className="appointment-card__cancelled-label">Cancelled</small>}
       </div>
       <div className="appointment-card__controls">
@@ -157,7 +171,7 @@ function AppointmentCard({ event, cached, actionState, sentChannels, onSend }: A
             onClick={() => onSend(event, "sms")}
             disabled={!smsReady || smsUsed || actionState === "sending_sms"}
             aria-label={smsReady ? "Send SMS" : "SMS unavailable"}
-            title={smsReady ? "Send SMS" : "SMS unavailable: no eligible opted-in contact"}
+            title={smsReady ? "Send SMS" : "SMS unavailable: add a phone number and mark SMS consent opted in"}
           >
             <MessageSquare className="appointment-action__icon" size={17} />
           </button>
@@ -167,7 +181,7 @@ function AppointmentCard({ event, cached, actionState, sentChannels, onSend }: A
             onClick={() => onSend(event, "email")}
             disabled={!emailReady || emailUsed || actionState === "sending_email"}
             aria-label={emailReady ? "Send email" : "Email unavailable"}
-            title={emailReady ? "Send email" : "Email unavailable: no attendee email"}
+            title={emailReady ? "Send email" : "Email unavailable: add an email to the patient registry"}
           >
             <Mail className="appointment-action__icon" size={17} />
           </button>

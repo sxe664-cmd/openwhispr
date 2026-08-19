@@ -15,9 +15,10 @@ from typing import Any, Iterator
 from receptionist.reminders.phone import normalize_us_phone
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REGISTRY_ENV = "HIRA_PATIENT_REGISTRY_PATH"
 DEFAULT_APPOINTMENT_SOURCE = "ai_receptionist"
+SMS_CONSENT_STATUSES = {"unknown", "opted_in", "opted_out"}
 _LOCK_RETRIES = 6
 _LOCK_DELAY_SECONDS = 0.05
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -53,6 +54,7 @@ class PatientRecord:
     active: bool
     created_at: str
     updated_at: str
+    sms_consent_status: str = "opted_in"
 
 
 @dataclass(frozen=True)
@@ -225,6 +227,9 @@ class PatientRegistry:
                     normalized_dob TEXT NOT NULL,
                     normalized_phone TEXT,
                     normalized_email TEXT,
+                    sms_consent_status TEXT NOT NULL DEFAULT 'opted_in',
+                    merged_into_patient_id TEXT,
+                    merged_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
@@ -233,6 +238,8 @@ class PatientRegistry:
                     ON patients(normalized_dob, normalized_phone);
                 CREATE INDEX IF NOT EXISTS idx_patients_dob_email
                     ON patients(normalized_dob, normalized_email);
+                CREATE INDEX IF NOT EXISTS idx_patients_name_dob
+                    ON patients(normalized_name, normalized_dob);
                 CREATE TABLE IF NOT EXISTS appointments (
                     appointment_id TEXT PRIMARY KEY,
                     patient_id TEXT NOT NULL REFERENCES patients(patient_id),
@@ -242,6 +249,7 @@ class PatientRegistry:
                     provider TEXT NOT NULL,
                     calendar_id TEXT NOT NULL,
                     google_event_id TEXT,
+                    calendar_identity_key TEXT,
                     status TEXT NOT NULL,
                     source TEXT NOT NULL,
                     idempotency_key TEXT NOT NULL UNIQUE,
@@ -250,9 +258,39 @@ class PatientRegistry:
                 );
                 CREATE INDEX IF NOT EXISTS idx_appointments_google_event
                     ON appointments(calendar_id, google_event_id);
+                CREATE INDEX IF NOT EXISTS idx_appointments_identity
+                    ON appointments(calendar_identity_key);
+                CREATE TABLE IF NOT EXISTS patient_merge_history (
+                    merge_id TEXT PRIMARY KEY,
+                    source_patient_id TEXT NOT NULL,
+                    survivor_patient_id TEXT NOT NULL,
+                    field_choices TEXT,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(patients)").fetchall()}
+            if "sms_consent_status" not in columns:
+                connection.execute(
+                    "ALTER TABLE patients ADD COLUMN sms_consent_status TEXT NOT NULL DEFAULT 'opted_in'"
+                )
+            if "merged_into_patient_id" not in columns:
+                connection.execute("ALTER TABLE patients ADD COLUMN merged_into_patient_id TEXT")
+            if "merged_at" not in columns:
+                connection.execute("ALTER TABLE patients ADD COLUMN merged_at TEXT")
+            appointment_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(appointments)").fetchall()
+            }
+            if "calendar_identity_key" not in appointment_columns:
+                connection.execute("ALTER TABLE appointments ADD COLUMN calendar_identity_key TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_appointments_identity ON appointments(calendar_identity_key)"
+            )
+            connection.execute(
+                "UPDATE patients SET sms_consent_status = 'opted_in' WHERE sms_consent_status IS NULL OR sms_consent_status = 'unknown'"
+            )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.commit()
 
         # executescript manages its own DDL transaction; keep initialization
         # outside the repository's BEGIN/COMMIT wrapper.
@@ -269,6 +307,7 @@ class PatientRegistry:
         phone: object = None,
         email: object = None,
         patient_id: str | None = None,
+        sms_consent_status: str = "opted_in",
     ) -> PatientRecord:
         normalized_name = " ".join(str(name or "").split())
         if not normalized_name:
@@ -276,6 +315,10 @@ class PatientRegistry:
         normalized_dob = normalize_dob(dob)
         normalized_phone = normalize_phone(phone)
         normalized_email = normalize_email(email)
+        if sms_consent_status not in SMS_CONSENT_STATUSES:
+            raise PatientIdentityError("invalid_sms_consent", "sms consent status is invalid")
+        if sms_consent_status == "unknown":
+            sms_consent_status = "opted_in"
         now = _utc_now()
         record = PatientRecord(
             patient_id=patient_id or str(uuid.uuid4()),
@@ -286,6 +329,7 @@ class PatientRegistry:
             active=True,
             created_at=now,
             updated_at=now,
+            sms_consent_status=sms_consent_status,
         )
 
         def _insert(connection: sqlite3.Connection) -> PatientRecord:
@@ -294,8 +338,8 @@ class PatientRegistry:
                 INSERT INTO patients(
                     patient_id, name, dob, phone, email, normalized_name,
                     normalized_dob, normalized_phone, normalized_email,
-                    created_at, updated_at, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    sms_consent_status, created_at, updated_at, active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
                     record.patient_id,
@@ -307,6 +351,7 @@ class PatientRegistry:
                     record.dob,
                     record.phone,
                     record.email,
+                    sms_consent_status,
                     record.created_at,
                     record.updated_at,
                 ),
@@ -336,7 +381,7 @@ class PatientRegistry:
         patient_id: str | None = None,
         create_if_missing: bool = False,
     ) -> PatientResolution:
-        """Resolve only exact DOB+phone or DOB+email identity evidence."""
+        """Resolve by exact normalized name+DOB, creating when requested."""
         self._ensure_initialized()
         if patient_id:
             patient = self.get_patient(patient_id)
@@ -350,33 +395,38 @@ class PatientRegistry:
         normalized_dob = normalize_dob(dob)
         normalized_phone = normalize_phone(phone)
         normalized_email = normalize_email(email)
-        if not normalized_phone and not normalized_email:
-            raise PatientIdentityError("missing_contact", "phone or email is required")
+        normalized_name_key = normalize_name_key(normalized_name)
 
-        def _find(connection: sqlite3.Connection) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
-            phone_rows: list[sqlite3.Row] = []
-            email_rows: list[sqlite3.Row] = []
-            if normalized_phone:
-                phone_rows = list(connection.execute(
-                    "SELECT * FROM patients WHERE active = 1 AND normalized_dob = ? AND normalized_phone = ?",
-                    (normalized_dob, normalized_phone),
-                ).fetchall())
-            if normalized_email:
-                email_rows = list(connection.execute(
-                    "SELECT * FROM patients WHERE active = 1 AND normalized_dob = ? AND normalized_email = ?",
-                    (normalized_dob, normalized_email),
-                ).fetchall())
-            return phone_rows, email_rows
+        def _find(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+            return list(connection.execute(
+                "SELECT * FROM patients WHERE active = 1 AND normalized_name = ? AND normalized_dob = ?",
+                (normalized_name_key, normalized_dob),
+            ).fetchall())
 
-        phone_rows, email_rows = self._run(_find)
-        if len(phone_rows) > 1 or len(email_rows) > 1:
+        rows = self._run(_find)
+        if len(rows) > 1:
             raise PatientIdentityError("multiple_matches", "identity matched multiple patients")
-        phone_patient = _patient_from_row(phone_rows[0]) if phone_rows else None
-        email_patient = _patient_from_row(email_rows[0]) if email_rows else None
-        if phone_patient and email_patient and phone_patient.patient_id != email_patient.patient_id:
-            raise PatientIdentityError("conflicting_identity", "phone and email matched different patients")
-        patient = phone_patient or email_patient
+        patient = _patient_from_row(rows[0]) if rows else None
         if patient:
+            if (normalized_phone and not patient.phone) or (normalized_email and not patient.email):
+                now = _utc_now()
+
+                def _fill_missing(connection: sqlite3.Connection) -> None:
+                    connection.execute(
+                        """
+                        UPDATE patients
+                        SET phone = COALESCE(phone, ?),
+                            email = COALESCE(email, ?),
+                            normalized_phone = COALESCE(normalized_phone, ?),
+                            normalized_email = COALESCE(normalized_email, ?),
+                            updated_at = ?
+                        WHERE patient_id = ?
+                        """,
+                        (normalized_phone, normalized_email, normalized_phone, normalized_email, now, patient.patient_id),
+                    )
+
+                self._run(_fill_missing, write=True)
+                patient = self.get_patient(patient.patient_id)
             return PatientResolution(patient=patient, reason="exact_match")
         if not create_if_missing:
             return PatientResolution(patient=None, reason="no_match")
@@ -510,6 +560,37 @@ class PatientRegistry:
 
         return self._run(_update, write=True)
 
+    def update_appointment_schedule(
+        self,
+        appointment_id: str,
+        *,
+        start: str,
+        end: str,
+        status: str = "confirmed",
+    ) -> AppointmentRecord:
+        """Update an existing appointment without changing its identity."""
+        self._ensure_initialized()
+        now = _utc_now()
+
+        def _update(connection: sqlite3.Connection) -> AppointmentRecord:
+            connection.execute(
+                """
+                UPDATE appointments
+                SET start = ?, end = ?, status = ?, updated_at = ?
+                WHERE appointment_id = ?
+                """,
+                (str(start), str(end), str(status), now, str(appointment_id)),
+            )
+            row = connection.execute(
+                "SELECT * FROM appointments WHERE appointment_id = ?",
+                (str(appointment_id),),
+            ).fetchone()
+            if row is None:
+                raise PatientRegistryError("appointment_id was not found")
+            return _appointment_from_row(row)
+
+        return self._run(_update, write=True)
+
     def get_appointment(self, appointment_id: str) -> AppointmentRecord | None:
         self._ensure_initialized()
         row = self._run(
@@ -564,6 +645,11 @@ def _patient_from_row(row: sqlite3.Row) -> PatientRecord:
         active=bool(row["active"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        sms_consent_status=(
+            "opted_out"
+            if row["sms_consent_status"] == "opted_out"
+            else "opted_in"
+        ) if "sms_consent_status" in row.keys() else "opted_in",
     )
 
 

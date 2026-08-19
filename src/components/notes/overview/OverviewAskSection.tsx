@@ -5,6 +5,8 @@ import { ChatInput } from "../../chat/ChatInput";
 import type { Message, AgentState } from "../../chat/types";
 import type { ContainerConversationItem } from "../../../hooks/useContainerChat";
 import { ConversationPicker } from "../ConversationPicker";
+import { ConfirmDialog } from "../../ui/dialog";
+import { useDialogs } from "../../../hooks/useDialogs";
 
 const PROMPT_CHIP_KEYS = [
   "notes.overview.ask.chips.catchUp",
@@ -21,6 +23,7 @@ interface OverviewAskSectionProps {
   activeConversationId: number | null;
   onSwitchConversation: (id: number) => void;
   onNewChat: () => void;
+  onDeleteConversation: (id: number) => Promise<void>;
   onOpenNote: (noteId: number) => void;
 }
 
@@ -33,10 +36,24 @@ export function OverviewAskSection({
   activeConversationId,
   onSwitchConversation,
   onNewChat,
+  onDeleteConversation,
   onOpenNote,
 }: OverviewAskSectionProps) {
   const { t } = useTranslation();
+  const { confirmDialog, showConfirmDialog, hideConfirmDialog } = useDialogs();
   const hasMessages = messages.length > 0;
+
+  const handleDeleteConversation = (id: number) => {
+    showConfirmDialog({
+      title: t("embeddedChat.deleteConversationTitle"),
+      description: t("embeddedChat.deleteConversationDescription"),
+      confirmText: t("embeddedChat.deleteConversation"),
+      onConfirm: () => {
+        void onDeleteConversation(id);
+      },
+      variant: "destructive",
+    });
+  };
 
   const conversationPicker = (conversations.length > 0 || hasMessages) && (
     <div className="flex items-center px-3 pt-2">
@@ -45,6 +62,7 @@ export function OverviewAskSection({
         activeConversationId={activeConversationId}
         onSwitchConversation={onSwitchConversation}
         onNewChat={onNewChat}
+        onDeleteConversation={handleDeleteConversation}
       />
     </div>
   );
@@ -63,6 +81,16 @@ export function OverviewAskSection({
         onTextSubmit={onTextSubmit}
         onCancel={onCancel}
         placeholder={t("notes.overview.ask.placeholder")}
+      />
+      <ConfirmDialog
+        open={confirmDialog.open}
+        onOpenChange={hideConfirmDialog}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmText={confirmDialog.confirmText}
+        cancelText={confirmDialog.cancelText}
+        onConfirm={confirmDialog.onConfirm}
+        variant={confirmDialog.variant}
       />
       {!hasMessages && (
         <div className="flex items-center flex-wrap gap-1.5 px-3 pb-3">

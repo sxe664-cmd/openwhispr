@@ -80,10 +80,12 @@ export default function EncounterHomeView() {
 
       {actionError && <div className="mb-3 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive"><AlertCircle size={14} className="mt-0.5 shrink-0" /><span>{actionError}</span></div>}
       {syncState !== "ready" && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{syncState === "syncing" ? <Loader2 size={14} className="mt-0.5 animate-spin" /> : <CloudOff size={14} className="mt-0.5" />}<span>{syncState === "syncing" ? t("encounters.syncingDescription") : t("encounters.cachedDescription")}{lastSyncedAt && <span className="ml-1 opacity-80">{t("encounters.lastSynced", { time: new Date(lastSyncedAt).toLocaleString() })}</span>}</span></div>}
-      {error && encounters.length === 0 && syncState === "error" && <div className="mb-4 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
+      {error && <div className="mb-4 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive" role="alert"><AlertCircle size={14} className="mt-0.5 shrink-0" /><span>{error}</span></div>}
 
-      {isLoading && encounters.length === 0 ? (
+      {isLoading && encounters.length === 0 && !error ? (
         <div className="flex items-center justify-center gap-2 rounded-xl border border-border/60 bg-card/50 py-12 text-sm text-muted-foreground"><Loader2 size={15} className="animate-spin text-primary" />{t("controlPanel.loading")}</div>
+      ) : encounters.length === 0 && error ? (
+        <div className="rounded-xl border border-destructive/25 bg-destructive/5 px-6 py-12 text-center" role="status"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-destructive/10 text-destructive"><AlertCircle size={19} /></div><h3 className="mt-3 text-sm font-semibold text-foreground">{t("encounters.sync.error")}</h3><p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">{error}</p></div>
       ) : encounters.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border/70 bg-card/30 px-6 py-12 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><CalendarClock size={19} /></div><h3 className="mt-3 text-sm font-semibold text-foreground">{t("encounters.emptyTitle")}</h3><p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">{t("encounters.emptyDescription")}</p></div>
       ) : (

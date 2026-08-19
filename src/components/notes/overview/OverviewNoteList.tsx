@@ -22,7 +22,10 @@ export function OverviewNoteList({
 }: OverviewNoteListProps) {
   const { t } = useTranslation();
 
-  const groups = useMemo(() => groupItemsByDate(notes, (n) => n.updated_at, t), [notes, t]);
+  const groups = useMemo(
+    () => groupItemsByDate(notes, (n) => n.encounter_start_time || n.updated_at, t),
+    [notes, t]
+  );
 
   if (notes.length === 0) {
     return (
@@ -59,6 +62,9 @@ export function OverviewNoteList({
             {group.label}
           </div>
           {group.items.map((note) => {
+            const encounterDate = note.encounter_start_time
+              ? new Date(note.encounter_start_time).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+              : null;
             return (
               <button
                 key={note.id}
@@ -69,8 +75,15 @@ export function OverviewNoteList({
                   size={14}
                   className="text-foreground/30 dark:text-foreground/20 shrink-0"
                 />
-                <span className="text-[13px] text-foreground/85 truncate flex-1">
-                  {note.title || t("notes.list.untitled")}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-foreground/85">
+                    {note.title || t("notes.list.untitled")}
+                  </span>
+                  {(encounterDate || note.encounter_title) && (
+                    <span className="block truncate text-[10px] text-foreground/40">
+                      {[encounterDate, note.encounter_title].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
                 </span>
                 <span className="text-[11px] text-foreground/35 dark:text-foreground/25 shrink-0 tabular-nums">
                   {formatRelativeTime(note.updated_at, t)}

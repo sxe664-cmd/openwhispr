@@ -237,6 +237,7 @@ async def send_appointment_email(
     config: BusinessConfig,
     event: AppointmentEvent,
     attendee_email: str,
+    registry_recipient: ReminderRecipient | None = None,
 ) -> dict[str, str]:
     """Send one manual email using the reminder template fields.
 
@@ -245,7 +246,7 @@ async def send_appointment_email(
     template fields so operators get the same copy they would expect from the
     automated reminder path.
     """
-    email = normalize_email(attendee_email)
+    email = normalize_email(registry_recipient.email if registry_recipient is not None else attendee_email)
     if email is None:
         raise ValueError("appointment email requires a valid attendee email")
     if config.email is None:
@@ -253,7 +254,7 @@ async def send_appointment_email(
     if config.email.from_ is None:
         raise RuntimeError("email.from is required to send appointment email")
 
-    recipient = _manual_email_recipient(config, email)
+    recipient = registry_recipient or _manual_email_recipient(config, email)
     subject, body_text, body_html = build_reminder_email(config, event, recipient, 0)
     sender = build_email_sender(config)
     await sender.send(
@@ -291,13 +292,21 @@ async def send_appointment_sms(
     *,
     config: BusinessConfig,
     event: AppointmentEvent,
+    registry_recipient: ReminderRecipient | None = None,
 ) -> dict[str, str]:
     """Send one manual appointment reminder SMS after consent validation."""
-    contacts = load_contacts(config.reminders.contacts_path)
-    recipient = ContactResolver(contacts).match_event(
+    contacts = load_contacts(config.reminders.contacts_path) if registry_recipient is None else []
+    recipient = registry_recipient or ContactResolver(contacts).match_event(
         _appointment_contact_match_keys(event)
     )
-    extracted = extract_phone(event.notes)
+    extracted = extract_phone(event.notes) if registry_recipient is None else None
+    if extracted is None:
+        class _NoPhoneExtraction:
+            ambiguous = False
+            label_present = False
+            phone = None
+
+        extracted = _NoPhoneExtraction()
     if extracted.ambiguous:
         raise ValueError(
             "appointment SMS phone number is ambiguous; label the intended number"

@@ -6,11 +6,15 @@ import {
 } from "./encounterOutputGeneration";
 
 interface CoordinatorBridge extends EncounterOutputGenerationBridge {
+  getEncounterByNote?: (noteId: number) => Promise<{
+    success?: boolean;
+    encounter: LocalEncounter | null;
+  }>;
   getEncounterOutput?: (encounterId: number) => Promise<{
     success?: boolean;
     output: EncounterOutput | null;
   }>;
-  getEncounters?: (limit?: number) => Promise<{
+  getEncountersNeedingOutputGeneration?: (limit?: number) => Promise<{
     success?: boolean;
     encounters?: LocalEncounter[];
   }>;
@@ -104,19 +108,18 @@ export function createEncounterOutputCoordinator({
   }
 
   async function resolveEncounterForNote(noteId: number) {
-    const result = await bridge.getEncounters?.(200);
-    const encounter = (result?.encounters ?? []).find((candidate) => candidate.note_id === noteId);
+    const result = await bridge.getEncounterByNote?.(noteId);
+    const encounter = result?.encounter ?? null;
     if (encounter?.lifecycle_state === "completed") enqueue(encounter.id, true);
   }
 
   async function reconcile() {
-    const result = await bridge.getEncounters?.(200);
+    // This endpoint is already filtered to completed encounters with missing
+    // or stale outputs. Do not apply the appointment-list window here: a
+    // large scheduled backlog must not hide older clinical work.
+    const result = await bridge.getEncountersNeedingOutputGeneration?.();
     for (const encounter of result?.encounters ?? []) {
-      if (encounter.lifecycle_state !== "completed" || !encounter.note_id) continue;
-      const output = await bridge.getEncounterOutput?.(encounter.id);
-      if (output?.success !== false && needsGeneration(output?.output ?? null)) {
-        enqueue(encounter.id);
-      }
+      if (encounter.lifecycle_state === "completed" && encounter.note_id) enqueue(encounter.id);
     }
   }
 

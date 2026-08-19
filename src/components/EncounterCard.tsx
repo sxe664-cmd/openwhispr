@@ -38,8 +38,13 @@ function statusIcon(state: LocalEncounter["lifecycle_state"]) {
 }
 
 function hasLinkedPatientFolder(encounter: LocalEncounter): boolean {
-  return encounter.patient_profile_id !== null &&
-    (encounter.patient_resolution === "created" || encounter.patient_resolution === "matched");
+  return (
+    encounter.patient_id !== null &&
+    (encounter.patient_resolution === "created" || encounter.patient_resolution === "matched")
+  ) || (
+    encounter.patient_profile_id !== null &&
+    (encounter.patient_resolution === "created" || encounter.patient_resolution === "matched")
+  );
 }
 
 export default function EncounterCard({
@@ -52,13 +57,14 @@ export default function EncounterCard({
 }: EncounterCardProps) {
   const { t, i18n } = useTranslation();
   const Icon = statusIcon(encounter.lifecycle_state);
-  const canStart = Boolean(encounter.calendar_event_id) &&
+  const patientReady = hasLinkedPatientFolder(encounter);
+  const canStart = Boolean(encounter.calendar_event_id) && patientReady &&
     (encounter.lifecycle_state === "scheduled" || encounter.lifecycle_state === "in_progress");
   const canOpen = encounter.lifecycle_state === "completed" && encounter.note_id != null;
-  const patientState = hasLinkedPatientFolder(encounter) ? "linked" : "review";
+  const patientState = patientReady ? "linked" : "review";
   const patientStateLabel = patientState === "linked"
     ? t("encounters.patient.linked")
-    : t("encounters.patient.review");
+    : t("encounters.patient.detailsRequired");
   const attendeeLabel = useMemo(() => {
     if (encounter.attendees_count <= 0) return null;
     return t("encounters.attendees", { count: encounter.attendees_count });
@@ -111,6 +117,11 @@ export default function EncounterCard({
           >
             {patientStateLabel}
           </div>
+          {!patientReady && encounter.lifecycle_state === "scheduled" && (
+            <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+              Use the calendar title for the patient name and add DOB as MM/DD/YYYY in the description. New patients also need Phone and Email before starting.
+            </p>
+          )}
         </div>
         {canStart && (
           <div className={cn("ml-auto shrink-0 self-center", compact && "xl:ml-0 xl:mt-2 xl:flex xl:w-full xl:justify-end xl:self-auto")}>

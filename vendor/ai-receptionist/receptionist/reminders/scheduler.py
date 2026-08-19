@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Iterable
@@ -21,6 +22,33 @@ from receptionist.reminders.store import ReminderStore
 
 
 logger = logging.getLogger("receptionist")
+
+
+def registry_recipient_for_event(registry, event: AppointmentEvent) -> ReminderRecipient | None:
+    """Build a reminder recipient from the shared registry for linked events."""
+    if not event.patient_id:
+        return None
+    patient = registry.get_patient(event.patient_id) if registry is not None else None
+    if patient is None:
+        return ReminderRecipient(
+            recipient_id=event.patient_id,
+            display_name=event.summary,
+            preferred_channels=("email", "sms"),
+            sms_consent_status="opted_in",
+            consent_source="patient_registry",
+            match_keys=(event.patient_id, event.event_id, event.event_uid),
+        )
+    return ReminderRecipient(
+        recipient_id=patient.patient_id,
+        display_name=patient.name,
+        email=patient.email,
+        phone=patient.phone,
+        preferred_channels=("email", "sms"),
+        sms_consent_status=patient.sms_consent_status,
+        consent_source="patient_registry",
+        phone_source="patient_registry",
+        match_keys=(patient.patient_id, event.event_id, event.event_uid),
+    )
 
 
 def parse_now(now: str | None, tz_name: str) -> datetime:
@@ -49,6 +77,7 @@ def schedule_event_reminders(
     now: datetime | None = None,
     phase: str = "pre",
     post_followup_id: str | None = None,
+    registry_recipient: ReminderRecipient | None = None,
 ) -> list[str]:
     """Create/update reminder jobs for one event.
 
@@ -69,7 +98,7 @@ def schedule_event_reminders(
         store.cancel_jobs_for_event(event, "event_cancelled")
         return []
 
-    recipient = resolver.match_event(_contact_match_keys(event))
+    recipient = registry_recipient or resolver.match_event(_contact_match_keys(event))
     if recipient is not None:
         store.import_recipients([recipient])
     keys: list[str] = []
@@ -119,6 +148,7 @@ def schedule_event_confirmations(
     event: AppointmentEvent,
     resolver: ContactResolver,
     now: datetime | None = None,
+    registry_recipient: ReminderRecipient | None = None,
 ) -> list[str]:
     """Create/update immediate confirmation jobs for one booked appointment.
 
@@ -137,7 +167,7 @@ def schedule_event_confirmations(
         store.cancel_jobs_for_event(event, "event_cancelled")
         return []
 
-    recipient = resolver.match_event(_contact_match_keys(event))
+    recipient = registry_recipient or resolver.match_event(_contact_match_keys(event))
     if recipient is not None:
         store.import_recipients([recipient])
 
@@ -168,6 +198,7 @@ def sync_events(
     contacts: list[ReminderRecipient],
     now: datetime | None = None,
     tombstones: Iterable[CalendarEventTombstone] = (),
+    patient_registry=None,
 ) -> int:
     for tombstone in tombstones:
         store.cancel_event(
@@ -180,7 +211,19 @@ def sync_events(
     resolver = ContactResolver(contacts)
     count = 0
     for event in events:
-        extracted = extract_phone(event.notes)
+        if patient_registry is not None and not event.patient_id:
+            appointment = patient_registry.get_appointment_by_google_event_id(
+                calendar_id=event.calendar_id,
+                google_event_id=event.event_id,
+            )
+            if appointment is not None:
+                event = replace(
+                    event,
+                    patient_id=appointment.patient_id,
+                    appointment_id=appointment.appointment_id,
+                )
+        registry_recipient = registry_recipient_for_event(patient_registry, event)
+        extracted = extract_phone(event.notes) if registry_recipient is None else None
         if extracted.ambiguous:
             logger.warning(
                 "reminders.phone_parse ambiguous event_id=%s candidates=%s",
@@ -238,6 +281,7 @@ def sync_events(
             event=event,
             resolver=resolver,
             now=now,
+            registry_recipient=registry_recipient,
         )
         schedule_event_reminders(
             config=config,
@@ -246,6 +290,7 @@ def sync_events(
             resolver=resolver,
             now=now,
             phase="post",
+            registry_recipient=registry_recipient,
         )
         count += 1
     return count

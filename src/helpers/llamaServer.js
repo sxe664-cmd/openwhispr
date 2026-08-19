@@ -535,6 +535,7 @@ class LlamaServerManager {
       temperature: options.temperature ?? 0.7,
       max_tokens: options.max_tokens ?? 512,
       stream: false,
+      ...(options.responseFormat ? { response_format: options.responseFormat } : {}),
     };
 
     // Without this, Qwen chat templates leave `message.content` empty and

@@ -691,6 +691,220 @@ test("incomplete feeds and failed sidecars never reconcile stale encounters", as
   assert.equal(reconciled, 0);
 });
 
+test("database projection failures settle as stale, expose a safe code, and clear syncPromise", async () => {
+  const broadcasts = [];
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => true,
+      runModule: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ events: [appointment()] }),
+      }),
+    },
+    databaseManager: {
+      getEncounters: () => [{ id: 1 }],
+      upsertCalendarIngress: () => {
+        throw new Error("SQLITE_CONSTRAINT: invalid patient_resolution");
+      },
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: (...args) => broadcasts.push(args),
+  });
+
+  const result = await bridge.sync();
+
+  assert.equal(result.success, false);
+  assert.equal(result.state, "stale");
+  assert.deepEqual(result.error, {
+    code: "CALENDAR_PROJECTION_FAILED",
+    message: "Calendar encounters could not be updated. Cached encounters remain available.",
+  });
+  assert.equal(bridge.getStatus().state, "stale");
+  assert.equal(bridge.getStatus().lastErrorCode, "CALENDAR_PROJECTION_FAILED");
+  assert.equal(bridge.syncPromise, null);
+  assert.deepEqual(broadcasts.at(-1), ["gcal-events-synced", {
+    provider: "ai_receptionist",
+    success: false,
+    eventCount: 0,
+    errorCode: "CALENDAR_PROJECTION_FAILED",
+  }]);
+  assert.doesNotMatch(JSON.stringify(result), /SQLITE|invalid patient_resolution/);
+});
+
+test("projection failure is error without cached encounters", async () => {
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => true,
+      runModule: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ events: [appointment()] }),
+      }),
+    },
+    databaseManager: {
+      getEncounters: () => [],
+      upsertCalendarIngress: () => {
+        throw new Error("database unavailable");
+      },
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: () => {},
+  });
+
+  const result = await bridge.sync();
+  assert.equal(result.success, false);
+  assert.equal(result.state, "error");
+  assert.equal(bridge.getStatus().state, "error");
+  assert.equal(bridge.syncPromise, null);
+});
+
+test("migration health failure prevents startup sync and remains recoverable", () => {
+  let feedCalls = 0;
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => true,
+      runModule: async () => {
+        feedCalls += 1;
+        return { ok: true, stdout: JSON.stringify({ events: [] }) };
+      },
+    },
+    databaseManager: {
+      getCalendarProjectionHealth: () => ({
+        ready: false,
+        errorCode: "CALENDAR_PROJECTION_MIGRATION_FAILED",
+      }),
+      getEncounters: () => [],
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: () => {},
+  });
+
+  bridge.start();
+
+  assert.equal(feedCalls, 0);
+  assert.equal(bridge.getStatus().state, "error");
+  assert.equal(bridge.getStatus().lastErrorCode, "CALENDAR_PROJECTION_MIGRATION_FAILED");
+  assert.equal(bridge.syncPromise, null);
+});
+
+test("startup checks projection health before an unavailable runtime", () => {
+  let runtimeAvailabilityChecks = 0;
+  let feedCalls = 0;
+  const broadcasts = [];
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => {
+        runtimeAvailabilityChecks += 1;
+        return false;
+      },
+      runModule: async () => {
+        feedCalls += 1;
+        throw new Error("feed must not start");
+      },
+    },
+    databaseManager: {
+      getCalendarProjectionHealth: () => ({
+        ready: false,
+        errorCode: "CALENDAR_PROJECTION_MIGRATION_FAILED",
+      }),
+      getEncounters: () => [],
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: (...args) => broadcasts.push(args),
+  });
+
+  bridge.start();
+
+  assert.equal(runtimeAvailabilityChecks, 0);
+  assert.equal(feedCalls, 0);
+  assert.equal(bridge.getStatus().state, "error");
+  assert.equal(bridge.getStatus().lastErrorCode, "CALENDAR_PROJECTION_MIGRATION_FAILED");
+  assert.deepEqual(broadcasts.at(-1), ["gcal-events-synced", {
+    provider: "ai_receptionist",
+    success: false,
+    eventCount: 0,
+    errorCode: "CALENDAR_PROJECTION_MIGRATION_FAILED",
+  }]);
+});
+
+test("manual sync checks projection health before an unavailable runtime", async () => {
+  let runtimeAvailabilityChecks = 0;
+  let feedCalls = 0;
+  const broadcasts = [];
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => {
+        runtimeAvailabilityChecks += 1;
+        return false;
+      },
+      runModule: async () => {
+        feedCalls += 1;
+        throw new Error("feed must not start");
+      },
+    },
+    databaseManager: {
+      getCalendarProjectionHealth: () => ({
+        ready: false,
+        errorCode: "CALENDAR_PROJECTION_FAILED",
+      }),
+      getEncounters: () => [],
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: (...args) => broadcasts.push(args),
+  });
+
+  const result = await bridge.sync();
+
+  assert.equal(runtimeAvailabilityChecks, 0);
+  assert.equal(feedCalls, 0);
+  assert.equal(result.success, false);
+  assert.equal(result.state, "error");
+  assert.equal(result.error.code, "CALENDAR_PROJECTION_FAILED");
+  assert.equal(bridge.getStatus().lastErrorCode, "CALENDAR_PROJECTION_FAILED");
+  assert.equal(bridge.syncPromise, null);
+  assert.deepEqual(broadcasts.at(-1), ["gcal-events-synced", {
+    provider: "ai_receptionist",
+    success: false,
+    eventCount: 0,
+    errorCode: "CALENDAR_PROJECTION_FAILED",
+  }]);
+});
+
+test("startup and successful sync use the database-owned idempotent repair", async () => {
+  let repairs = 0;
+  const bridge = new ReceptionistCalendarBridge({
+    runtime: {
+      isAvailable: () => true,
+      runModule: async () => ({
+        ok: true,
+        stdout: JSON.stringify({ events: [appointment()] }),
+      }),
+    },
+    databaseManager: {
+      repairManagedCalendarEncounterProjections: () => {
+        repairs += 1;
+        return { success: true, created: repairs === 1 ? 4 : 0 };
+      },
+      upsertCalendarEvents: () => {},
+      upsertEncountersFromCalendarEvents: () => {},
+    },
+    reminderScheduler: null,
+    logger: { warn: () => {} },
+    broadcast: () => {},
+  });
+
+  bridge.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  await bridge.sync();
+  bridge.stop();
+
+  assert.ok(repairs >= 2);
+});
+
 test("calendar page reads the bounded local cache and starts refresh in the background", async () => {
   const sourceEvent = appointment();
   const cachedRow = {

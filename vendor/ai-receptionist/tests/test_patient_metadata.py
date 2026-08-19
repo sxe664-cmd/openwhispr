@@ -31,6 +31,32 @@ More private notes that must not leave the sidecar.
     }
 
 
+def test_extract_patient_metadata_supports_compact_manual_calendar_details() -> None:
+    description = """DOB: 04/12/1990
+Phone: +1 (212) 555-0199
+Email: ALEX.MORGAN@example.com"""
+
+    assert extract_patient_metadata(description) == {
+        "name": None,
+        "dob": "1990-04-12",
+        "email": "alex.morgan@example.com",
+        "phone": "+12125550199",
+        "source": RECOVERED_CONTACT_SOURCE,
+    }
+
+
+def test_extract_patient_metadata_supports_dot_separated_us_dob() -> None:
+    description = "DOB: 07.24.1969\nEmail: jairo@example.com"
+
+    assert extract_patient_metadata(description) == {
+        "name": None,
+        "dob": "1969-07-24",
+        "email": "jairo@example.com",
+        "phone": None,
+        "source": RECOVERED_CONTACT_SOURCE,
+    }
+
+
 def test_extract_patient_metadata_rejects_malformed_and_ambiguous_blocks() -> None:
     invalid_descriptions = (
         "[OpenWhispr Patient]\nEmail: alex@example.com",
@@ -41,6 +67,7 @@ def test_extract_patient_metadata_rejects_malformed_and_ambiguous_blocks() -> No
         "[OpenWhispr Patient]\nEmail: not-an-email\n[/OpenWhispr Patient]",
         "[OpenWhispr Patient]\nEmail: alex@example.com\n[/OpenWhispr Patient]\n"
         "[OpenWhispr Patient]",
+        "DOB: 707.24.1969\nEmail: jairo@example.com",
     )
 
     for description in invalid_descriptions:
@@ -97,6 +124,30 @@ def test_calendar_feed_safely_excludes_private_provenance() -> None:
     assert raw_note_sentinel not in repr(private_projected)
     assert "notes" not in safe_projected
     assert "notes" not in private_projected
+
+
+def test_calendar_feed_uses_event_title_when_manual_metadata_omits_name() -> None:
+    event = SimpleNamespace(
+        calendar_id="calendar-1",
+        event_id="event-title-name",
+        event_uid="uid-title-name",
+        start=datetime(2026, 8, 14, 9, 0),
+        end=datetime(2026, 8, 14, 9, 30),
+        timezone="America/New_York",
+        summary="Alex Morgan",
+        attendee_emails=(),
+        has_self_attendee=False,
+        recurring=False,
+        all_day=False,
+        status="confirmed",
+        conference_url=None,
+        html_link=None,
+        notes="DOB: 04/12/1990\nPhone: +12125550199\nEmail: alex@example.com",
+    )
+
+    projected = _calendar_feed_event(event, include_private_provenance=True)
+    assert projected["patient_metadata"]["name"] == "Alex Morgan"
+    assert projected["patient_metadata"]["dob"] == "1990-04-12"
 
 
 def _google_event(*attendees: object, description: str = "") -> dict:

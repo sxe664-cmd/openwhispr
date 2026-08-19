@@ -22,7 +22,7 @@ const CONFIG_CACHE_TTL_MS = 30 * 1000;
 const PROVIDER = "ai_receptionist";
 
 function publicSidecarError(error, fallbackCode = "AI_RECEPTIONIST_COMMAND_FAILED") {
-  const candidate = error?.sidecarError || error?.error || error;
+  const candidate = error?.calendarError || error?.sidecarError || error?.error || error;
   return serializedError(candidate?.code || fallbackCode);
 }
 
@@ -30,6 +30,13 @@ function sidecarFailure(error, fallbackCode) {
   const safe = publicSidecarError(error, fallbackCode);
   const failure = new Error(safe.message);
   failure.sidecarError = safe;
+  return failure;
+}
+
+function projectionFailure(error, fallbackCode = "CALENDAR_PROJECTION_FAILED") {
+  const safe = publicSidecarError(error, fallbackCode);
+  const failure = new Error(safe.message);
+  failure.calendarError = safe;
   return failure;
 }
 
@@ -99,7 +106,10 @@ function projectCalendarRow(appointment) {
     ...row,
     event_id: canonical.eventId,
     event_uid: canonical.eventUid,
+    calendar_identity_key: canonical.calendarIdentityKey,
     occurrence_id: canonical.occurrenceId,
+    recurring_event_id: canonical.recurringEventId,
+    original_start_time: canonical.originalStartTime,
     timezone: canonical.timezone,
     recurrence: canonical.recurrence ? JSON.stringify(canonical.recurrence) : null,
     capabilities: JSON.stringify(canonical.capabilities),
@@ -140,7 +150,11 @@ function projectCalendarIngress(appointment) {
           email: rawNormalizedEmail ?? rawPatientMetadata?.email,
           name: rawPatientMetadata?.name,
         });
-  const patientMetadata = parsedMetadata.metadata;
+  const patientMetadata = parsedMetadata.metadata
+    ? parsedMetadata.metadata.name || !sidecarPublic.summary
+      ? parsedMetadata.metadata
+      : parsePatientMetadata({ ...parsedMetadata.metadata, name: sidecarPublic.summary }).metadata
+    : null;
   return {
     publicEvent,
     patientMetadata,
@@ -222,8 +236,30 @@ class ReceptionistCalendarBridge {
 
   start() {
     this.stop();
+    const projectionHealth = this._getProjectionHealth();
+    if (!projectionHealth.ready) {
+      const failure = projectionFailure(
+        { code: projectionHealth.errorCode },
+        projectionHealth.errorCode || "CALENDAR_PROJECTION_MIGRATION_FAILED"
+      );
+      const result = this._recordSyncFailure(failure, projectionHealth.errorCode);
+      this._broadcastSyncResult(result);
+      return;
+    }
+
     if (!this.runtime?.isAvailable?.()) {
       this.status = { ...this.status, state: "unavailable" };
+      return;
+    }
+
+    try {
+      // Database startup owns the migration. This repair is deliberately
+      // write-side and creates encounter projections only; it never creates a
+      // patient, note, folder, or reminder.
+      this._repairCalendarProjections();
+    } catch (error) {
+      const result = this._recordSyncFailure(error, "CALENDAR_PROJECTION_FAILED");
+      this._broadcastSyncResult(result);
       return;
     }
 
@@ -249,7 +285,126 @@ class ReceptionistCalendarBridge {
     return { ...this.status };
   }
 
+  _getProjectionHealth() {
+    const checker =
+      this.databaseManager?.getCalendarProjectionHealth
+      || this.databaseManager?.getCalendarProjectionStatus;
+    if (typeof checker !== "function") return { ready: true };
+
+    try {
+      const health = checker.call(this.databaseManager);
+      // DatabaseManager methods are synchronous. Do not leak a Promise into
+      // the status path if a legacy test double accidentally returns one.
+      if (health && typeof health.then === "function") return { ready: true };
+      if (
+        health === false
+        || health?.ready === false
+        || health?.success === false
+        || health?.state === "error"
+        || health?.state === "failed"
+      ) {
+        return {
+          ready: false,
+          errorCode:
+            health?.errorCode
+            || health?.code
+            || "CALENDAR_PROJECTION_MIGRATION_FAILED",
+        };
+      }
+      return { ready: true };
+    } catch (error) {
+      return {
+        ready: false,
+        errorCode: error?.code || "CALENDAR_PROJECTION_MIGRATION_FAILED",
+      };
+    }
+  }
+
+  _assertProjectionReady() {
+    const health = this._getProjectionHealth();
+    if (!health.ready) {
+      throw projectionFailure(
+        { code: health.errorCode },
+        health.errorCode || "CALENDAR_PROJECTION_MIGRATION_FAILED"
+      );
+    }
+  }
+
+  _repairCalendarProjections() {
+    const repair =
+      this.databaseManager?.repairManagedCalendarEncounterProjections
+      || this.databaseManager?.repairCalendarEncounterProjections;
+    if (typeof repair !== "function") return { created: 0, skipped: 0 };
+
+    const result = repair.call(this.databaseManager, { provider: PROVIDER });
+    if (result?.success === false) {
+      throw projectionFailure(result.error || result, "CALENDAR_PROJECTION_FAILED");
+    }
+    return result || { created: 0, skipped: 0 };
+  }
+
+  _hasCachedEncounters() {
+    try {
+      if (typeof this.databaseManager?.hasCachedEncounters === "function") {
+        return this.databaseManager.hasCachedEncounters() === true;
+      }
+      // Legacy in-memory bridge doubles do not expose a local reader. Keep
+      // their historical stale-on-feed-failure behavior; the real
+      // DatabaseManager always exposes getEncounters and therefore uses the
+      // actual cached row count below.
+      if (typeof this.databaseManager?.getEncounters !== "function") return true;
+      const rows = this.databaseManager?.getEncounters?.(1);
+      return Array.isArray(rows) && rows.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  _recordSyncFailure(error, fallbackCode = "CALENDAR_PROJECTION_FAILED", logContext = null) {
+    const safe = publicSidecarError(error, fallbackCode);
+    const state = this._hasCachedEncounters() ? "stale" : "error";
+    this.status = {
+      ...this.status,
+      state,
+      lastError: safe.message,
+      lastErrorCode: safe.code,
+    };
+    this.logger.warn?.(
+      logContext?.message || "AIReceptionist calendar synchronization failed",
+      {
+        operation: logContext?.operation || "calendar-sync",
+        code: safe.code,
+      }
+    );
+    return { success: false, state, events: [], error: safe };
+  }
+
+  _broadcastSyncResult(result) {
+    try {
+      this.broadcast("gcal-events-synced", {
+        provider: PROVIDER,
+        success: result?.success === true,
+        eventCount: Array.isArray(result?.events) ? result.events.length : 0,
+        errorCode: result?.error?.code || null,
+      });
+    } catch {
+      // A renderer disappearing during a background sync must not keep the
+      // single-flight promise rejected or leave the bridge in syncing state.
+    }
+  }
+
   async sync(range = null) {
+    const projectionHealth = this._getProjectionHealth();
+    if (!projectionHealth.ready) {
+      const failure = projectionFailure(
+        { code: projectionHealth.errorCode },
+        projectionHealth.errorCode || "CALENDAR_PROJECTION_MIGRATION_FAILED"
+      );
+      const result = this._recordSyncFailure(failure, projectionHealth.errorCode);
+      this._broadcastSyncResult(result);
+      return result;
+    }
+
     if (!this.runtime?.isAvailable?.()) {
       this.status = { ...this.status, state: "unavailable" };
       return { success: false, state: "unavailable", events: [] };
@@ -259,25 +414,19 @@ class ReceptionistCalendarBridge {
       ? normalizeRange({ ...range, limit: range.limit || this.feedLimit })
       : this._defaultSyncRange();
     const work = this._enqueueFeed(() => this._sync(normalized));
-    this.syncPromise = work.then((result) => {
+    const settled = work.then(
+      (result) => {
+        this._broadcastSyncResult(result);
+        return result;
+      },
+      (error) => {
+        const result = this._recordSyncFailure(error);
+        this._broadcastSyncResult(result);
+        return result;
+      }
+    );
+    this.syncPromise = settled.finally(() => {
       this.syncPromise = null;
-      this.broadcast("gcal-events-synced", {
-        provider: PROVIDER,
-        success: result?.success === true,
-        eventCount: Array.isArray(result?.events) ? result.events.length : 0,
-        errorCode: result?.error?.code || null,
-      });
-      return result;
-    }).catch((error) => {
-      this.syncPromise = null;
-      const safe = publicSidecarError(error);
-      this.broadcast("gcal-events-synced", {
-        provider: PROVIDER,
-        success: false,
-        eventCount: 0,
-        errorCode: safe.code,
-      });
-      throw error;
     });
     return this.syncPromise;
   }
@@ -317,7 +466,9 @@ class ReceptionistCalendarBridge {
 
     let appointments = [];
     let feedWindow = null;
+    let stage = "calendar-feed";
     try {
+      this._assertProjectionReady();
       const result = await this._runJsonModule("receptionist.desktop_config", [
         "calendar-events",
         "--limit",
@@ -330,6 +481,7 @@ class ReceptionistCalendarBridge {
       const feedEvents = Array.isArray(result?.events) ? result.events : [];
       appointments = feedEvents;
       feedWindow = result?.window || null;
+      stage = "calendar-tombstones";
       for (const tombstone of result?.tombstones || []) {
         if (!tombstone?.event_id) continue;
         const calendarId = tombstone.calendar_id || "primary";
@@ -341,77 +493,85 @@ class ReceptionistCalendarBridge {
           calendarId,
           prefix
         );
-        this.databaseManager.removeCalendarEventsByPrefix?.(PROVIDER, calendarId, prefix);
-      }
-    } catch (error) {
-      const safe = publicSidecarError(error);
-      this.status = {
-        ...this.status,
-        state: "stale",
-        lastError: safe.message,
-        lastErrorCode: safe.code,
-      };
-      this.logger.warn?.("AIReceptionist calendar feed unavailable", {
-        operation: "calendar-events",
-        code: safe.code,
-      });
-      return { success: false, state: "stale", events: [], error: safe };
-    }
-
-    const envelopes = appointments.map(projectCalendarIngress).filter(Boolean);
-    const projected = envelopes.map(({ publicEvent }) => publicEvent);
-    if (envelopes.length > 0) {
-      if (typeof this.databaseManager.upsertCalendarIngress === "function") {
-        this.databaseManager.upsertCalendarIngress(envelopes);
-      } else {
-        // Compatibility for legacy in-memory test doubles: only the safe
-        // public projection may reach the former calendar-upsert API.
-        this.databaseManager.upsertCalendarEvents?.(projected);
-      }
-    }
-    if (projected.length > 0) this.databaseManager.upsertEncountersFromCalendarEvents?.(projected);
-    if (
-      feedWindow?.complete === true &&
-      feedWindow.start_iso &&
-      feedWindow.end_iso &&
-      this.databaseManager.reconcileStaleCalendarWindow
-    ) {
-      const byCalendar = new Map();
-      for (const event of projected) {
-        const current = byCalendar.get(event.calendar_id) || [];
-        current.push(event.id);
-        byCalendar.set(event.calendar_id, current);
-      }
-      const calendarIds =
-        Array.isArray(feedWindow.calendar_ids) && feedWindow.calendar_ids.length > 0
-          ? feedWindow.calendar_ids
-          : [...byCalendar.keys()];
-      for (const calendarId of calendarIds) {
-        this.databaseManager.reconcileStaleCalendarWindow(
+        this.databaseManager.markRegistryAppointmentCancelled?.(
           PROVIDER,
           calendarId,
-          byCalendar.get(calendarId) || [],
-          feedWindow.start_iso,
-          feedWindow.end_iso
+          tombstone.event_id
         );
+        this.databaseManager.removeCalendarEventsByPrefix?.(PROVIDER, calendarId, prefix);
       }
-    }
+      stage = "calendar-ingress";
+      const envelopes = appointments.map(projectCalendarIngress).filter(Boolean);
+      let projected = envelopes.map(({ publicEvent }) => publicEvent);
+      if (envelopes.length > 0) {
+        if (typeof this.databaseManager.upsertCalendarIngress === "function") {
+          const ingressResult = this.databaseManager.upsertCalendarIngress(envelopes);
+          if (Array.isArray(ingressResult?.events)) projected = ingressResult.events;
+        } else {
+          // Compatibility for legacy in-memory test doubles: only the safe
+          // public projection may reach the former calendar-upsert API.
+          this.databaseManager.upsertCalendarEvents?.(projected);
+        }
+      }
 
-    this.reminderScheduler?.scheduleNextMeeting?.();
-    this._scheduleReminderRefresh();
-    this.status = {
-      ...this.status,
-      state: "ready",
-      lastSuccessfulSyncAt: new Date().toISOString(),
-      lastError: null,
-      lastErrorCode: null,
-      eventCount: projected.length,
-    };
-    return {
-      success: true,
-      state: this.status.state,
-      events: projected,
-    };
+      stage = "encounter-projection";
+      if (projected.length > 0) this.databaseManager.upsertEncountersFromCalendarEvents?.(projected);
+      this._repairCalendarProjections();
+
+      stage = "calendar-reconciliation";
+      if (
+        feedWindow?.complete === true &&
+        feedWindow.start_iso &&
+        feedWindow.end_iso &&
+        this.databaseManager.reconcileStaleCalendarWindow
+      ) {
+        const byCalendar = new Map();
+        for (const event of projected) {
+          const current = byCalendar.get(event.calendar_id) || [];
+          current.push(event.id);
+          byCalendar.set(event.calendar_id, current);
+        }
+        const calendarIds =
+          Array.isArray(feedWindow.calendar_ids) && feedWindow.calendar_ids.length > 0
+            ? feedWindow.calendar_ids
+            : [...byCalendar.keys()];
+        for (const calendarId of calendarIds) {
+          this.databaseManager.reconcileStaleCalendarWindow(
+            PROVIDER,
+            calendarId,
+            byCalendar.get(calendarId) || [],
+            feedWindow.start_iso,
+            feedWindow.end_iso
+          );
+        }
+      }
+
+      stage = "reminder-scheduling";
+      this.reminderScheduler?.scheduleNextMeeting?.();
+      this._scheduleReminderRefresh();
+      this.status = {
+        ...this.status,
+        state: "ready",
+        lastSuccessfulSyncAt: new Date().toISOString(),
+        lastError: null,
+        lastErrorCode: null,
+        eventCount: projected.length,
+      };
+      return {
+        success: true,
+        state: this.status.state,
+        events: projected,
+      };
+    } catch (error) {
+      const fallbackCode = stage === "calendar-feed" ? "AI_RECEPTIONIST_COMMAND_FAILED" : "CALENDAR_PROJECTION_FAILED";
+      return this._recordSyncFailure(
+        error,
+        fallbackCode,
+        stage === "calendar-feed"
+          ? { message: "AIReceptionist calendar feed unavailable", operation: "calendar-events" }
+          : null
+      );
+    }
   }
 
   _scheduleReminderRefresh() {
@@ -692,8 +852,9 @@ class ReceptionistCalendarBridge {
         "--calendar-id",
         event.calendarId,
       ];
+      if (event.patientId) args.push("--patient-id", event.patientId);
       if (command === "appointment-email") {
-        const attendeeEmail = event.attendees.find((attendee) => attendee.email)?.email;
+        const attendeeEmail = event.patientEmail || event.attendees.find((attendee) => attendee.email)?.email;
         if (!attendeeEmail)
           return {
             success: false,

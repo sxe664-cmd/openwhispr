@@ -20,7 +20,6 @@ import { useSettings } from "../hooks/useSettings";
 import { useCollapsibleSidebar } from "../hooks/useCollapsibleSidebar";
 import {
   useTranscriptions,
-  useShowDiscarded,
   initializeTranscriptions,
   removeTranscription as removeFromStore,
   updateTranscription as updateInStore,
@@ -69,6 +68,7 @@ const PersonalNotesView = React.lazy(() => import("./notes/PersonalNotesView"));
 const DictionaryView = React.lazy(() => import("./DictionaryView"));
 const IntegrationsView = React.lazy(() => import("./IntegrationsView"));
 const CalendarRemindersView = React.lazy(() => import("./CalendarRemindersView"));
+const PatientRegistryView = React.lazy(() => import("./PatientRegistryView"));
 const AIReceptionistView = React.lazy(() => import("./AIReceptionistView"));
 const ChatView = React.lazy(() => import("./chat/ChatView"));
 const CommandSearch = React.lazy(() => import("./CommandSearch"));
@@ -91,7 +91,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     () => localStorage.getItem("aiCTADismissed") === "true"
   );
   const [showSearch, setShowSearch] = useState(false);
-  const showDiscarded = useShowDiscarded();
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
   const {
     collapsed: sidebarCollapsed,
@@ -154,10 +153,10 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   } = useDialogs();
 
   const loadTranscriptions = useCallback(
-    async (includeDiscarded?: boolean) => {
+    async () => {
       try {
         setIsLoading(true);
-        await initializeTranscriptions(undefined, includeDiscarded);
+        await initializeTranscriptions();
       } catch {
         showAlertDialog({
           title: t("controlPanel.history.couldNotLoadTitle"),
@@ -657,10 +656,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     [toast, t, useCleanupModel]
   );
 
-  const toggleShowDiscarded = useCallback(() => {
-    loadTranscriptions(!showDiscarded);
-  }, [loadTranscriptions, showDiscarded]);
-
   const handleUpdateClick = async () => {
     if (updateStatus.updateDownloaded) {
       showConfirmDialog({
@@ -923,7 +918,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               <HistoryView
                 history={history}
                 isLoading={isLoading}
-                hotkey={hotkey}
                 aiCTADismissed={aiCTADismissed}
                 setAiCTADismissed={setAiCTADismissed}
                 useCleanupModel={useCleanupModel}
@@ -932,8 +926,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 clearAllTranscriptions={clearAllTranscriptions}
                 onShowAudioInFolder={showAudioInFolder}
                 onRetryTranscription={retryTranscription}
-                showDiscarded={showDiscarded}
-                onToggleDiscarded={toggleShowDiscarded}
                 onOpenSettings={(section) => {
                   setSettingsSection(section);
                   setShowSettings(true);
@@ -966,6 +958,24 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             {activeView === "calendar-reminders" && (
               <Suspense fallback={null}>
                 <CalendarRemindersView />
+              </Suspense>
+            )}
+            {activeView === "patient-registry" && (
+              <Suspense fallback={null}>
+                <PatientRegistryView
+                  onOpenFolder={(folderId) => {
+                    setActiveFolderId(folderId);
+                    setActiveNoteId(null);
+                    initializeNotes(null, 50, folderId);
+                    setActiveView("personal-notes");
+                  }}
+                  onOpenEncounter={(folderId, noteId) => {
+                    setActiveFolderId(folderId);
+                    setActiveNoteId(noteId);
+                    initializeNotes(null, 50, folderId);
+                    setActiveView("personal-notes");
+                  }}
+                />
               </Suspense>
             )}
             {activeView === "ai-receptionist" && (

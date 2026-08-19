@@ -10,6 +10,8 @@ test("candidate preview uses the existing read-only RichTextEditor", () => {
   );
 
   assert.match(source, /import \{ RichTextEditor \} from "\.\.\/ui\/RichTextEditor"/);
+  assert.match(source, /candidate\.template_name/);
+  assert.match(source, /candidate\.template_revision_version/);
   assert.match(source, /<RichTextEditor[\s\S]*disabled/);
   assert.doesNotMatch(source, /<pre[\s>]/);
 });

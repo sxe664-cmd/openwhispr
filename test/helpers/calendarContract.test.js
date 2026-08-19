@@ -4,6 +4,8 @@ const { execFileSync } = require("node:child_process");
 
 const {
   canonicalEventFromAppointment,
+  canonicalEventFromRow,
+  canonicalCalendarIdentityKey,
   canonicalOccurrenceId,
   localDayRange,
   localMonthRange,
@@ -62,6 +64,111 @@ test("canonical events retain safe capability and recurrence metadata", () => {
   assert.equal(event.capabilities.canSendEmail, true);
   assert.equal(event.capabilities.canSendSms, false);
   assert.equal(event.capabilities.canCancel, true);
+});
+
+test("calendar reminder actions use the durable local row id", () => {
+  const row = {
+    id: "ai_receptionist:primary:event-1:2026-08-20T17_3A00_00.000Z",
+    provider: "ai_receptionist",
+    calendar_id: "primary",
+    event_id: "event-1",
+    event_uid: "uid-1",
+    // Legacy/provider-ingested rows may not include the provider prefix.
+    occurrence_id: "primary:event-1:2026-08-20T17:00:00-04:00",
+    start_time: "2026-08-20T21:00:00.000Z",
+    end_time: "2026-08-20T21:30:00.000Z",
+    summary: "Jairo Espinoza",
+    status: "confirmed",
+    patient_id: "patient-jairo",
+    patient_email: "jairo@example.com",
+    patient_phone: "+15614055898",
+    patient_link_status: "linked",
+  };
+  const event = canonicalEventFromRow(row);
+  assert.equal(event.occurrenceId, row.id);
+  assert.equal(event.eventId, row.event_id);
+});
+
+test("calendar contacts expose US phone numbers in E.164 and reject malformed values", () => {
+  const valid = canonicalEventFromAppointment({
+    calendar_id: "primary",
+    event_id: "event-phone",
+    start_iso: "2026-08-20T15:15:00Z",
+    end_iso: "2026-08-20T15:45:00Z",
+    patient_id: "patient-phone",
+    patient_link_status: "linked",
+    patient_email: "patient@example.com",
+    patient_phone: "561-405-5898",
+  });
+  assert.equal(valid.patientPhone, "+15614055898");
+  assert.equal(valid.capabilities.canSendSms, true);
+
+  const invalid = canonicalEventFromAppointment({
+    calendar_id: "primary",
+    event_id: "event-invalid-phone",
+    start_iso: "2026-08-20T15:15:00Z",
+    end_iso: "2026-08-20T15:45:00Z",
+    patient_id: "patient-phone",
+    patient_link_status: "linked",
+    patient_phone: "56140558989",
+  });
+  assert.equal(invalid.patientPhone, null);
+  assert.equal(invalid.capabilities.canSendSms, false);
+});
+
+test("calendar identity stays stable when a non-recurring event is rescheduled", () => {
+  const original = canonicalCalendarIdentityKey({
+    provider: "google",
+    calendarId: "primary",
+    eventId: "event-1",
+  });
+  const moved = canonicalCalendarIdentityKey({
+    provider: "google",
+    calendarId: "primary",
+    eventId: "event-1",
+  });
+  assert.equal(original, "google:primary:event-1");
+  assert.equal(moved, original);
+});
+
+test("recurring occurrences use the recurring event and original start as identity", () => {
+  const first = canonicalEventFromAppointment({
+    provider: "google",
+    calendar_id: "primary",
+    event_id: "series-instance-1",
+    recurring_event_id: "series-1",
+    original_start_time: "2026-08-20T15:00:00Z",
+    start_iso: "2026-08-20T15:00:00Z",
+    end_iso: "2026-08-20T15:30:00Z",
+  });
+  const second = canonicalEventFromAppointment({
+    provider: "google",
+    calendar_id: "primary",
+    event_id: "series-instance-2",
+    recurring_event_id: "series-1",
+    original_start_time: "2026-08-27T15:00:00Z",
+    start_iso: "2026-08-27T15:00:00Z",
+    end_iso: "2026-08-27T15:30:00Z",
+  });
+  assert.notEqual(first.calendarIdentityKey, second.calendarIdentityKey);
+  assert.equal(first.recurringEventId, "series-1");
+  assert.equal(second.originalStartTime, "2026-08-27T15:00:00Z");
+});
+
+test("patient detail failures disable reminder capabilities without exposing metadata", () => {
+  const event = canonicalEventFromAppointment({
+    calendar_id: "primary",
+    event_id: "event-identity-required",
+    start_iso: "2026-08-20T15:15:00Z",
+    end_iso: "2026-08-20T15:45:00Z",
+    patient_link_status: "patient_details_required",
+    patient_metadata: { name: "Private Patient", dob: "1990-04-12" },
+    capabilities: { canSendEmail: true, canSendSms: true },
+  });
+  assert.equal(event.patientLinkStatus, "patient_details_required");
+  assert.equal(event.capabilities.canSendEmail, false);
+  assert.equal(event.capabilities.canSendSms, false);
+  assert.equal(Object.hasOwn(event, "patient_metadata"), false);
 });
 
 test("local week and month windows stay bounded across calendar boundaries", () => {

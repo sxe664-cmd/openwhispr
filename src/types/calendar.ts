@@ -14,6 +14,7 @@ export interface CalendarEvent {
   calendarId: string;
   eventId: string;
   eventUid: string;
+  calendarIdentityKey: string;
   occurrenceId: string;
   summary: string;
   startTime: string;
@@ -22,9 +23,20 @@ export interface CalendarEvent {
   allDay: boolean;
   status: string;
   recurrence: CalendarRecurrence | null;
+  recurringEventId: string | null;
+  originalStartTime: string | null;
   attendees: CalendarAttendee[];
   conferenceUrl: string | null;
   calendarUrl: string | null;
+  patientId: string | null;
+  appointmentId: string | null;
+  patientName: string | null;
+  patientDob: string | null;
+  patientEmail: string | null;
+  patientPhone: string | null;
+  patientSmsConsentStatus: PatientSmsConsentStatus;
+  patientLinkStatus: PatientLinkStatus | null;
+  patientLinkSource: string | null;
   capabilities: CalendarEventCapabilities;
 }
 
@@ -45,11 +57,31 @@ export interface CalendarEventRow {
   attendees: string | null;
   event_uid?: string | null;
   event_id?: string | null;
+  calendar_identity_key?: string | null;
   occurrence_id?: string | null;
+  recurring_event_id?: string | null;
+  original_start_time?: string | null;
   timezone?: string | null;
   recurrence?: string | null;
   capabilities?: string | null;
+  patient_id?: string | null;
+  appointment_id?: string | null;
+  patient_name?: string | null;
+  patient_dob?: string | null;
+  patient_email?: string | null;
+  patient_phone?: string | null;
+  patient_sms_consent_status?: PatientSmsConsentStatus | null;
+  patient_link_status?: PatientLinkStatus | null;
+  patient_link_source?: string | null;
 }
+
+export type PatientSmsConsentStatus = "unknown" | "opted_in" | "opted_out";
+export type PatientLinkStatus =
+  | "linked"
+  | "created"
+  | "patient_details_required"
+  | "identity_conflict"
+  | "unknown_patient_id";
 
 export interface CalendarEventCapabilities {
   canSendEmail: boolean;

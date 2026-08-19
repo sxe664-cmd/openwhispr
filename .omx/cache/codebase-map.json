@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "worktreeRoot": "C:\\Users\\santi\\openwhispr",
+  "gitDir": "C:\\Users\\santi\\openwhispr\\.git",
+  "indexMtimeMs": 1786601681080.9087,
+  "indexSize": 104505,
+  "map": "  src/: eslint.config, i18n, updater, vite-env.d, vite.config\n  src/components/: AcceptInvitationModal, AgentOverlay, ApiKeysSection, AuthenticationStep, CleanupFailureToastListener, CliIntegrationCard, CommandSearch, ControlPanel, ControlPanelSidebar, CreateTeamDialog\n  src/config/: InferenceConfig, agentDetection, constants, inferenceScopes, prompts, registry, retiredPrompts, secretKeys\n  src/constants/: apiKeys\n  src/helpers/: abortError, activeMicRecovery, agentNameDictionary, appVersion, appleCalendarManager, assemblyAiStreaming, audioActivityDetector, audioManager, audioStorage, audioTapManager\n  src/hooks/: useActionProcessing, useAudioRecording, useAuth, useBillingPortal, useClipboard, useCollapsibleSidebar, useContainerChat, useDebouncedCallback, useDelayedFlag, useDialogs\n  src/lib/: auth, authAccountScope, authRequestContext, billingPortalError, conversationTitle, emojiInput, localMutationError, memberCandidates, noteConflictRegistry, noteEditorPendingSave\n  src/locales/:...",
+  "createdAt": "2026-08-14T09:15:32.114Z"
+}

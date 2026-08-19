@@ -19,6 +19,7 @@ export interface EncounterOutputGenerationBridge {
     output: EncounterOutput | null;
     transcript: string | null;
     token: EncounterTranscriptToken | null;
+    busy?: boolean;
   }>;
   finishEncounterOutputGeneration?: (
     encounterId: number,
@@ -39,7 +40,7 @@ export interface EncounterOutputGenerationBridge {
 }
 
 export type EncounterOutputGenerationOutcome = {
-  status: "applied" | "failed" | "superseded";
+  status: "applied" | "failed" | "superseded" | "busy";
   output: EncounterOutput | null;
 };
 
@@ -96,6 +97,9 @@ export async function runEncounterOutputGeneration(
   }
 
   const begun = await bridge.beginEncounterOutputGeneration(encounterId, "all");
+  if (begun.busy) {
+    return { status: "busy", output: begun.output };
+  }
   if (!begun.success || !begun.output || !begun.token || typeof begun.transcript !== "string") {
     throw new Error("Encounter output unavailable");
   }

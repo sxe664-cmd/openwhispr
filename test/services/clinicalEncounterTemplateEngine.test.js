@@ -9,8 +9,12 @@ const {
   MEDICATION_SPAN_END_MARKER,
   MEDICATION_SPAN_START_MARKER,
   NOT_DOCUMENTED,
+  buildClinicalEncounterActionRequest,
+  buildClinicalEncounterCompactActionRequest,
   compileClinicalEncounterMarkdown,
+  mergeClinicalEncounterCompactExtractions,
   parseClinicalEncounterTemplatePresentation,
+  parseClinicalEncounterCompactOutput,
   parseClinicalEncounterOutput,
 } = require("../../src/services/clinicalEncounterTemplateEngine.ts");
 
@@ -86,6 +90,119 @@ test("malformed JSON fails closed without a fallback clinical document", () => {
   assert.equal(result.ok, false);
   assert.equal(result.document, null);
   assert.equal(result.issues[0].code, "invalid_json");
+});
+
+test("compact local request uses sparse qualified evidence fields", () => {
+  const source = "Patient reports back pain and takes ibuprofen.";
+  const compact = buildClinicalEncounterCompactActionRequest(source);
+
+  assert.ok(compact.fieldKeys.includes("historyOfPresentIllness.currentComplaints"));
+  assert.ok(compact.fieldKeys.includes("previousAndCurrentIllnesses.medicationsAndSupplements"));
+  assert.match(compact.systemPrompt, /historyOfPresentIllness\.currentComplaints/);
+  assert.match(compact.systemPrompt, /Never output a top-level "sectionKey"/);
+  assert.doesNotMatch(compact.userPrompt, /JSON Schema/);
+  assert.ok(JSON.stringify(compact.responseSchema).length < 5_000);
+  assert.equal(compact.responseSchema.properties.fields.type, "array");
+  assert.deepEqual(
+    compact.responseSchema.properties.fields.items.properties.field.enum,
+    compact.fieldKeys
+  );
+
+  const full = buildClinicalEncounterActionRequest(source, "## History of Present Illness\n### Current Complaints:");
+  assert.ok(full.responseSchema);
+});
+
+test("compact evidence is exact and merges through the canonical validator", () => {
+  const source = "Patient reports back pain. Takes ibuprofen.";
+  const request = buildClinicalEncounterCompactActionRequest(source);
+  const parsed = parseClinicalEncounterCompactOutput(
+    JSON.stringify({
+      fields: [
+        {
+          field: "historyOfPresentIllness.currentComplaints",
+          value: "Back pain",
+          evidence: ["reports back pain"],
+        },
+        {
+          field: "previousAndCurrentIllnesses.medicationsAndSupplements",
+          value: "ibuprofen",
+          evidence: ["Takes ibuprofen."],
+        },
+        {
+          field: "diagnosis.documentedDiagnosis",
+          value: "Pneumonia",
+          evidence: ["Patient reports back pain."],
+        },
+        {
+          field: "historyOfPresentIllness.painLevel",
+          value: "8/10",
+          evidence: ["not present"],
+        },
+      ],
+    }),
+    source,
+    { allowedFieldKeys: request.fieldKeys }
+  );
+
+  assert.equal(parsed.ok, true);
+  const merged = mergeClinicalEncounterCompactExtractions([parsed.extraction], source);
+  assert.equal(merged.ok, true);
+  assert.equal(
+    merged.document.sections.historyOfPresentIllness.fields.currentComplaints.value,
+    "Back pain"
+  );
+  assert.equal(
+    merged.document.sections.previousAndCurrentIllnesses.fields.medicationsAndSupplements.value,
+    "ibuprofen"
+  );
+  assert.equal(
+    merged.document.sections.diagnosis.fields.documentedDiagnosis.value,
+    NOT_DOCUMENTED
+  );
+  assert.equal(
+    merged.document.sections.historyOfPresentIllness.fields.painLevel.value,
+    NOT_DOCUMENTED
+  );
+});
+
+test("compact parser rejects unknown fields and malformed evidence without inventing values", () => {
+  const result = parseClinicalEncounterCompactOutput(
+    JSON.stringify({
+      fields: [
+        { field: "unknown.section", value: "invented", evidence: ["fact"] },
+        {
+          field: "historyOfPresentIllness.currentComplaints",
+          value: "invented",
+          evidence: ["not present"],
+        },
+      ],
+    }),
+    "fact"
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.extraction.fields, {});
+  assert.ok(result.extraction.issues.some((issue) => issue.code === "invalid_field"));
+  assert.ok(
+    result.extraction.issues.some((issue) => issue.code === "invalid_source_reference")
+  );
+});
+
+test("compact parser rejects the legacy dynamic object shape", () => {
+  const result = parseClinicalEncounterCompactOutput(
+    JSON.stringify({
+      fields: {
+        "historyOfPresentIllness.currentComplaints": {
+          value: "Back pain",
+          evidence: ["Back pain"],
+        },
+      },
+    }),
+    "Back pain"
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.issues[0].code, "invalid_root");
 });
 
 test("missing fields become Not documented in every supplied section", () => {

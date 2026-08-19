@@ -216,6 +216,7 @@ const BOOLEAN_SETTINGS = new Set([
   "dataRetentionEnabled",
   "saveDiscardedTranscriptions",
   "noteFilesEnabled",
+  "encounterEnhancedNotesEnabled",
   "showTranscriptionPreview",
   "cleanupDisableThinking",
   "dictationAgentDisableThinking",
@@ -554,6 +555,7 @@ export interface SettingsState
   keepTranscriptionInClipboard: boolean;
   noteFilesEnabled: boolean;
   noteFilesPath: string;
+  encounterEnhancedNotesEnabled: boolean;
 
   transcriptionMode: InferenceMode;
   remoteTranscriptionType: SelfHostedType;
@@ -850,6 +852,7 @@ export interface SettingsState
   setKeepTranscriptionInClipboard: (value: boolean) => void;
   setNoteFilesEnabled: (value: boolean) => void;
   setNoteFilesPath: (value: string) => void;
+  setEncounterEnhancedNotesEnabled: (value: boolean) => void;
 
   setChatAgentModel: (value: string) => void;
   setChatAgentProvider: (value: string) => void;
@@ -1284,6 +1287,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   keepTranscriptionInClipboard: readBoolean("keepTranscriptionInClipboard", false),
   noteFilesEnabled: readBoolean("noteFilesEnabled", false),
   noteFilesPath: readString("noteFilesPath", ""),
+  encounterEnhancedNotesEnabled: readBoolean("encounterEnhancedNotesEnabled", true),
 
   transcriptionMode: (() => {
     const v = readString("transcriptionMode", "local");
@@ -2095,6 +2099,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setKeepTranscriptionInClipboard: createBooleanSetter("keepTranscriptionInClipboard"),
   setNoteFilesEnabled: createBooleanSetter("noteFilesEnabled"),
   setNoteFilesPath: createStringSetter("noteFilesPath"),
+  setEncounterEnhancedNotesEnabled: createBooleanSetter("encounterEnhancedNotesEnabled"),
 
   setChatAgentModel: createStringSetter("chatAgentModel"),
   setChatAgentProvider: createStringSetter("chatAgentProvider"),

@@ -1799,6 +1799,7 @@
       "asTranscriptMarkdown": "Markdown (.md)",
       "raw": "元のテキスト",
       "enhanced": "強化済み",
+      "clinicalNote": "診療ノート",
       "saving": "保存中",
       "startWriting": "書き始める..."
     },

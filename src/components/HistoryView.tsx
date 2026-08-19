@@ -1,10 +1,9 @@
-import { Fragment, useMemo } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
-import { Loader2, Sparkles, X, Mic, Trash2, Archive } from "lucide-react";
+import { Loader2, Sparkles, X, Trash2 } from "lucide-react";
 import TranscriptionItem from "./ui/TranscriptionItem";
 import type { TranscriptionItem as TranscriptionItemType } from "../types/electron";
-import { formatHotkeyLabel, parseHotkeyList } from "../utils/hotkeys";
 import { formatDateGroup } from "../utils/dateFormatting";
 import { cn } from "./lib/utils";
 import EncounterHomeView from "./EncounterHomeView";
@@ -15,7 +14,6 @@ import { usePolicyStore } from "../stores/policyStore";
 interface HistoryViewProps {
   history: TranscriptionItemType[];
   isLoading: boolean;
-  hotkey: string;
   aiCTADismissed: boolean;
   setAiCTADismissed: (dismissed: boolean) => void;
   useCleanupModel: boolean;
@@ -25,14 +23,11 @@ interface HistoryViewProps {
   onOpenSettings: (section?: string) => void;
   onShowAudioInFolder: (id: number) => void;
   onRetryTranscription: (id: number, options?: { isRecover?: boolean }) => Promise<void>;
-  showDiscarded: boolean;
-  onToggleDiscarded: () => void;
 }
 
 export default function HistoryView({
   history,
   isLoading,
-  hotkey,
   aiCTADismissed,
   setAiCTADismissed,
   useCleanupModel,
@@ -42,8 +37,6 @@ export default function HistoryView({
   onOpenSettings,
   onShowAudioInFolder,
   onRetryTranscription,
-  showDiscarded,
-  onToggleDiscarded,
 }: HistoryViewProps) {
   const { t } = useTranslation();
   const personalDataRetentionEnabled = useSettingsStore((s) => s.dataRetentionEnabled);
@@ -70,31 +63,10 @@ export default function HistoryView({
     return groups;
   }, [history, t]);
 
-  const discardedToggle = (
-    <button
-      onClick={onToggleDiscarded}
-      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-muted-foreground/60 hover:!text-foreground hover:!bg-black/5 dark:hover:!bg-white/5 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/30 transition-all duration-200"
-    >
-      <Archive size={11} />
-      <span>
-        {showDiscarded
-          ? t("controlPanel.history.discarded.hide")
-          : t("controlPanel.history.discarded.show")}
-      </span>
-    </button>
-  );
-
   return (
     <div className="px-4 pt-4 pb-6">
       <div className="mx-auto max-w-5xl">
         <EncounterHomeView />
-        <div className="mb-3 flex items-center gap-1.5">
-          <Mic size={12} className="text-muted-foreground" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t("encounters.quickDictation")}
-          </span>
-        </div>
-        {history.length === 0 && <div className="mb-2 flex justify-end">{discardedToggle}</div>}
         {!useCleanupModel && !aiCTADismissed && (
           <div className="mb-3 relative rounded-lg border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3">
             <button
@@ -148,111 +120,7 @@ export default function HistoryView({
                   <span className="text-sm text-muted-foreground">{t("controlPanel.loading")}</span>
                 </div>
               </div>
-            ) : history.length === 0 ? (
-              <div className="rounded-lg border border-border bg-card/50 dark:bg-card/60 backdrop-blur-sm">
-                <div className="flex flex-col items-center justify-center py-16 px-4">
-                  <svg
-                    className="text-foreground dark:text-white mb-5"
-                    width="64"
-                    height="64"
-                    viewBox="0 0 64 64"
-                    fill="none"
-                  >
-                    <rect
-                      x="24"
-                      y="6"
-                      width="16"
-                      height="28"
-                      rx="8"
-                      fill="currentColor"
-                      fillOpacity={0.04}
-                      stroke="currentColor"
-                      strokeOpacity={0.1}
-                    />
-                    <rect
-                      x="28"
-                      y="12"
-                      width="8"
-                      height="3"
-                      rx="1.5"
-                      fill="currentColor"
-                      fillOpacity={0.06}
-                    />
-                    <path
-                      d="M18 28c0 7.7 6.3 14 14 14s14-6.3 14-14"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeOpacity={0.07}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <line
-                      x1="32"
-                      y1="42"
-                      x2="32"
-                      y2="50"
-                      stroke="currentColor"
-                      strokeOpacity={0.07}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <line
-                      x1="26"
-                      y1="50"
-                      x2="38"
-                      y2="50"
-                      stroke="currentColor"
-                      strokeOpacity={0.07}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M12 20a2 2 0 0 1 0 8"
-                      stroke="currentColor"
-                      strokeOpacity={0.04}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M8 18a2 2 0 0 1 0 12"
-                      stroke="currentColor"
-                      strokeOpacity={0.03}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M52 20a2 2 0 0 0 0 8"
-                      stroke="currentColor"
-                      strokeOpacity={0.04}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M56 18a2 2 0 0 0 0 12"
-                      stroke="currentColor"
-                      strokeOpacity={0.03}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  <h3 className="text-xs font-semibold text-foreground/70 dark:text-foreground/60 mb-2">
-                    {t("controlPanel.history.empty")}
-                  </h3>
-                  <div className="flex items-center gap-2 text-xs text-foreground/50 dark:text-foreground/25">
-                    <span>{t("controlPanel.history.press")}</span>
-                    {parseHotkeyList(hotkey).map((hk, index) => (
-                      <Fragment key={hk}>
-                        {index > 0 && <span className="text-foreground/30">/</span>}
-                        <kbd className="inline-flex items-center h-5 px-1.5 rounded-sm bg-surface-1 dark:bg-white/6 border border-border/50 text-xs font-mono font-medium text-foreground/60 dark:text-foreground/40">
-                          {formatHotkeyLabel(hk)}
-                        </kbd>
-                      </Fragment>
-                    ))}
-                    <span>{t("controlPanel.history.toStart")}</span>
-                  </div>
-                </div>
-              </div>
-            ) : (
+            ) : history.length === 0 ? null : (
               <div className="group">
                 {groupedHistory.map((group, index) => (
                   <div key={group.label} className={index > 0 ? "mt-4" : ""}>
@@ -262,7 +130,6 @@ export default function HistoryView({
                       </span>
                       {index === 0 && (
                         <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
-                          {discardedToggle}
                           <button
                             onClick={clearAllTranscriptions}
                             className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-muted-foreground/60 hover:!text-destructive hover:!bg-destructive/8 dark:hover:!bg-destructive/10 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/30 transition-all duration-200"

@@ -25,9 +25,9 @@ function encounterIpcError(code) {
   return { code: safeCode, message: ENCOUNTER_PUBLIC_ERRORS[safeCode] };
 }
 
-// Calendar IPC is a renderer boundary. Keep this projection aligned with the
-// database's named public calendar projection so a legacy row (or an older
-// database adapter) cannot reintroduce resolver-only patient metadata here.
+// Calendar IPC is a renderer boundary. Keep this projection explicit. The
+// patient fields below are a local registry projection used by the calendar
+// UI for contact actions; raw descriptions and resolver metadata remain private.
 const CALENDAR_EVENT_PUBLIC_FIELDS = Object.freeze([
   "id",
   "calendar_id",
@@ -45,10 +45,22 @@ const CALENDAR_EVENT_PUBLIC_FIELDS = Object.freeze([
   "attendees",
   "event_id",
   "event_uid",
+  "calendar_identity_key",
   "occurrence_id",
+  "recurring_event_id",
+  "original_start_time",
   "timezone",
   "recurrence",
   "capabilities",
+  "patient_id",
+  "appointment_id",
+  "patient_name",
+  "patient_dob",
+  "patient_email",
+  "patient_phone",
+  "patient_sms_consent_status",
+  "patient_link_status",
+  "patient_link_source",
   "synced_at",
 ]);
 
@@ -61,6 +73,52 @@ function projectPublicCalendarEvent(event) {
 
 function projectPublicCalendarEvents(events) {
   return Array.isArray(events) ? events.map(projectPublicCalendarEvent) : [];
+}
+
+function projectSafeNoteTemplate(template, { includeRaw = false } = {}) {
+  if (!template || typeof template !== "object") return null;
+  const safe = { ...template };
+  delete safe.template_text;
+  delete safe.raw_template_text;
+  delete safe.clinical_source;
+  delete safe.raw_clinical_source;
+  if (safe.active_revision && typeof safe.active_revision === "object") {
+    safe.active_revision = { ...safe.active_revision };
+    const activeTemplateText = safe.active_revision.template_text;
+    delete safe.active_revision.template_text;
+    if (includeRaw && typeof activeTemplateText === "string") safe.template_text = activeTemplateText;
+  }
+  if (Array.isArray(safe.revisions)) {
+    safe.revisions = safe.revisions.map((revision) => {
+      const safeRevision = { ...revision };
+      delete safeRevision.template_text;
+      return safeRevision;
+    });
+  }
+  return safe;
+}
+
+function projectSafeNoteGenerationCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const safe = { ...candidate };
+  delete safe.clinical_source;
+  delete safe.raw_clinical_source;
+  return safe;
+}
+
+function projectSafeCalendarSyncResult(result) {
+  if (!result || typeof result !== "object") {
+    return { success: false, events: [], error: serializedError("AI_RECEPTIONIST_COMMAND_FAILED") };
+  }
+  const safe = { ...result };
+  safe.events = projectPublicCalendarEvents(result.events);
+  if (result.error) {
+    safe.error = serializedError(result.error.code);
+  }
+  delete safe.stdout;
+  delete safe.stderr;
+  delete safe.raw;
+  return safe;
 }
 
 // The renderer's ModelRegistry is not main-loadable; the raw registry data is
@@ -1225,6 +1283,76 @@ class IPCHandlers {
 
     ipcMain.handle("db-get-space-notes", async (event, spaceId, limit) => {
       return this.databaseManager.getNotesForSpace(spaceId, limit);
+    });
+
+    // Note templates and generation candidates cross the renderer boundary as
+    // explicit projections. Raw prompts and clinical source remain main-process
+    // data; candidate output is returned because the renderer must preview it.
+    ipcMain.handle("db-list-note-templates", async (_event, kind) =>
+      this.databaseManager
+        .listNoteTemplates(kind)
+        .map(projectSafeNoteTemplate)
+    );
+    ipcMain.handle("db-get-note-template", async (_event, idOrKey, options = {}) =>
+      projectSafeNoteTemplate(
+        this.databaseManager.getNoteTemplate(idOrKey, { includeRaw: options?.includeRaw === true }),
+        { includeRaw: options?.includeRaw === true }
+      )
+    );
+    ipcMain.handle("db-get-default-note-template", async (_event, kind, options = {}) =>
+      projectSafeNoteTemplate(
+        this.databaseManager.getDefaultNoteTemplate(kind, { includeRaw: options?.includeRaw === true }),
+        { includeRaw: options?.includeRaw === true }
+      )
+    );
+    ipcMain.handle("db-create-note-template", async (_event, input) => {
+      const result = this.databaseManager.createNoteTemplate(input);
+      return result?.template
+        ? { ...result, template: projectSafeNoteTemplate(result.template) }
+        : result;
+    });
+    ipcMain.handle("db-update-note-template", async (_event, id, updates) => {
+      const result = this.databaseManager.updateNoteTemplate(id, updates);
+      return result?.template
+        ? { ...result, template: projectSafeNoteTemplate(result.template) }
+        : result;
+    });
+    ipcMain.handle("db-delete-note-template", async (_event, id) =>
+      this.databaseManager.deleteNoteTemplate(id)
+    );
+    ipcMain.handle("db-activate-note-template", async (_event, id, revisionId) => {
+      const result = this.databaseManager.activateNoteTemplate(id, revisionId);
+      return result?.template
+        ? { ...result, template: projectSafeNoteTemplate(result.template) }
+        : result;
+    });
+    ipcMain.handle("db-set-default-note-template", async (_event, id, revisionId) => {
+      const result = this.databaseManager.setDefaultNoteTemplate(id, revisionId);
+      return result?.template
+        ? { ...result, template: projectSafeNoteTemplate(result.template) }
+        : result;
+    });
+    ipcMain.handle("db-create-note-generation-candidate", async (_event, input) => {
+      const result = this.databaseManager.createNoteGenerationCandidate(input);
+      return result?.candidate
+        ? { ...result, candidate: projectSafeNoteGenerationCandidate(result.candidate) }
+        : result;
+    });
+    ipcMain.handle("db-get-note-generation-candidate", async (_event, candidateId) =>
+      projectSafeNoteGenerationCandidate(this.databaseManager.getNoteGenerationCandidate(candidateId))
+    );
+    ipcMain.handle("db-apply-note-generation-candidate", async (_event, candidateId, options) => {
+      const result = this.databaseManager.applyNoteGenerationCandidate(candidateId, options);
+      if (result?.success && result.note) this._publishNoteUpdated(result.note);
+      return result?.candidate
+        ? { ...result, candidate: projectSafeNoteGenerationCandidate(result.candidate) }
+        : result;
+    });
+    ipcMain.handle("db-discard-note-generation-candidate", async (_event, candidateId) => {
+      const result = this.databaseManager.discardNoteGenerationCandidate(candidateId);
+      return result?.candidate
+        ? { ...result, candidate: projectSafeNoteGenerationCandidate(result.candidate) }
+        : result;
     });
 
     ipcMain.handle("db-update-note", async (event, id, updates) => {
@@ -3728,7 +3856,11 @@ class IPCHandlers {
         const result = await LocalReasoningService.processText(text, modelId, config);
         return { success: true, text: result };
       } catch (error) {
-        return { success: false, error: error.message };
+        debugLogger.error("Local reasoning request failed", {
+          error: error.message,
+          code: error.code,
+        });
+        return { success: false, error: "Local reasoning could not be completed. Please try again." };
       }
     });
 
@@ -7573,14 +7705,19 @@ class IPCHandlers {
 
     ipcMain.handle("gcal-sync-events", async (_event, range = null) => {
       try {
-        return (
+        const result =
           (await this.receptionistCalendarBridge?.sync?.(range || undefined)) || {
             success: false,
+            events: [],
             error: serializedError("AI_RECEPTIONIST_UNAVAILABLE"),
-          }
-        );
+          };
+        return projectSafeCalendarSyncResult(result);
       } catch {
-        return { success: false, error: serializedError("AI_RECEPTIONIST_COMMAND_FAILED") };
+        return {
+          success: false,
+          events: [],
+          error: serializedError("AI_RECEPTIONIST_COMMAND_FAILED"),
+        };
       }
     });
 
@@ -7705,6 +7842,114 @@ class IPCHandlers {
       }
     });
 
+    ipcMain.handle("patient-registry-list", async (_event, query = "") => {
+      try {
+        const search = typeof query === "string" ? query : query?.query;
+        return {
+          success: true,
+          patients: this.databaseManager.listPatientRegistry(search || ""),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          patients: [],
+          error: { code: error?.code || "PATIENT_REGISTRY_UNAVAILABLE", message: "Patient registry is unavailable." },
+        };
+      }
+    });
+
+    ipcMain.handle("patient-registry-get", async (_event, patientId) => {
+      try {
+        const patient = this.databaseManager.getPatientRegistryPatient(patientId);
+        return { success: Boolean(patient), patient };
+      } catch (error) {
+        return {
+          success: false,
+          patient: null,
+          error: { code: error?.code || "PATIENT_REGISTRY_UNAVAILABLE", message: "Patient registry is unavailable." },
+        };
+      }
+    });
+
+    ipcMain.handle("patient-registry-save", async (_event, payload = {}) => {
+      try {
+        const patient = this.databaseManager.savePatientRegistryPatient(payload);
+        // Registry save also repairs any cached calendar encounters that were
+        // ingested before this patient existed. Notify calendar/encounter
+        // surfaces to reread their safe local projections immediately.
+        broadcastToWindows("gcal-events-synced", {
+          provider: "ai_receptionist",
+          success: true,
+          patientRegistryUpdated: true,
+        });
+        return { success: true, patient };
+      } catch (error) {
+        return {
+          success: false,
+          patient: null,
+          error: {
+            code: error?.code || "PATIENT_REGISTRY_SAVE_FAILED",
+            message: error?.code === "PATIENT_REGISTRY_CONFLICT"
+              ? error.message
+              : error?.code === "PATIENT_REGISTRY_INVALID"
+                ? error.message
+                : "Patient record could not be saved.",
+          },
+        };
+      }
+    });
+
+    ipcMain.handle("patient-registry-encounters", async (_event, patientId, limit) => {
+      try {
+        return {
+          success: true,
+          encounters: this.databaseManager.getPatientEncounterHistory(patientId, limit),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          encounters: [],
+          error: { code: error?.code || "PATIENT_REGISTRY_UNAVAILABLE", message: "Patient history is unavailable." },
+        };
+      }
+    });
+
+    ipcMain.handle("patient-registry-merge-candidates", async (_event, patientId) => {
+      try {
+        return {
+          success: true,
+          patients: this.databaseManager.getPatientMergeCandidates(patientId),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          patients: [],
+          error: { code: error?.code || "PATIENT_REGISTRY_UNAVAILABLE", message: "Patient merge candidates are unavailable." },
+        };
+      }
+    });
+
+    ipcMain.handle("patient-registry-merge", async (_event, payload = {}) => {
+      try {
+        return {
+          success: true,
+          patient: this.databaseManager.mergePatientRegistryPatients(payload),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          patient: null,
+          error: {
+            code: error?.code || "PATIENT_MERGE_FAILED",
+            message: error?.message || "Patient records could not be merged.",
+            ...(error?.field ? { field: error.field } : {}),
+            ...(error?.survivorValue !== undefined ? { survivorValue: error.survivorValue } : {}),
+            ...(error?.duplicateValue !== undefined ? { duplicateValue: error.duplicateValue } : {}),
+          },
+        };
+      }
+    });
+
     // Encounters are local projections of the managed calendar. No sidecar
     // credentials or raw appointment details are exposed through these calls.
     ipcMain.handle("encounters-get", async (_event, limitOrRange) => {
@@ -7743,6 +7988,42 @@ class IPCHandlers {
       } catch {
         const error = encounterIpcError("ENCOUNTER_NOT_FOUND");
         return { success: false, encounter: null, error: error.message, code: error.code };
+      }
+    });
+
+    ipcMain.handle("encounter-get-by-note", async (_event, noteId) => {
+      try {
+        const encounter = this.databaseManager.getEncounterByNoteId(noteId);
+        if (encounter) {
+          // The database row contains patient contact fields used by the main
+          // process. The renderer only needs the encounter identity/lifecycle
+          // to load and queue clinical outputs.
+          delete encounter.dob;
+          delete encounter.normalized_phone;
+          delete encounter.normalized_email;
+        }
+        return { success: true, encounter };
+      } catch {
+        const error = encounterIpcError("ENCOUNTER_NOT_FOUND");
+        return { success: false, encounter: null, error: error.message, code: error.code };
+      }
+    });
+
+    ipcMain.handle("encounters-output-pending-get", async (_event, limit) => {
+      try {
+        const encounters = this.databaseManager.getEncountersNeedingOutputGeneration(limit);
+        for (const encounter of encounters) {
+          delete encounter.dob;
+          delete encounter.normalized_phone;
+          delete encounter.normalized_email;
+        }
+        return {
+          success: true,
+          encounters,
+        };
+      } catch {
+        const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
+        return { success: false, encounters: [], error: error.message, code: error.code };
       }
     });
 
@@ -7807,6 +8088,12 @@ class IPCHandlers {
           updates
         );
         if (result.note) this._publishNoteUpdated(result.note);
+        if (result.output) {
+          broadcastToWindows("encounter-output-updated", {
+            encounterId: Number(encounterId),
+            applied: Boolean(result.applied),
+          });
+        }
         return { success: true, applied: result.applied, output: result.output };
       } catch {
         const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
@@ -7828,6 +8115,10 @@ class IPCHandlers {
           return { success: false, output: null, error: error.message, code: error.code };
         }
         broadcastToWindows("encounter-output-retry-requested", { encounterId: Number(encounterId) });
+        broadcastToWindows("encounter-output-updated", {
+          encounterId: Number(encounterId),
+          applied: true,
+        });
         return { success: true, output };
       } catch {
         const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");

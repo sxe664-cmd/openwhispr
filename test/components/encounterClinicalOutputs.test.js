@@ -82,7 +82,7 @@ test("guarded renderer orchestration generates from begin's canonical transcript
         success: true,
         output: begunOutput,
         transcript: "Canonical transcript from main",
-        token: { transcriptRevision: 8, transcriptHash: "canonical-sha256" },
+        token: { transcriptRevision: 8, transcriptHash: "canonical-sha256", generationId: "generation-1" },
       };
     },
     finishEncounterOutputGeneration: async (encounterId, token, updates) => {
@@ -105,6 +105,7 @@ test("guarded renderer orchestration generates from begin's canonical transcript
   assert.deepEqual(calls[1][2], {
     transcriptRevision: 8,
     transcriptHash: "canonical-sha256",
+    generationId: "generation-1",
   });
   assert.equal(calls[1][3].summary_status, "ready");
   assert.equal(calls[1][3].soap_status, "ready");
@@ -130,7 +131,7 @@ test("deferred finish adopts the newer non-ready output and releases the attempt
       success: true,
       output: output(),
       transcript: "Older canonical snapshot",
-      token: { transcriptRevision: 8, transcriptHash: "older-sha256" },
+      token: { transcriptRevision: 8, transcriptHash: "older-sha256", generationId: "generation-2" },
     }),
     finishEncounterOutputGeneration: async (_encounterId, _token, updates) => {
       finishedUpdates = updates;
@@ -168,7 +169,7 @@ test("generation failure also uses guarded finish for the safe failed state", as
       success: true,
       output: output(),
       transcript: "Canonical transcript",
-      token: { transcriptRevision: 8, transcriptHash: "canonical-sha256" },
+      token: { transcriptRevision: 8, transcriptHash: "canonical-sha256", generationId: "generation-3" },
     }),
     finishEncounterOutputGeneration: async (_encounterId, _token, updates) => {
       failureUpdates = updates;

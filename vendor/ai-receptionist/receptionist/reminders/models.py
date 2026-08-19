@@ -25,6 +25,7 @@ class AppointmentEvent:
     contact_email: str | None = None
     contact_email_source: str | None = None
     contact_email_recovered_at: str | None = None
+    has_self_attendee: bool | None = None
     cancelled: bool = False
     recurring: bool = False
     etag: str | None = None

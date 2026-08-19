@@ -144,9 +144,12 @@ async def book_appointment(
     callback_number = _clean_field(callback_number)
     description_lines = [
         "[via AI receptionist / UNVERIFIED]",
-        f"Patient: {caller_name}",
+        "[OpenWhispr Patient]",
+        f"Name: {caller_name}",
+        f"DOB: {normalized_dob}",
         f"Phone: {callback_number}",
-        f"Email: {caller_email or '(none)'}",
+        *( [f"Email: {caller_email}"] if caller_email else [] ),
+        "[/OpenWhispr Patient]",
         f"Booked: {booked_at}",
         f"Call ID: {call_id}",
     ]

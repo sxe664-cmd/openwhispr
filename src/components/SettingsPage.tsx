@@ -80,9 +80,9 @@ import ChatAgentSettings from "./settings/ChatAgentSettings";
 import DictationAgentSettings from "./settings/DictationAgentSettings";
 import DictationTranslationSettings from "./settings/DictationTranslationSettings";
 import InferenceConfigEditor from "./settings/InferenceConfigEditor";
+import NotesTemplates from "./settings/NotesTemplates";
 import { MeetingTranscriptionPanel } from "./settings/MeetingSettings";
 import { UploadTranscriptionPanel } from "./settings/UploadSettings";
-import CalendarRemindersView from "./CalendarRemindersView";
 import LanguageSelector from "./ui/LanguageSelector";
 import { Skeleton } from "./ui/skeleton";
 import { Progress } from "./ui/progress";
@@ -122,7 +122,6 @@ import { canManageSystemAudioInApp } from "../utils/systemAudioAccess";
 export type SettingsSectionType =
   | "general"
   | "hotkeys"
-  | "calendarReminders"
   | "speechToText"
   | "llms"
   | "privacyData"
@@ -1661,6 +1660,9 @@ export default function SettingsPage({
             </div>
 
             {/* Floating Icon */}
+            <NotesTemplates />
+
+            {/* Floating Icon */}
             <div>
               <SectionHeader
                 title={t("settingsPage.general.floatingIcon.title")}
@@ -2527,11 +2529,6 @@ EOF`,
               </div>
             )}
           </div>
-        );
-
-      case "calendarReminders":
-        return (
-          <CalendarRemindersView embedded />
         );
 
       case "speechToText":

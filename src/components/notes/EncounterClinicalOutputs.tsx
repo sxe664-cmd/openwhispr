@@ -6,33 +6,37 @@ import type {
   EncounterOutputStatus,
   MeetingDiarizationStatus,
 } from "../../types/electron";
-import { generateClinicalOutputs } from "../../helpers/clinicalOutputGeneration";
+import {
+  formatClinicalOutputForDisplay,
+  generateClinicalOutputs,
+} from "../../helpers/clinicalOutputGeneration";
 import {
   runEncounterOutputGeneration,
   type EncounterOutputGenerationBridge,
 } from "../../helpers/encounterOutputGeneration";
 import { cn } from "../lib/utils";
+import { RichTextEditor } from "../ui/RichTextEditor";
 
 export type EncounterClinicalOutputMode = "summary" | "soap";
 
 type EncounterOutputRecord = EncounterOutput;
 
 interface EncounterOutputBridge extends EncounterOutputGenerationBridge {
+  getEncounterByNote?: (noteId: number) => Promise<{
+    success?: boolean;
+    encounter: { id: number } | null;
+  }>;
   getEncounterOutput?: (encounterId: number) => Promise<{
     success?: boolean;
     output: EncounterOutputRecord | null;
   }>;
-}
-
-interface EncounterBridge {
-  getEncounters?: (limit?: number) => Promise<{
-    success?: boolean;
-    encounters?: Array<{ id: number; calendar_event_id: string | null }>;
-  }>;
+  onEncounterOutputUpdated?: (
+    callback: (payload: { encounterId?: number | null; applied?: boolean }) => void
+  ) => () => void;
 }
 
 interface EncounterClinicalOutputsProps {
-  calendarEventId: string;
+  noteId: number;
   mode: EncounterClinicalOutputMode;
   isRecording: boolean;
   isProcessingTranscript?: boolean;
@@ -42,8 +46,8 @@ interface EncounterClinicalOutputsProps {
 
 const SAFE_ERROR_COPY = "notes.editor.clinicalOutputs.failedDescription";
 
-function asBridge(): EncounterOutputBridge & EncounterBridge {
-  return (window.electronAPI ?? {}) as unknown as EncounterOutputBridge & EncounterBridge;
+function asBridge(): EncounterOutputBridge {
+  return (window.electronAPI ?? {}) as unknown as EncounterOutputBridge;
 }
 
 function normalizeOutput(
@@ -79,7 +83,7 @@ function statusCopyKey(
 }
 
 export default function EncounterClinicalOutputs({
-  calendarEventId,
+  noteId,
   mode,
   isRecording,
   isProcessingTranscript = false,
@@ -93,6 +97,7 @@ export default function EncounterClinicalOutputs({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationFailed, setGenerationFailed] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [outputRefreshKey, setOutputRefreshKey] = useState(0);
   const generationAttemptRef = useRef(false);
   const generationScopeRef = useRef(0);
   const mountedRef = useRef(true);
@@ -120,20 +125,18 @@ export default function EncounterClinicalOutputs({
     generationAttemptRef.current = false;
 
     const bridge = asBridge();
-    if (!calendarEventId || !bridge.getEncounters) {
+    if (!noteId || !bridge.getEncounterByNote) {
       setIsLoading(false);
       return;
     }
 
     void bridge
-      .getEncounters(200)
+      .getEncounterByNote(noteId)
       .then((result) => {
         if (cancelled) return;
-        const encounter = (result.encounters ?? []).find(
-          (candidate) => candidate.calendar_event_id === calendarEventId
-        );
+        const encounter = result.encounter;
         setEncounterId(encounter?.id ?? null);
-        if (!encounter) setLoadFailed(true);
+        if (result.success === false || !encounter) setLoadFailed(true);
       })
       .catch(() => {
         if (!cancelled) setLoadFailed(true);
@@ -145,7 +148,18 @@ export default function EncounterClinicalOutputs({
     return () => {
       cancelled = true;
     };
-  }, [calendarEventId]);
+  }, [noteId]);
+
+  useEffect(() => {
+    if (encounterId == null) return;
+    const subscribe = asBridge().onEncounterOutputUpdated;
+    if (!subscribe) return;
+    return subscribe((payload) => {
+      if (Number(payload?.encounterId) === encounterId) {
+        setOutputRefreshKey((current) => current + 1);
+      }
+    });
+  }, [encounterId]);
 
   useEffect(() => {
     if (encounterId == null) return;
@@ -167,7 +181,7 @@ export default function EncounterClinicalOutputs({
     return () => {
       cancelled = true;
     };
-  }, [encounterId, transcriptReadKey]);
+  }, [encounterId, transcriptReadKey, outputRefreshKey]);
 
   const runGeneration = useCallback(
     async (force = false) => {
@@ -236,6 +250,7 @@ export default function EncounterClinicalOutputs({
     generating: isGenerating,
   });
   const content = mode === "summary" ? output?.summary : output?.soap;
+  const formattedContent = formatClinicalOutputForDisplay(mode, content);
   const showRetry = generationFailed || outputStatus === "failed";
   const showRegenerate = outputStatus === "stale" && !isGenerating;
 
@@ -289,14 +304,9 @@ export default function EncounterClinicalOutputs({
           </div>
         )}
 
-        {content ? (
-          <div
-            className={cn(
-              "whitespace-pre-wrap text-sm leading-7 text-foreground/80",
-              outputStatus === "stale" && "opacity-70"
-            )}
-          >
-            {content}
+        {formattedContent ? (
+          <div className={cn("clinical-output-richtext", outputStatus === "stale" && "opacity-70")}>
+            <RichTextEditor value={formattedContent} readOnly />
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border/50 px-4 py-10 text-center text-sm text-muted-foreground">

@@ -1,5 +1,9 @@
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Calendar descriptions are often entered on a phone. Accept the two common
+// US month/day/year separators while keeping the component widths bounded so
+// malformed values cannot silently become an identity match.
+const US_DATE_RE = /^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/;
 const MAX_METADATA_LENGTH = 4096;
 const MAX_LABEL_LENGTH = 120;
 const PATIENT_BLOCK_RE = /(?:^|\r?\n)\[OpenWhispr Patient\]\r?\n([\s\S]*?)\r?\n\[\/OpenWhispr Patient\](?=\r?\n|$)/g;
@@ -27,15 +31,36 @@ function normalizePatientPhone(value) {
   const trimmed = String(value || "").trim();
   if (!trimmed) return null;
   const digits = trimmed.replace(/\D/g, "");
-  if (digits.length < 7 || digits.length > 15) return null;
-  return trimmed.startsWith("+") ? `+${digits}` : digits;
+  // OpenWhispr currently supports US numbers only. Store every valid number
+  // in one E.164 form so calendar metadata, the registry, and reminder
+  // providers use the same recipient identity. Do not prepend blindly: an
+  // already-prefixed 11-digit number must not become +11..., and malformed
+  // values must remain invalid instead of being guessed into a patient match.
+  const nationalNumber = digits.length === 11 && digits.startsWith("1")
+    ? digits.slice(1)
+    : digits.length === 10
+      ? digits
+      : null;
+  return nationalNumber ? `+1${nationalNumber}` : null;
 }
 
 function normalizePatientDob(value) {
   const dob = String(value || "").trim();
-  if (!ISO_DATE_RE.test(dob)) return null;
-  const date = new Date(`${dob}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== dob ? null : dob;
+  if (ISO_DATE_RE.test(dob)) {
+    const date = new Date(`${dob}T00:00:00.000Z`);
+    return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== dob ? null : dob;
+  }
+  const match = US_DATE_RE.exec(dob);
+  if (!match) return null;
+  const [, month, day, year] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    Number.isNaN(date.getTime())
+    || date.getUTCFullYear() !== Number(year)
+    || date.getUTCMonth() !== Number(month) - 1
+    || date.getUTCDate() !== Number(day)
+  ) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function normalizeAppointmentId(value) {
@@ -51,6 +76,18 @@ function normalizePatientName(value) {
   const name = String(value || "").trim().replace(/\s+/g, " ");
   if (!name) return null;
   return name.length <= MAX_LABEL_LENGTH ? name : null;
+}
+
+function normalizePatientNameKey(value) {
+  const name = normalizePatientName(value);
+  if (!name) return null;
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase() || null;
 }
 
 function sanitizePatientFields(fields) {
@@ -95,16 +132,23 @@ function parsePatientMetadata(value) {
   PATIENT_BLOCK_RE.lastIndex = 0;
   const matches = [...raw.matchAll(PATIENT_BLOCK_RE)];
   PATIENT_BLOCK_RE.lastIndex = 0;
-  if (matches.length !== 1) return { metadata: null, reason: "invalid_metadata" };
+  const hasPatientMarkers = raw.includes("[OpenWhispr Patient]") || raw.includes("[/OpenWhispr Patient]");
+  if (hasPatientMarkers && matches.length !== 1) return { metadata: null, reason: "invalid_metadata" };
 
   const fields = new Map();
-  for (const line of matches[0][1].split(/\r?\n/)) {
+  const fieldLines = matches.length === 1
+    ? matches[0][1].split(/\r?\n/)
+    : raw.trim().split(/\r?\n/).filter((line) => line.trim());
+  for (const line of fieldLines) {
     const field = /^([A-Za-z_]+):[ \t]*(.*)$/.exec(line);
     if (!field) return { metadata: null, reason: "invalid_metadata" };
     const key = field[1].toLowerCase();
     const fieldValue = field[2].trim();
     if (!PATIENT_FIELDS.has(key) || !fieldValue || fields.has(key)) return { metadata: null, reason: "invalid_metadata" };
     fields.set(key, fieldValue);
+  }
+  if (matches.length !== 1 && !fields.has("dob") && !fields.has("date_of_birth") && !fields.has("patient_id") && !fields.has("appointment_id")) {
+    return { metadata: null, reason: "invalid_metadata" };
   }
   return sanitizePatientFields({
     name: fields.get("name"),
@@ -196,21 +240,13 @@ function resolveFromRegistry({ metadata, registryPatients = [] } = {}) {
     };
   }
 
+  const nameKey = normalizePatientNameKey(metadata?.name);
   const dob = normalizePatientDob(metadata?.dob);
-  const email = normalizePatientEmail(metadata?.email);
-  const phone = normalizePatientPhone(metadata?.phone);
-  if (!dob || (!email && !phone)) return unresolvedPatient("unassigned_missing_demographics", appointmentId);
-  const sameDob = (patient) => normalizePatientDob(patient.dob ?? patient.date_of_birth) === dob;
-  const phoneMatches = phone
-    ? patients.filter((patient) => sameDob(patient) && normalizePatientPhone(patient.normalized_phone ?? patient.phone) === phone)
-    : [];
-  const emailMatches = email
-    ? patients.filter((patient) => sameDob(patient) && normalizePatientEmail(patient.normalized_email ?? patient.email) === email)
-    : [];
-  if (phoneMatches.length === 1 && emailMatches.length === 1 && phoneMatches[0].patient_id !== emailMatches[0].patient_id) {
-    return unresolvedPatient("unassigned_conflict", appointmentId);
-  }
-  const matches = [...new Map([...phoneMatches, ...emailMatches].map((patient) => [patient.patient_id, patient])).values()];
+  if (!nameKey || !dob) return unresolvedPatient("unassigned_missing_demographics", appointmentId);
+  const matches = patients.filter((patient) =>
+    normalizePatientNameKey(patient.normalized_name ?? patient.name) === nameKey
+    && normalizePatientDob(patient.normalized_dob ?? patient.dob ?? patient.date_of_birth) === dob
+  );
   if (matches.length !== 1) return unresolvedPatient(matches.length > 1 ? "unassigned_conflict" : "unassigned_no_exact_match", appointmentId);
   const patient = matches[0];
   return {
@@ -218,10 +254,10 @@ function resolveFromRegistry({ metadata, registryPatients = [] } = {}) {
     patientId: normalizeOpaqueId(patient.patient_id),
     appointmentId,
     normalizedDob: dob,
-    normalizedEmail: email,
+    normalizedEmail: normalizePatientEmail(patient.normalized_email ?? patient.email),
     displayName: cleanLabel(patient.display_name ?? patient.name),
-    phone,
-    identitySource: phone ? "registry_exact_dob_phone" : "registry_exact_dob_email",
+    phone: normalizePatientPhone(patient.normalized_phone ?? patient.phone),
+    identitySource: "registry_exact_name_dob",
   };
 }
 
@@ -306,6 +342,8 @@ module.exports = {
   normalizePatientDob,
   normalizePatientEmail,
   normalizePatientPhone,
+  normalizePatientName,
+  normalizePatientNameKey,
   normalizeSelfAttendeePresent,
   parsePatientMetadata,
   resolvePatientIdentity,

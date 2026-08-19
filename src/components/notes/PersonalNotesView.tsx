@@ -10,6 +10,7 @@ import ActionPicker from "./ActionPicker";
 import ActionManagerDialog from "./ActionManagerDialog";
 import AddNotesToFolderDialog from "./AddNotesToFolderDialog";
 import ClinicalNoteExportDialog from "./ClinicalNoteExportDialog";
+import NoteGenerationCandidateReview from "./NoteGenerationCandidateReview";
 import { useActionProcessing } from "../../hooks/useActionProcessing";
 import type { NoteMoveTarget } from "../../hooks/useNoteDragAndDrop";
 import { normalizeMeetingContext, type MeetingContext, type NoteItem } from "../../types/electron";
@@ -564,6 +565,11 @@ export default function PersonalNotesView({
     state: actionProcessingState,
     actionName,
     runAction,
+    candidate,
+    candidateBusy,
+    candidateError,
+    applyCandidate,
+    discardCandidate,
   } = useActionProcessing(activeNoteId ?? null);
 
   // Boolean flag so actions enable during recording without re-rendering on every transcript update.
@@ -676,7 +682,10 @@ export default function PersonalNotesView({
             }
           } finally {
             const currentDiarizationStatus = useMeetingRecordingStore.getState().diarizationStatus;
-            if (currentDiarizationStatus !== "queued" && currentDiarizationStatus !== "processing") {
+            if (
+              currentDiarizationStatus !== "queued" &&
+              currentDiarizationStatus !== "processing"
+            ) {
               setIsFinalizingTranscript(false);
             }
           }
@@ -875,6 +884,8 @@ export default function PersonalNotesView({
                       isCloudMode,
                       modelId: effectiveModelId,
                       isMeetingNote,
+                      noteType: editorNote.note_type,
+                      calendarEventId: editorNote.calendar_event_id,
                       allowTitleGeneration: isRegenerableNoteTitle(
                         editorNote.title,
                         [
@@ -896,6 +907,16 @@ export default function PersonalNotesView({
                 />
               }
             />
+            {activeNote && candidate && (
+              <NoteGenerationCandidateReview
+                candidate={candidate}
+                busy={candidateBusy}
+                error={candidateError}
+                hasExistingEnhancedContent={Boolean(activeNote.enhanced_content?.trim())}
+                onApply={applyCandidate}
+                onDiscard={discardCandidate}
+              />
+            )}
             {activeNoteId &&
               activeNote?.note_type === "meeting" &&
               activeNote?.calendar_event_id && (
@@ -1068,7 +1089,6 @@ export default function PersonalNotesView({
           onNotesAdded={handleNotesAdded}
         />
       )}
-
     </div>
   );
 }

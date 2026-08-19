@@ -5,6 +5,15 @@ import { getDictionaryHintWords } from "../utils/snippets";
 import type { InferenceScope } from "../config/inferenceScopes";
 import type { ScreenContextImage } from "../types/electron";
 
+export interface ReasoningResponseFormat {
+  type: "json_object" | "json_schema";
+  json_schema?: {
+    name: string;
+    strict?: boolean;
+    schema: unknown;
+  };
+}
+
 export interface ReasoningConfig {
   maxTokens?: number;
   temperature?: number;
@@ -21,6 +30,7 @@ export interface ReasoningConfig {
   textOnlySystemPrompt?: string;
   language?: string;
   requireCompleteOutput?: boolean;
+  responseFormat?: ReasoningResponseFormat;
   requiresAgent?: boolean;
   inferenceScope?: InferenceScope;
 }

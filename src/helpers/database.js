@@ -5,13 +5,20 @@ const { randomUUID, createHash } = require("crypto");
 const debugLogger = require("./debugLogger");
 const { buildNoteSearchQuery } = require("./noteSearch");
 const { normalizeStoredSpeakerCount } = require("./speakerCount");
-const { localDayRange, normalizeRange, MAX_CALENDAR_ROWS } = require("./calendarContract");
+const {
+  canonicalCalendarIdentityKey,
+  localDayRange,
+  normalizeRange,
+  MAX_CALENDAR_ROWS,
+} = require("./calendarContract");
 const {
   formatEncounterAutoTitle,
   normalizeAppointmentId,
   normalizeOpaqueId,
   normalizePatientDob,
   normalizePatientEmail,
+  normalizePatientName,
+  normalizePatientNameKey,
   normalizePatientPhone,
   parsePatientMetadata,
   resolvePatientIdentity,
@@ -38,6 +45,132 @@ const PATIENT_RESOLUTIONS = [
   "unassigned_legacy",
 ];
 const PATIENT_RESOLUTION_SQL = PATIENT_RESOLUTIONS.map((value) => `'${value}'`).join(", ");
+const ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES = 15;
+// `PRAGMA user_version` is shared by every local schema migration. Calendar
+// projection storage was introduced at v2; note templates advanced the
+// database to v3. Keep the calendar migration target separate from the
+// supported database version so a v3 database is not mistaken for an
+// unsupported calendar schema.
+const CALENDAR_MIGRATION_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 3;
+const CALENDAR_SCHEMA_VERSION = DATABASE_SCHEMA_VERSION;
+const CALENDAR_PROJECTION_ERROR_CODES = Object.freeze({
+  UNSUPPORTED_SCHEMA: "CALENDAR_SCHEMA_VERSION_UNSUPPORTED",
+  MIGRATION_FAILED: "CALENDAR_PROJECTION_MIGRATION_FAILED",
+  PROJECTION_FAILED: "CALENDAR_PROJECTION_FAILED",
+});
+const PATIENT_LINK_STATUSES = new Set([
+  "linked",
+  "created",
+  "patient_details_required",
+  "identity_conflict",
+  "unknown_patient_id",
+]);
+const NOTE_TEMPLATES_SCHEMA_VERSION = DATABASE_SCHEMA_VERSION;
+const NOTE_TEMPLATE_KINDS = new Set(["generic", "encounter"]);
+const NOTE_TEMPLATE_PUBLIC_ERROR_MESSAGES = Object.freeze({
+  INVALID_TEMPLATE: "The note template is invalid.",
+  TEMPLATE_NOT_FOUND: "The note template was not found.",
+  TEMPLATE_REVISION_NOT_FOUND: "The note template revision was not found.",
+  BUILTIN_TEMPLATE: "Built-in note templates cannot be deleted.",
+  DEFAULT_TEMPLATE_REQUIRED: "A built-in default note template is required before this template can be deleted.",
+  ENCOUNTER_REQUIRED: "This operation is only available for encounter notes.",
+  ENHANCED_CONTENT_EXISTS: "Enhanced content already exists; confirmation is required.",
+  CANDIDATE_NOT_FOUND: "The note generation candidate was not found.",
+  CANDIDATE_NOT_PENDING: "The note generation candidate is no longer pending.",
+  CANDIDATE_STALE: "The note changed while this candidate was being reviewed.",
+});
+const GENERIC_NOTE_TEMPLATE_TEXT =
+  "Transform the provided content into clean, well-structured notes in markdown. Preserve the user's intent and all substantive information. Remove filler, small talk, false starts, and redundant content. For personal notes, improve grammar and structure for readability. For meeting transcripts, extract key discussion points, decisions, action items, and follow-ups.";
+const LEGACY_CLINICAL_ENCOUNTER_TEMPLATE_TEXT =
+  "Format the encounter transcript into a concise clinical note in markdown. Use only information supported by the encounter source. Do not invent diagnoses, medications, measurements, or plans. If information is absent, write Not documented. Preserve names and identifying details exactly as supplied.";
+// This is the user-editable body shown for the built-in Clinical Encounter
+// template. It is intentionally persisted as ordinary template text; the
+// generation engine remains responsible for evidence-only filling and for
+// leaving the source note untouched.
+const CLINICAL_ENCOUNTER_TEMPLATE_TEXT = String.raw`History of Present Illness:
+
+Mechanism and date of Injury:
+(MVA / slip & fall / workplace / other)
+
+Position at time of impact:
+
+Immediate symptoms:
+
+Delayed onset symptoms:
+
+Current complaints: Area. Pain Level (0–10). Quality. Radiation. Frequency. Aggravating factors:
+
+Relieving factors: Functional Limitations: Sitting. Standing. Walking. Lifting. Sleeping. Driving. Work duties. Exercise. Work status: (full duty / modified / unable). Prior injuries (similar/different):
+
+Previous and Current Illnesses:
+
+Surgeries:
+
+Supplements:
+
+Review of Systems:
+Musculoskeletal: Stiffness. Spasms. Reduced ROM.
+Neurological: Numbness. Tingling. Weakness.
+Psychological: Anger, irritability, easily triggered. Anxious (0–10). Overthinking. Depression. Behavioral changes.
+Sleep: Start. Maintenance. Length. Wakes during the night:
+Energy levels: (0–10) early morning:
+Dryness:
+Appetite and gastric symptoms: Pain. Bloating. Nutrition. Coffee. Thirst. Bowel movements. Urination. Temperature feeling. Sweating. Sexual cycle.
+Exercise:
+Stress mitigation techniques:
+Positive social connections:
+Avoidance of risky substances:
+
+Physical Examination:
+Conscious and alert. Cooperative. Memory and language. Cranial nerves. Motor examination. Reflexes. Hypertonicity. Hypotonicity. Movement disorders. Sensory examination. Balance. Coordination. Romberg. Heel-to-toe walk. Finger-to-nose. Gait. Bowel/bladder changes.
+Musculoskeletal: Posture. Gait. Guarding. Visible asymmetry. Range of Motion (ROM). Palpation findings. Tenderness. Trigger points. Edema/inflammation. Orthopedic tests: Spurling’s. Straight Leg Raise. Kemp’s. FABER.
+Pulse:
+Tongue:
+Auscultation:
+Vitals:
+Weight:
+BioWell:
+Imaging (X-ray / MRI / CT):
+
+Conclusion:
+Age and sex, if documented, with main complaints:
+Evidence of: Soft tissue injury. Joint dysfunction. Nerve involvement. Neurological involvement.
+Outcome measures: Oswestry Disability Index (ODI). Neck Disability Index (NDI). QuickDASH.
+Diagnosis:
+Patterns:
+
+Interventions:
+1. Office Visit: Document only if supported by the encounter source. Include CPT, duration, medical decision-making, risks, benefits, alternatives, and consent only when explicitly documented.
+2. Acupuncture: Document purpose, mechanisms, benefits, risks, consent, duration, CPT 97810, CPT 97811, and ear seeds only when explicitly documented.
+3. Formula choice:
+4. Coaching:
+EMF:
+Adjunctive modalities: Manual therapy. Guasha. Cupping. Infrared. Other.
+Injection: Document CPT 20550, injection sites, substance, volume, consent, and response only when explicitly documented.
+
+Plan:`;
+
+function noteTemplateFailure(code, extra = {}) {
+  return {
+    success: false,
+    code,
+    error: NOTE_TEMPLATE_PUBLIC_ERROR_MESSAGES[code] || "The note template operation failed.",
+    ...extra,
+  };
+}
+
+function normalizeNoteTemplateKind(value) {
+  const kind = typeof value === "string" ? value.trim().toLowerCase() : "generic";
+  return NOTE_TEMPLATE_KINDS.has(kind) ? kind : null;
+}
+
+function normalizeNoteTemplateText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function normalizePatientSmsConsentStatus(value) {
+  return value === "opted_out" ? "opted_out" : "opted_in";
+}
 
 function hashEncounterTranscript(transcript) {
   return createHash("sha256")
@@ -45,19 +178,28 @@ function hashEncounterTranscript(transcript) {
     .digest("hex");
 }
 
+function hashNoteGenerationSource(note) {
+  return hashEncounterTranscript(
+    String(note?.content ?? "") + "\n" + String(note?.transcript ?? "")
+  );
+}
+
 function decorateEncounterOutput(output) {
   if (!output) return null;
+  const publicOutput = { ...output };
+  delete publicOutput.generation_id;
+  delete publicOutput.generation_started_at;
   // `status` predates the optional focus output and remains the summary/SOAP
   // aggregate consumed by existing encounter flows. Focus has its own status;
   // letting a pending focus hold this legacy aggregate in pending/processing
   // would regress completed summary/SOAP output publication.
-  const statuses = [output.summary_status, output.soap_status];
+  const statuses = [publicOutput.summary_status, publicOutput.soap_status];
   let status = "pending";
   if (statuses.includes("processing")) status = "processing";
   else if (statuses.includes("failed")) status = "failed";
   else if (statuses.includes("stale")) status = "stale";
   else if (statuses.every((entry) => entry === "ready")) status = "ready";
-  return { ...output, status };
+  return { ...publicOutput, status };
 }
 
 // Every local field a note create (POST) carries; the acknowledgement compares
@@ -136,7 +278,10 @@ const CALENDAR_EVENT_PUBLIC_COLUMNS = [
   "attendees",
   "event_id",
   "event_uid",
+  "calendar_identity_key",
   "occurrence_id",
+  "recurring_event_id",
+  "original_start_time",
   "timezone",
   "recurrence",
   "capabilities",
@@ -224,6 +369,12 @@ const CALENDARS_TABLE_BY_PROVIDER = {
 class DatabaseManager {
   constructor() {
     this.db = null;
+    this.calendarProjectionHealth = {
+      ready: false,
+      schemaVersion: null,
+      errorCode: null,
+    };
+    this.noteTemplatesHealth = { ready: false, schemaVersion: null, errorCode: null };
     this.initDatabase();
   }
 
@@ -740,7 +891,10 @@ class DatabaseManager {
       for (const column of [
         "event_uid TEXT",
         "event_id TEXT",
+        "calendar_identity_key TEXT",
         "occurrence_id TEXT",
+        "recurring_event_id TEXT",
+        "original_start_time TEXT",
         "timezone TEXT",
         "recurrence TEXT",
         "capabilities TEXT",
@@ -773,6 +927,52 @@ class DatabaseManager {
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS calendar_patient_links (
+          calendar_event_id TEXT PRIMARY KEY
+            REFERENCES calendar_events(id) ON DELETE CASCADE,
+          patient_id TEXT,
+          appointment_id TEXT,
+          status TEXT NOT NULL DEFAULT 'patient_details_required'
+            CHECK (status IN ('linked', 'created', 'patient_details_required', 'identity_conflict', 'unknown_patient_id')),
+          source_name TEXT,
+          source_dob TEXT,
+          match_source TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_patient_links_patient ON calendar_patient_links(patient_id)"
+      );
+      this.db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_events_identity ON calendar_events(calendar_identity_key)"
+      );
+      const calendarIdentityRows = this.db
+        .prepare(
+          `SELECT id, provider, calendar_id, event_id, recurring_event_id, original_start_time
+           FROM calendar_events
+           WHERE calendar_identity_key IS NULL AND (event_id IS NOT NULL OR id IS NOT NULL)`
+        )
+        .all();
+      if (calendarIdentityRows.length > 0) {
+        const updateCalendarIdentity = this.db.prepare(
+          "UPDATE calendar_events SET calendar_identity_key = ? WHERE id = ? AND calendar_identity_key IS NULL"
+        );
+        for (const row of calendarIdentityRows) {
+          const eventId = row.event_id || row.id;
+          updateCalendarIdentity.run(
+            canonicalCalendarIdentityKey({
+              provider: row.provider || "google",
+              calendarId: row.calendar_id || "primary",
+              eventId,
+              recurringEventId: row.recurring_event_id,
+              originalStartTime: row.original_start_time,
+            }),
+            row.id
+          );
+        }
+      }
       try {
         // Preserve pre-R8 metadata rows as provenance-unknown. Backfilling
         // false could let a historical metadata-only event create a folder.
@@ -918,39 +1118,6 @@ class DatabaseManager {
       this.db.exec(
         "CREATE INDEX IF NOT EXISTS idx_encounters_patient_profile ON encounters(patient_profile_id)"
       );
-
-      // Existing development databases cannot safely rebuild encounters just to
-      // add a CHECK. Normalize the historical/free-form values first, then use
-      // triggers to give upgrades the same hard failure semantics as a fresh
-      // database. This is intentionally before any new resolver work runs.
-      this.db
-        .prepare(
-          `UPDATE encounters
-           SET patient_resolution = 'unassigned_legacy'
-           WHERE patient_resolution IS NULL
-              OR patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})`
-        )
-        .run();
-      this.db.exec(`
-        CREATE TRIGGER IF NOT EXISTS validate_encounters_patient_resolution_insert
-        BEFORE INSERT ON encounters
-        FOR EACH ROW
-        WHEN NEW.patient_resolution IS NULL
-          OR NEW.patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})
-        BEGIN
-          SELECT RAISE(ABORT, 'invalid patient_resolution');
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS validate_encounters_patient_resolution_update
-        BEFORE UPDATE OF patient_resolution ON encounters
-        FOR EACH ROW
-        WHEN NEW.patient_resolution IS NULL
-          OR NEW.patient_resolution NOT IN (${PATIENT_RESOLUTION_SQL})
-        BEGIN
-          SELECT RAISE(ABORT, 'invalid patient_resolution');
-        END;
-      `);
-
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS patient_profiles (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1010,6 +1177,8 @@ class DatabaseManager {
           focus_provider TEXT,
           focus_model TEXT,
           focus_error_code TEXT,
+          generation_id TEXT,
+          generation_started_at DATETIME,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           summary_updated_at DATETIME,
@@ -1037,6 +1206,8 @@ class DatabaseManager {
         ["focus_provider", "TEXT"],
         ["focus_model", "TEXT"],
         ["focus_error_code", "TEXT"],
+        ["generation_id", "TEXT"],
+        ["generation_started_at", "DATETIME"],
         ["summary_updated_at", "DATETIME"],
         ["soap_updated_at", "DATETIME"],
         ["focus_updated_at", "DATETIME"],
@@ -1504,10 +1675,452 @@ class DatabaseManager {
         )
       `);
 
+      // Calendar schema upgrades and projection repair run only after every
+      // table/column used by the calendar and encounter paths exists. The
+      // bridge is constructed after DatabaseManager, so it can fail closed on
+      // the safe health code without exposing SQLite details to the renderer.
+      const calendarProjection = this._initializeCalendarProjectionStorage();
+      // A failed calendar migration must leave the shared schema version at
+      // its pre-migration value. Note-template initialization also advances
+      // PRAGMA user_version, so defer it until the calendar migration has
+      // either completed or was not needed.
+      if (calendarProjection?.errorCode !== CALENDAR_PROJECTION_ERROR_CODES.MIGRATION_FAILED) {
+        this._initializeNoteTemplatesStorage();
+      }
+
       return true;
     } catch (error) {
       debugLogger.error("Database initialization failed", { error: error.message }, "database");
       throw error;
+    }
+  }
+
+  _setCalendarProjectionHealth({ ready, schemaVersion = null, errorCode = null }) {
+    this.calendarProjectionHealth = {
+      ready: Boolean(ready),
+      schemaVersion: schemaVersion == null ? null : Number(schemaVersion),
+      errorCode: errorCode || null,
+    };
+  }
+
+  getCalendarProjectionHealth() {
+    return { ...this.calendarProjectionHealth };
+  }
+
+  _safeCalendarProjectionError(code, cause = null) {
+    const messages = {
+      [CALENDAR_PROJECTION_ERROR_CODES.UNSUPPORTED_SCHEMA]:
+        "The local calendar database schema is newer than this version of OpenWhispr.",
+      [CALENDAR_PROJECTION_ERROR_CODES.MIGRATION_FAILED]:
+        "The local calendar database migration could not be completed.",
+      [CALENDAR_PROJECTION_ERROR_CODES.PROJECTION_FAILED]:
+        "Calendar encounters could not be projected into the local database.",
+    };
+    const error = new Error(messages[code] || "Calendar database operation failed.");
+    error.code = code;
+    if (cause) error.cause = cause;
+    return error;
+  }
+
+  _createPatientResolutionTriggers() {
+    this.db.exec(
+      "CREATE TRIGGER validate_encounters_patient_resolution_insert " +
+        "BEFORE INSERT ON encounters FOR EACH ROW " +
+        "WHEN NEW.patient_resolution IS NULL " +
+        "OR NEW.patient_resolution NOT IN (" +
+        PATIENT_RESOLUTION_SQL +
+        ") BEGIN " +
+        "SELECT RAISE(ABORT, 'invalid patient_resolution'); END; " +
+        "CREATE TRIGGER validate_encounters_patient_resolution_update " +
+        "BEFORE UPDATE OF patient_resolution ON encounters FOR EACH ROW " +
+        "WHEN NEW.patient_resolution IS NULL " +
+        "OR NEW.patient_resolution NOT IN (" +
+        PATIENT_RESOLUTION_SQL +
+        ") BEGIN " +
+        "SELECT RAISE(ABORT, 'invalid patient_resolution'); END;"
+    );
+  }
+
+  _patientResolutionTableCheckIsLegacy(tableSql) {
+    const match = String(tableSql || "").match(
+      /CHECK\s*\(\s*patient_resolution\s+IN\s*\(([^)]*)\)\s*\)/i
+    );
+    if (!match) return false;
+    const checkValues = match[1].toLowerCase();
+    return PATIENT_RESOLUTIONS.some((value) => !checkValues.includes("'" + value + "'"));
+  }
+
+  _quoteSqlIdentifier(identifier) {
+    return "\"" + String(identifier).replaceAll("\"", "\"\"") + "\"";
+  }
+
+  _rebuildLegacyEncountersTableForCalendarSchema() {
+    const table = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'encounters'")
+      .get();
+    if (!table?.sql) throw new Error("encounters table definition is unavailable");
+
+    const tableInfo = this.db.pragma("table_info('encounters')");
+    const columns = tableInfo.map(({ name }) => name);
+    if (!columns.includes("patient_resolution")) {
+      throw new Error("encounters.patient_resolution column is unavailable");
+    }
+
+    const indexes = this.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'encounters' AND sql IS NOT NULL ORDER BY name"
+      )
+      .all()
+      .map(({ sql }) => sql);
+    const triggers = this.db
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'encounters' AND sql IS NOT NULL ORDER BY name"
+      )
+      .all();
+    const createTableSql = table.sql
+      .replace(
+        /^(CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?)[\" ]?encounters[\" ]?/i,
+        "$1encounters_v2_new"
+      )
+      .replace(
+        /CHECK\s*\(\s*patient_resolution\s+IN\s*\([^)]*\)\s*\)/i,
+        "CHECK (patient_resolution IN (" + PATIENT_RESOLUTION_SQL + "))"
+      );
+    if (createTableSql === table.sql || !createTableSql.includes("encounters_v2_new")) {
+      throw new Error("could not construct the v2 encounters table definition");
+    }
+
+    const quotedColumns = columns.map((name) => this._quoteSqlIdentifier(name)).join(", ");
+    const selectExpressions = columns
+      .map((name) => {
+        if (name !== "patient_resolution") return this._quoteSqlIdentifier(name);
+        const quotedName = this._quoteSqlIdentifier(name);
+        return (
+          "CASE WHEN " +
+          quotedName +
+          " IS NULL OR " +
+          quotedName +
+          " NOT IN (" +
+          PATIENT_RESOLUTION_SQL +
+          ") THEN 'unassigned_legacy' ELSE " +
+          quotedName +
+          " END"
+        );
+      })
+      .join(", ");
+    const foreignKeysWereEnabled = Boolean(this.db.pragma("foreign_keys", { simple: true }));
+    let transactionStarted = false;
+    try {
+      if (foreignKeysWereEnabled) this.db.pragma("foreign_keys = OFF");
+      this.db.exec("BEGIN");
+      transactionStarted = true;
+
+      for (const trigger of triggers) {
+        this.db.exec("DROP TRIGGER " + this._quoteSqlIdentifier(trigger.name));
+      }
+      this.db.exec(createTableSql);
+      this.db.exec(
+        "INSERT INTO encounters_v2_new (" +
+          quotedColumns +
+          ") SELECT " +
+          selectExpressions +
+          " FROM encounters"
+      );
+      this.db.exec("DROP TABLE encounters");
+      this.db.exec("ALTER TABLE encounters_v2_new RENAME TO encounters");
+      for (const indexSql of indexes) this.db.exec(indexSql);
+      for (const trigger of triggers) {
+        if (!/^validate_encounters_patient_resolution_(insert|update)$/i.test(trigger.name)) {
+          this.db.exec(trigger.sql);
+        }
+      }
+      this._createPatientResolutionTriggers();
+      if (
+        this.db
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'")
+          .get()
+      ) {
+        this.db.exec(
+          "UPDATE sqlite_sequence SET seq = COALESCE((SELECT MAX(id) FROM encounters), 0) " +
+            "WHERE name = 'encounters'"
+        );
+      }
+      const foreignKeyErrors = this.db.pragma("foreign_key_check");
+      if (foreignKeyErrors.length > 0) {
+        throw new Error("foreign key check failed during encounters rebuild");
+      }
+      this.db.pragma("user_version = 2");
+      this.db.exec("COMMIT");
+      transactionStarted = false;
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // Preserve the migration failure; the original transaction error is
+          // the actionable diagnostic for the caller/log.
+        }
+      }
+      throw error;
+    } finally {
+      if (foreignKeysWereEnabled) this.db.pragma("foreign_keys = ON");
+    }
+  }
+
+  _migrateCalendarSchemaToV2() {
+    const table = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'encounters'")
+      .get();
+    if (this._patientResolutionTableCheckIsLegacy(table?.sql)) {
+      this._rebuildLegacyEncountersTableForCalendarSchema();
+      return;
+    }
+
+    const migrate = this.db.transaction(() => {
+      this.db.exec(
+        "DROP TRIGGER IF EXISTS validate_encounters_patient_resolution_insert; " +
+          "DROP TRIGGER IF EXISTS validate_encounters_patient_resolution_update; " +
+          "UPDATE encounters SET patient_resolution = 'unassigned_legacy' " +
+          "WHERE patient_resolution IS NULL OR patient_resolution NOT IN (" +
+          PATIENT_RESOLUTION_SQL +
+          ");"
+      );
+      this._createPatientResolutionTriggers();
+      this.db.pragma("user_version = 2");
+    });
+    migrate();
+  }
+
+  _initializeCalendarProjectionStorage() {
+    const currentVersion = Number(this.db.pragma("user_version", { simple: true })) || 0;
+    if (currentVersion > CALENDAR_SCHEMA_VERSION) {
+      const error = this._safeCalendarProjectionError(
+        CALENDAR_PROJECTION_ERROR_CODES.UNSUPPORTED_SCHEMA
+      );
+      this._setCalendarProjectionHealth({
+        ready: false,
+        schemaVersion: currentVersion,
+        errorCode: error.code,
+      });
+      debugLogger.error(
+        "Calendar schema version is newer than this build",
+        { schemaVersion: currentVersion, supportedVersion: CALENDAR_SCHEMA_VERSION },
+        "database"
+      );
+      return { success: false, errorCode: error.code };
+    }
+
+    let migrationCompleted = currentVersion >= CALENDAR_MIGRATION_VERSION;
+    try {
+      if (currentVersion < CALENDAR_MIGRATION_VERSION) {
+        this._migrateCalendarSchemaToV2();
+        migrationCompleted = true;
+      }
+      const schemaVersion = Number(this.db.pragma("user_version", { simple: true })) || currentVersion;
+      const repair = this.repairCalendarEncounterProjections();
+      this._setCalendarProjectionHealth({
+        ready: true,
+        schemaVersion,
+        errorCode: null,
+      });
+      return { success: true, ...repair };
+    } catch (error) {
+      const safeError = this._safeCalendarProjectionError(
+        migrationCompleted
+          ? CALENDAR_PROJECTION_ERROR_CODES.PROJECTION_FAILED
+          : CALENDAR_PROJECTION_ERROR_CODES.MIGRATION_FAILED,
+        error
+      );
+      const failedVersion = Number(this.db.pragma("user_version", { simple: true })) || currentVersion;
+      this._setCalendarProjectionHealth({
+        ready: false,
+        schemaVersion: failedVersion,
+        errorCode: safeError.code,
+      });
+      debugLogger.error(
+        "Calendar schema/projection initialization failed",
+        { errorCode: safeError.code, error: error?.message },
+        "database"
+      );
+      return { success: false, errorCode: safeError.code };
+    }
+  }
+
+  _ensureNoteTemplateTables() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS note_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL CHECK (kind IN ('generic', 'encounter')),
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        active_revision_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS note_template_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL REFERENCES note_templates(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        template_text TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(template_id, version)
+      );
+      CREATE TABLE IF NOT EXISTS note_generation_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+        template_id INTEGER NOT NULL REFERENCES note_templates(id),
+        template_revision_id INTEGER NOT NULL REFERENCES note_template_revisions(id),
+        base_content_hash TEXT NOT NULL,
+        base_enhanced_content_hash TEXT NOT NULL,
+        generated_content TEXT NOT NULL,
+        clinical_source TEXT,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'applied', 'discarded')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        applied_at DATETIME,
+        discarded_at DATETIME
+      );
+      CREATE INDEX IF NOT EXISTS idx_note_template_revisions_template
+        ON note_template_revisions(template_id, version);
+      CREATE INDEX IF NOT EXISTS idx_note_generation_candidates_note
+        ON note_generation_candidates(note_id, status, created_at);
+    `);
+  }
+
+  _seedNoteTemplate({ templateKey, name, description, kind, templateText, isBuiltin }) {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO note_templates
+          (template_key, name, description, kind, is_builtin)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(templateKey, name, description, kind, isBuiltin ? 1 : 0);
+    const template = this.db
+      .prepare("SELECT id FROM note_templates WHERE template_key = ?")
+      .get(templateKey);
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO note_template_revisions
+          (template_id, version, template_text)
+         VALUES (?, 1, ?)`
+      )
+      .run(template.id, templateText);
+    const revision = this.db
+      .prepare(
+        "SELECT id FROM note_template_revisions WHERE template_id = ? AND version = 1"
+      )
+      .get(template.id);
+    this.db
+      .prepare(
+        "UPDATE note_templates SET active_revision_id = COALESCE(active_revision_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+      .run(revision.id, template.id);
+  }
+
+  _upgradeLegacyClinicalEncounterTemplate() {
+    const template = this.db
+      .prepare("SELECT * FROM note_templates WHERE template_key = 'clinical-encounter'")
+      .get();
+    if (!template) return;
+    const activeRevision = template.active_revision_id
+      ? this.db
+          .prepare("SELECT * FROM note_template_revisions WHERE id = ? AND template_id = ?")
+          .get(template.active_revision_id, template.id)
+      : null;
+    if (
+      !template.is_builtin ||
+      activeRevision?.version !== 1 ||
+      activeRevision.template_text !== LEGACY_CLINICAL_ENCOUNTER_TEMPLATE_TEXT
+    ) {
+      return;
+    }
+
+    const latest = this.db
+      .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM note_template_revisions WHERE template_id = ?")
+      .get(template.id);
+    const revision = this.db
+      .prepare(
+        "INSERT INTO note_template_revisions (template_id, version, template_text) VALUES (?, ?, ?)"
+      )
+      .run(template.id, Number(latest.version) + 1, CLINICAL_ENCOUNTER_TEMPLATE_TEXT);
+    this.db
+      .prepare(
+        "UPDATE note_templates SET active_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      )
+      .run(revision.lastInsertRowid, template.id);
+  }
+
+  _migrateNoteTemplatesSchemaToV3() {
+    const migrate = this.db.transaction(() => {
+      const noteColumns = this.db.pragma("table_info('notes')").map((column) => column.name);
+      if (!noteColumns.includes("enhanced_template_revision_id")) {
+        this.db.exec("ALTER TABLE notes ADD COLUMN enhanced_template_revision_id INTEGER");
+      }
+      this._ensureNoteTemplateTables();
+      this._seedNoteTemplate({
+        templateKey: "generic-default",
+        name: "Generic Notes",
+        description: "The existing default note enhancement behavior.",
+        kind: "generic",
+        templateText: GENERIC_NOTE_TEMPLATE_TEXT,
+        isBuiltin: true,
+      });
+      this._seedNoteTemplate({
+        templateKey: "clinical-encounter",
+        name: "Clinical Encounter",
+        description: "A clinical encounter note template for Enhanced notes.",
+        kind: "encounter",
+        templateText: CLINICAL_ENCOUNTER_TEMPLATE_TEXT,
+        isBuiltin: true,
+      });
+      for (const kind of ["generic", "encounter"]) {
+        const defaultRow = this.db
+          .prepare("SELECT id FROM note_templates WHERE kind = ? AND is_default = 1 LIMIT 1")
+          .get(kind);
+        if (!defaultRow) {
+          this.db
+            .prepare(
+              "UPDATE note_templates SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE kind = ? AND template_key = ?"
+            )
+            .run(kind, kind === "encounter" ? "clinical-encounter" : "generic-default");
+        }
+      }
+      this.db.pragma("user_version = 3");
+    });
+    migrate();
+  }
+
+  _initializeNoteTemplatesStorage() {
+    const currentVersion = Number(this.db.pragma("user_version", { simple: true })) || 0;
+    if (currentVersion > NOTE_TEMPLATES_SCHEMA_VERSION) {
+      this.noteTemplatesHealth = {
+        ready: false,
+        schemaVersion: currentVersion,
+        errorCode: "NOTE_TEMPLATES_SCHEMA_VERSION_UNSUPPORTED",
+      };
+      return { success: false, errorCode: this.noteTemplatesHealth.errorCode };
+    }
+    try {
+      if (currentVersion < NOTE_TEMPLATES_SCHEMA_VERSION) this._migrateNoteTemplatesSchemaToV3();
+      this.db.transaction(() => this._upgradeLegacyClinicalEncounterTemplate())();
+      this.noteTemplatesHealth = {
+        ready: true,
+        schemaVersion: NOTE_TEMPLATES_SCHEMA_VERSION,
+        errorCode: null,
+      };
+      return { success: true };
+    } catch (error) {
+      this.noteTemplatesHealth = {
+        ready: false,
+        schemaVersion: Number(this.db.pragma("user_version", { simple: true })) || currentVersion,
+        errorCode: "NOTE_TEMPLATES_MIGRATION_FAILED",
+      };
+      debugLogger.error("Note templates migration failed", { error: error.message }, "database");
+      return { success: false, errorCode: this.noteTemplatesHealth.errorCode };
     }
   }
 
@@ -1538,6 +2151,9 @@ class DatabaseManager {
         normalized_dob TEXT NOT NULL,
         normalized_phone TEXT,
         normalized_email TEXT,
+        sms_consent_status TEXT NOT NULL DEFAULT 'opted_in',
+        merged_into_patient_id TEXT,
+        merged_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         active INTEGER NOT NULL DEFAULT 1
@@ -1551,11 +2167,19 @@ class DatabaseManager {
         provider TEXT NOT NULL,
         calendar_id TEXT NOT NULL,
         google_event_id TEXT,
+        calendar_identity_key TEXT,
         status TEXT NOT NULL,
         source TEXT NOT NULL,
         idempotency_key TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS hira_registry.patient_merge_history (
+        merge_id TEXT PRIMARY KEY,
+        source_patient_id TEXT NOT NULL,
+        survivor_patient_id TEXT NOT NULL,
+        field_choices TEXT,
+        created_at TEXT NOT NULL
       );
     `);
 
@@ -1574,11 +2198,14 @@ class DatabaseManager {
       ["name", "TEXT"], ["phone", "TEXT"], ["email", "TEXT"],
       ["normalized_name", "TEXT"], ["normalized_dob", "TEXT"],
       ["normalized_phone", "TEXT"], ["normalized_email", "TEXT"],
+      ["sms_consent_status", "TEXT NOT NULL DEFAULT 'opted_in'"],
+      ["merged_into_patient_id", "TEXT"], ["merged_at", "TEXT"],
       ["active", "INTEGER DEFAULT 1"],
     ]) ensureColumn("patients", name, definition);
     for (const [name, definition] of [
       ["start", "TEXT"], ["end", "TEXT"], ["type", "TEXT"],
       ["provider", "TEXT"], ["calendar_id", "TEXT"], ["google_event_id", "TEXT"],
+      ["calendar_identity_key", "TEXT"],
       ["status", "TEXT"], ["source", "TEXT"], ["idempotency_key", "TEXT"],
     ]) ensureColumn("appointments", name, definition);
     if (columns("patients").includes("display_name")) {
@@ -1588,12 +2215,21 @@ class DatabaseManager {
       this.db.exec("UPDATE hira_registry.patients SET dob = COALESCE(dob, date_of_birth) WHERE dob IS NULL");
     }
     this.db.exec(`
+      UPDATE hira_registry.patients
+      SET sms_consent_status = 'opted_in'
+      WHERE sms_consent_status IS NULL OR sms_consent_status = 'unknown';
       CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_dob_phone
         ON patients(normalized_dob, normalized_phone);
       CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_dob_email
         ON patients(normalized_dob, normalized_email);
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_name_dob
+        ON patients(normalized_name, normalized_dob);
       CREATE INDEX IF NOT EXISTS hira_registry.idx_appointments_patient
         ON appointments(patient_id);
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_appointments_identity
+        ON appointments(calendar_identity_key);
+      CREATE INDEX IF NOT EXISTS hira_registry.idx_patients_merged_into
+        ON patients(merged_into_patient_id);
     `);
     this.patientRegistryTables = {
       patients: "patients",
@@ -2458,6 +3094,396 @@ class DatabaseManager {
     }
   }
 
+  _noteTemplateRevisionRow(row, includeRaw = false) {
+    if (!row) return null;
+    const revision = {
+      id: row.id,
+      template_id: row.template_id,
+      version: row.version,
+      created_at: row.created_at,
+    };
+    if (includeRaw) revision.template_text = row.template_text;
+    return revision;
+  }
+
+  _noteTemplateRow(row, { includeRaw = false, includeRevisions = true } = {}) {
+    if (!row) return null;
+    const result = {
+      id: row.id,
+      template_key: row.template_key,
+      name: row.name,
+      description: row.description,
+      kind: row.kind,
+      is_builtin: Boolean(row.is_builtin),
+      is_default: Boolean(row.is_default),
+      active_revision_id: row.active_revision_id,
+      active_revision: row.active_revision_id
+        ? this._noteTemplateRevisionRow(
+            this.db
+              .prepare("SELECT * FROM note_template_revisions WHERE id = ?")
+              .get(row.active_revision_id),
+            includeRaw
+          )
+        : null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+    if (includeRevisions) {
+      result.revisions = this.db
+        .prepare(
+          "SELECT id, template_id, version, created_at FROM note_template_revisions WHERE template_id = ? ORDER BY version DESC"
+        )
+        .all(row.id);
+      if (includeRaw) {
+        result.revisions = result.revisions.map((revision) =>
+          this._noteTemplateRevisionRow(
+            this.db.prepare("SELECT * FROM note_template_revisions WHERE id = ?").get(revision.id),
+            true
+          )
+        );
+      }
+    }
+    if (includeRaw && result.active_revision) {
+      result.template_text = result.active_revision.template_text;
+    }
+    return result;
+  }
+
+  listNoteTemplates(kind = null, options = {}) {
+    const normalizedKind = kind == null ? null : normalizeNoteTemplateKind(kind);
+    if (kind != null && !normalizedKind) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM note_templates
+         WHERE (? IS NULL OR kind = ?)
+         ORDER BY kind ASC, is_default DESC, name COLLATE NOCASE ASC, id ASC`
+      )
+      .all(normalizedKind, normalizedKind);
+    return rows.map((row) => this._noteTemplateRow(row, options));
+  }
+
+  getNoteTemplate(idOrKey, options = {}) {
+    const row = this.db
+      .prepare("SELECT * FROM note_templates WHERE id = ? OR template_key = ? LIMIT 1")
+      .get(idOrKey, String(idOrKey ?? ""));
+    return this._noteTemplateRow(row, options);
+  }
+
+  getDefaultNoteTemplate(kind = "generic", options = {}) {
+    const normalizedKind = normalizeNoteTemplateKind(kind);
+    if (!normalizedKind) return null;
+    const row = this.db
+      .prepare("SELECT * FROM note_templates WHERE kind = ? AND is_default = 1 LIMIT 1")
+      .get(normalizedKind);
+    return this._noteTemplateRow(row, options);
+  }
+
+  createNoteTemplate(input = {}) {
+    const name = typeof input.name === "string" ? input.name.trim() : "";
+    const description = typeof input.description === "string" ? input.description.trim() : "";
+    const templateText = normalizeNoteTemplateText(input.templateText ?? input.template_text);
+    const kind = normalizeNoteTemplateKind(input.kind);
+    const templateKey =
+      typeof input.templateKey === "string" && input.templateKey.trim()
+        ? input.templateKey.trim().toLowerCase()
+        : randomUUID();
+    if (!name || !templateText || !kind || !/^[a-z0-9][a-z0-9._-]{1,119}$/.test(templateKey)) {
+      return noteTemplateFailure("INVALID_TEMPLATE", { template: null });
+    }
+    try {
+      const result = this.db.transaction(() => {
+        const inserted = this.db
+          .prepare(
+            `INSERT INTO note_templates (template_key, name, description, kind, is_builtin)
+             VALUES (?, ?, ?, ?, 0)`
+          )
+          .run(templateKey, name, description, kind);
+        const revision = this.db
+          .prepare(
+            "INSERT INTO note_template_revisions (template_id, version, template_text) VALUES (?, 1, ?)"
+          )
+          .run(inserted.lastInsertRowid, templateText);
+        this.db
+          .prepare("UPDATE note_templates SET active_revision_id = ? WHERE id = ?")
+          .run(revision.lastInsertRowid, inserted.lastInsertRowid);
+        return this.db
+          .prepare("SELECT * FROM note_templates WHERE id = ?")
+          .get(inserted.lastInsertRowid);
+      })();
+      return { success: true, template: this._noteTemplateRow(result) };
+    } catch (error) {
+      if (String(error.message).includes("UNIQUE")) {
+        return noteTemplateFailure("INVALID_TEMPLATE", { template: null });
+      }
+      throw error;
+    }
+  }
+
+  updateNoteTemplate(id, updates = {}) {
+    const current = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    if (!current) return noteTemplateFailure("TEMPLATE_NOT_FOUND", { template: null });
+    const name = updates.name === undefined ? current.name : String(updates.name).trim();
+    const description =
+      updates.description === undefined ? current.description : String(updates.description).trim();
+    const hasText = updates.templateText !== undefined || updates.template_text !== undefined;
+    const templateText = hasText
+      ? normalizeNoteTemplateText(updates.templateText ?? updates.template_text)
+      : null;
+    if (!name || (hasText && !templateText)) {
+      return noteTemplateFailure("INVALID_TEMPLATE", { template: null });
+    }
+    const result = this.db.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE note_templates SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .run(name, description, id);
+      if (hasText) {
+        const latest = this.db
+          .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM note_template_revisions WHERE template_id = ?")
+          .get(id);
+        const revision = this.db
+          .prepare(
+            "INSERT INTO note_template_revisions (template_id, version, template_text) VALUES (?, ?, ?)"
+          )
+          .run(id, Number(latest.version) + 1, templateText);
+        this.db
+          .prepare(
+            "UPDATE note_templates SET active_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+          )
+          .run(revision.lastInsertRowid, id);
+      }
+      return this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    })();
+    return { success: true, template: this._noteTemplateRow(result) };
+  }
+
+  deleteNoteTemplate(id) {
+    const current = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    if (!current) return noteTemplateFailure("TEMPLATE_NOT_FOUND", { id });
+    if (current.is_builtin) return noteTemplateFailure("BUILTIN_TEMPLATE", { id });
+    const result = this.db.transaction(() => {
+      const defaultTemplate = this.db
+        .prepare("SELECT id FROM note_templates WHERE kind = ? AND is_default = 1 LIMIT 1")
+        .get(current.kind);
+      if (current.is_default || !defaultTemplate) {
+        const fallbackKey = current.kind === "encounter" ? "clinical-encounter" : "generic-default";
+        const fallback = this.db
+          .prepare(
+            "SELECT id FROM note_templates WHERE template_key = ? AND kind = ? AND is_builtin = 1 LIMIT 1"
+          )
+          .get(fallbackKey, current.kind);
+        if (!fallback || fallback.id === current.id) {
+          return noteTemplateFailure("DEFAULT_TEMPLATE_REQUIRED", { id });
+        }
+        this.db
+          .prepare("UPDATE note_templates SET is_default = 0, updated_at = CURRENT_TIMESTAMP WHERE kind = ?")
+          .run(current.kind);
+        this.db
+          .prepare("UPDATE note_templates SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(fallback.id);
+      }
+      const deleted = this.db.prepare("DELETE FROM note_templates WHERE id = ?").run(id);
+      return { success: deleted.changes > 0, id };
+    })();
+    return result;
+  }
+
+  activateNoteTemplate(id, revisionId = null) {
+    const template = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    if (!template) return noteTemplateFailure("TEMPLATE_NOT_FOUND", { template: null });
+    const revision = revisionId == null
+      ? this.db
+          .prepare("SELECT * FROM note_template_revisions WHERE template_id = ? ORDER BY version DESC LIMIT 1")
+          .get(id)
+      : this.db
+          .prepare("SELECT * FROM note_template_revisions WHERE id = ? AND template_id = ?")
+          .get(revisionId, id);
+    if (!revision) return noteTemplateFailure("TEMPLATE_REVISION_NOT_FOUND", { template: null });
+    this.db
+      .prepare("UPDATE note_templates SET active_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .run(revision.id, id);
+    return { success: true, template: this._noteTemplateRow(this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id)) };
+  }
+
+  setDefaultNoteTemplate(id, revisionId = null) {
+    const template = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    if (!template) return noteTemplateFailure("TEMPLATE_NOT_FOUND", { template: null });
+    const result = this.db.transaction(() => {
+      if (revisionId != null) {
+        const revision = this.db
+          .prepare("SELECT id FROM note_template_revisions WHERE id = ? AND template_id = ?")
+          .get(revisionId, id);
+        if (!revision) return null;
+        this.db.prepare("UPDATE note_templates SET active_revision_id = ? WHERE id = ?").run(revision.id, id);
+      }
+      this.db.prepare("UPDATE note_templates SET is_default = 0 WHERE kind = ?").run(template.kind);
+      this.db
+        .prepare("UPDATE note_templates SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(id);
+      return this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(id);
+    })();
+    if (!result) return noteTemplateFailure("TEMPLATE_REVISION_NOT_FOUND", { template: null });
+    return { success: true, template: this._noteTemplateRow(result) };
+  }
+
+  _safeNoteGenerationCandidate(row, { includeClinicalSource = false } = {}) {
+    if (!row) return null;
+    const candidate = {
+      candidate_id: row.candidate_id,
+      note_id: row.note_id,
+      template_id: row.template_id,
+      template_name: row.template_name ?? null,
+      template_revision_id: row.template_revision_id,
+      template_revision_version: row.template_revision_version ?? null,
+      base_content_hash: row.base_content_hash,
+      base_enhanced_content_hash: row.base_enhanced_content_hash,
+      generated_content: row.generated_content,
+      status: row.status,
+      has_clinical_source: Boolean(row.clinical_source),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      applied_at: row.applied_at,
+      discarded_at: row.discarded_at,
+    };
+    if (includeClinicalSource) candidate.clinical_source = row.clinical_source;
+    return candidate;
+  }
+
+  _candidateRow(candidateId) {
+    return this.db
+      .prepare(
+        `SELECT c.*, t.name AS template_name, r.version AS template_revision_version
+         FROM note_generation_candidates c
+         LEFT JOIN note_templates t ON t.id = c.template_id
+         JOIN note_template_revisions r ON r.id = c.template_revision_id
+         WHERE c.candidate_id = ?`
+      )
+      .get(candidateId);
+  }
+
+  createNoteGenerationCandidate(noteIdOrInput, generatedContentArg, optionsArg = {}) {
+    const input = noteIdOrInput && typeof noteIdOrInput === "object"
+      ? noteIdOrInput
+      : { ...optionsArg, noteId: noteIdOrInput, generatedContent: generatedContentArg };
+    const noteId = input.noteId ?? input.note_id;
+    const generatedContent = normalizeNoteTemplateText(
+      input.generatedContent ?? input.generated_content ?? input.content ?? input.enhanced_content
+    );
+    const note = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(noteId);
+    const encounter = note
+      ? this.db.prepare("SELECT id FROM encounters WHERE note_id = ?").get(note.id)
+      : null;
+    // Encounter template generation is reserved for notes that are actually
+    // owned by an encounter row. A meeting-shaped note by itself is still a
+    // regular note and must not enter the clinical generation path.
+    if (!note || note.note_type !== "meeting" || !encounter) {
+      return noteTemplateFailure("ENCOUNTER_REQUIRED", { candidate: null });
+    }
+    if (!generatedContent) return noteTemplateFailure("INVALID_TEMPLATE", { candidate: null });
+    const templateRevisionId = input.templateRevisionId ?? input.template_revision_id;
+    const revision = templateRevisionId == null
+      ? this.db
+          .prepare(
+            `SELECT r.*, t.id AS template_id FROM note_template_revisions r
+             JOIN note_templates t ON t.active_revision_id = r.id
+             WHERE t.kind = 'encounter' AND t.is_default = 1 LIMIT 1`
+          )
+          .get()
+      : this.db
+          .prepare(
+            `SELECT r.*, t.id AS template_id FROM note_template_revisions r
+             JOIN note_templates t ON t.id = r.template_id WHERE r.id = ?`
+          )
+          .get(templateRevisionId);
+    if (!revision) return noteTemplateFailure("TEMPLATE_REVISION_NOT_FOUND", { candidate: null });
+    const candidateId = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO note_generation_candidates
+          (candidate_id, note_id, template_id, template_revision_id, base_content_hash,
+           base_enhanced_content_hash, generated_content, clinical_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        candidateId,
+        note.id,
+        revision.template_id,
+        revision.id,
+        hashNoteGenerationSource(note),
+        hashEncounterTranscript(note.enhanced_content),
+        generatedContent,
+        input.clinicalSource ?? input.clinical_source ?? note.transcript ?? null
+      );
+    return { success: true, candidate: this._safeNoteGenerationCandidate(this._candidateRow(candidateId)) };
+  }
+
+  getNoteGenerationCandidate(candidateId, options = {}) {
+    return this._safeNoteGenerationCandidate(this._candidateRow(candidateId), options);
+  }
+
+  applyNoteGenerationCandidate(candidateIdOrInput, optionsArg = {}) {
+    const input = candidateIdOrInput && typeof candidateIdOrInput === "object"
+      ? candidateIdOrInput
+      : { ...optionsArg, candidateId: candidateIdOrInput };
+    const candidateId = input.candidateId ?? input.candidate_id;
+    const confirmed = input.confirmed === true || input.confirmOverwrite === true;
+    const result = this.db.transaction(() => {
+      const candidate = this._candidateRow(candidateId);
+      if (!candidate) return noteTemplateFailure("CANDIDATE_NOT_FOUND", { candidate: null, note: null });
+      if (candidate.status !== "pending") return noteTemplateFailure("CANDIDATE_NOT_PENDING", { candidate: this._safeNoteGenerationCandidate(candidate), note: null });
+      const note = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(candidate.note_id);
+      if (!note) return noteTemplateFailure("CANDIDATE_NOT_FOUND", { candidate: null, note: null });
+      const currentContentHash = hashNoteGenerationSource(note);
+      const currentEnhancedHash = hashEncounterTranscript(note.enhanced_content);
+      // Candidates created before source hashing included transcript content
+      // only in the generated prompt. Preserve those candidates when there
+      // is no transcript to account for, but never let an old content-only
+      // hash bypass stale detection for a note that has transcript source.
+      const legacyContentHash = hashEncounterTranscript(note.content);
+      const sourceHashMatches =
+        currentContentHash === candidate.base_content_hash ||
+        (!String(note.transcript ?? "") && legacyContentHash === candidate.base_content_hash);
+      if (!sourceHashMatches || currentEnhancedHash !== candidate.base_enhanced_content_hash) {
+        return noteTemplateFailure("CANDIDATE_STALE", { candidate: this._safeNoteGenerationCandidate(candidate), note: note });
+      }
+      if (normalizeNoteTemplateText(note.enhanced_content) && !confirmed) {
+        return noteTemplateFailure("ENHANCED_CONTENT_EXISTS", { candidate: this._safeNoteGenerationCandidate(candidate), note: null });
+      }
+      this.db
+        .prepare(
+          `UPDATE notes SET enhanced_content = ?, enhanced_at_content_hash = ?,
+             enhanced_template_revision_id = ?, sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .run(candidate.generated_content, candidate.base_content_hash, candidate.template_revision_id, note.id);
+      this.db
+        .prepare(
+          "UPDATE note_generation_candidates SET status = 'applied', applied_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE candidate_id = ?"
+        )
+        .run(candidate.candidate_id);
+      return {
+        success: true,
+        applied: true,
+        note: this.db.prepare("SELECT * FROM notes WHERE id = ?").get(note.id),
+        candidate: this._safeNoteGenerationCandidate(this._candidateRow(candidate.candidate_id)),
+      };
+    })();
+    return result;
+  }
+
+  discardNoteGenerationCandidate(candidateId) {
+    const candidate = this._candidateRow(candidateId);
+    if (!candidate) return noteTemplateFailure("CANDIDATE_NOT_FOUND", { candidate: null });
+    if (candidate.status !== "pending") return noteTemplateFailure("CANDIDATE_NOT_PENDING", { candidate: this._safeNoteGenerationCandidate(candidate) });
+    this.db
+      .prepare(
+        "UPDATE note_generation_candidates SET status = 'discarded', discarded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE candidate_id = ?"
+      )
+      .run(candidateId);
+    return { success: true, candidate: this._safeNoteGenerationCandidate(this._candidateRow(candidateId)) };
+  }
+
   saveNote(
     title,
     content,
@@ -2559,7 +3585,16 @@ class DatabaseManager {
         params.push(spaceId);
       }
       const where = `WHERE ${conditions.join(" AND ")}`;
-      const stmt = this.db.prepare(`SELECT * FROM notes ${where} ORDER BY updated_at DESC LIMIT ?`);
+      const folderHistoryProjection = folderId != null
+        ? ", e.start_time AS encounter_start_time, e.title AS encounter_title"
+        : "";
+      const folderHistoryJoin = folderId != null
+        ? " LEFT JOIN encounters e ON e.note_id = notes.id"
+        : "";
+      const orderBy = folderId != null
+        ? "ORDER BY CASE WHEN e.start_time IS NULL THEN 1 ELSE 0 END, datetime(e.start_time) DESC, datetime(notes.updated_at) DESC"
+        : "ORDER BY notes.updated_at DESC";
+      const stmt = this.db.prepare(`SELECT notes.*${folderHistoryProjection} FROM notes${folderHistoryJoin} ${where.replace(/\bdeleted_at\b/g, "notes.deleted_at").replace(/\bfolder_id\b/g, "notes.folder_id").replace(/\bspace_id\b/g, "notes.space_id")} ${orderBy} LIMIT ?`);
       params.push(limit);
       return stmt.all(...params);
     } catch (error) {
@@ -3909,14 +4944,920 @@ class DatabaseManager {
     }
   }
 
+  _requirePatientRegistry() {
+    if (!this.db || !this.patientRegistryPath) {
+      const error = new Error("Patient registry is unavailable");
+      error.code = "PATIENT_REGISTRY_UNAVAILABLE";
+      throw error;
+    }
+  }
+
+  _projectPatientRegistryRow(row) {
+    if (!row) return null;
+    return {
+      patient_id: row.patient_id,
+      name: row.name,
+      dob: row.dob,
+      phone: row.phone || null,
+      email: row.email || null,
+      sms_consent_status: normalizePatientSmsConsentStatus(row.sms_consent_status),
+      updated_at: row.updated_at || null,
+      folder_id: row.folder_id ?? null,
+      folder_name: row.folder_name || null,
+      has_workspace: row.folder_id != null,
+      encounter_count: Number(row.encounter_count) || 0,
+    };
+  }
+
+  listPatientRegistry(query = "", limit = 250) {
+    try {
+      this._requirePatientRegistry();
+      const normalizedQuery = String(query || "").trim().slice(0, 200);
+      const normalizedLimit = Math.max(1, Math.min(Number(limit) || 250, 500));
+      const pattern = `%${normalizedQuery.replace(/[\\%_]/g, "\\$&")}%`;
+      const rows = this.db
+        .prepare(
+          `
+          SELECT p.patient_id, p.name, p.dob, p.phone, p.email,
+                 p.sms_consent_status, p.updated_at,
+                 pw.folder_id, f.name AS folder_name,
+                 (SELECT COUNT(*) FROM encounters e WHERE e.patient_id = p.patient_id) AS encounter_count
+          FROM hira_registry.patients p
+          LEFT JOIN patient_workspaces pw ON pw.patient_id = p.patient_id
+          LEFT JOIN folders f ON f.id = pw.folder_id AND f.deleted_at IS NULL
+          WHERE p.active = 1
+            AND (
+              ? = '' OR
+              p.name LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+              COALESCE(p.email, '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+              COALESCE(p.phone, '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+              p.patient_id LIKE ? ESCAPE '\\' COLLATE NOCASE
+            )
+          ORDER BY p.name COLLATE NOCASE ASC, p.updated_at DESC
+          LIMIT ?
+        `
+        )
+        .all(normalizedQuery, pattern, pattern, pattern, pattern, normalizedLimit);
+      return rows.map((row) => this._projectPatientRegistryRow(row));
+    } catch (error) {
+      debugLogger.error("Error listing patient registry", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  getPatientRegistryPatient(patientId) {
+    try {
+      this._requirePatientRegistry();
+      const normalizedId = normalizeOpaqueId(patientId);
+      if (!normalizedId) return null;
+      const row = this.db
+        .prepare(
+          `
+          SELECT p.patient_id, p.name, p.dob, p.phone, p.email,
+                 p.sms_consent_status, p.updated_at,
+                 pw.folder_id, f.name AS folder_name,
+                 (SELECT COUNT(*) FROM encounters e WHERE e.patient_id = p.patient_id) AS encounter_count
+          FROM hira_registry.patients p
+          LEFT JOIN patient_workspaces pw ON pw.patient_id = p.patient_id
+          LEFT JOIN folders f ON f.id = pw.folder_id AND f.deleted_at IS NULL
+          WHERE p.patient_id = ? AND p.active = 1
+          LIMIT 1
+        `
+        )
+        .get(normalizedId);
+      return this._projectPatientRegistryRow(row);
+    } catch (error) {
+      debugLogger.error("Error getting patient registry record", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  getPatientEncounterHistory(patientId, limit = 250) {
+    try {
+      this._requirePatientRegistry();
+      const normalizedId = normalizeOpaqueId(patientId);
+      if (!normalizedId) return [];
+      const normalizedLimit = Math.max(1, Math.min(Number(limit) || 250, 500));
+      return this.db
+        .prepare(
+          `SELECT e.id AS encounter_id, e.note_id, e.calendar_event_id,
+                  e.start_time AS encounter_date, e.end_time AS encounter_end,
+                  e.title AS appointment_title, e.lifecycle_state,
+                  n.title AS note_title, pw.folder_id
+           FROM encounters e
+           LEFT JOIN notes n ON n.id = e.note_id
+           LEFT JOIN patient_workspaces pw ON pw.patient_id = e.patient_id
+           WHERE e.patient_id = ?
+             AND (n.id IS NULL OR n.deleted_at IS NULL)
+           ORDER BY datetime(e.start_time) DESC, e.id DESC
+           LIMIT ?`
+        )
+        .all(normalizedId, normalizedLimit);
+    } catch (error) {
+      debugLogger.error("Error getting patient encounter history", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  getPatientMergeCandidates(patientId) {
+    try {
+      this._requirePatientRegistry();
+      const normalizedId = normalizeOpaqueId(patientId);
+      if (!normalizedId) return [];
+      const patient = this.db
+        .prepare(
+          `SELECT normalized_name, normalized_dob
+           FROM hira_registry.patients
+           WHERE patient_id = ? AND active = 1
+           LIMIT 1`
+        )
+        .get(normalizedId);
+      if (!patient) return [];
+      return this.db
+        .prepare(
+          `SELECT p.patient_id, p.name, p.dob, p.phone, p.email,
+                  p.sms_consent_status, p.updated_at,
+                  pw.folder_id, f.name AS folder_name,
+                  (SELECT COUNT(*) FROM encounters e WHERE e.patient_id = p.patient_id) AS encounter_count
+           FROM hira_registry.patients p
+           LEFT JOIN patient_workspaces pw ON pw.patient_id = p.patient_id
+           LEFT JOIN folders f ON f.id = pw.folder_id AND f.deleted_at IS NULL
+           WHERE p.active = 1
+             AND p.patient_id != ?
+             AND p.normalized_name = ?
+             AND p.normalized_dob = ?
+           ORDER BY encounter_count DESC, p.updated_at DESC`
+        )
+        .all(normalizedId, patient.normalized_name, patient.normalized_dob)
+        .map((row) => this._projectPatientRegistryRow(row));
+    } catch (error) {
+      debugLogger.error("Error finding patient merge candidates", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  mergePatientRegistryPatients({ survivorPatientId, duplicatePatientId, phone, email } = {}) {
+    try {
+      this._requirePatientRegistry();
+      const survivorId = normalizeOpaqueId(survivorPatientId);
+      const duplicateId = normalizeOpaqueId(duplicatePatientId);
+      if (!survivorId || !duplicateId || survivorId === duplicateId) {
+        const error = new Error("Two different active patient records are required");
+        error.code = "PATIENT_MERGE_INVALID";
+        throw error;
+      }
+      const transaction = this.db.transaction(() => {
+        const survivor = this.db
+          .prepare("SELECT * FROM hira_registry.patients WHERE patient_id = ? AND active = 1 LIMIT 1")
+          .get(survivorId);
+        const duplicate = this.db
+          .prepare("SELECT * FROM hira_registry.patients WHERE patient_id = ? AND active = 1 LIMIT 1")
+          .get(duplicateId);
+        if (!survivor || !duplicate) {
+          const error = new Error("Both patient records must be active");
+          error.code = "PATIENT_MERGE_NOT_FOUND";
+          throw error;
+        }
+        if (
+          survivor.normalized_name !== duplicate.normalized_name
+          || survivor.normalized_dob !== duplicate.normalized_dob
+        ) {
+          const error = new Error("Patients can only be merged when name and DOB match");
+          error.code = "PATIENT_MERGE_IDENTITY_MISMATCH";
+          throw error;
+        }
+
+        const chooseContact = (field, normalize, requested) => {
+          const survivorValue = survivor[field] || null;
+          const duplicateValue = duplicate[field] || null;
+          if (survivorValue && duplicateValue && survivorValue !== duplicateValue) {
+            if (requested === undefined || requested === null || normalize(requested) === null) {
+              const error = new Error(`Conflicting ${field} values require a choice`);
+              error.code = "PATIENT_MERGE_CONTACT_CONFLICT";
+              error.field = field;
+              error.survivorValue = survivorValue;
+              error.duplicateValue = duplicateValue;
+              throw error;
+            }
+            const normalizedRequested = normalize(requested);
+            if (![survivorValue, duplicateValue].includes(normalizedRequested)) {
+              const error = new Error(`Invalid ${field} choice`);
+              error.code = "PATIENT_MERGE_CONTACT_CONFLICT";
+              error.field = field;
+              throw error;
+            }
+            return normalizedRequested;
+          }
+          return survivorValue || duplicateValue || null;
+        };
+
+        const mergedPhone = chooseContact("phone", normalizePatientPhone, phone);
+        const mergedEmail = chooseContact("email", normalizePatientEmail, email);
+        const mergedSmsStatus = survivor.sms_consent_status === "opted_out"
+          || duplicate.sms_consent_status === "opted_out"
+          ? "opted_out"
+          : "opted_in";
+        const now = new Date().toISOString();
+
+        const survivorWorkspace = this.db
+          .prepare(
+            `SELECT pw.patient_id, pw.folder_id, f.space_id, f.name, f.deleted_at
+             FROM patient_workspaces pw JOIN folders f ON f.id = pw.folder_id
+             WHERE pw.patient_id = ?`
+          )
+          .get(survivorId);
+        const duplicateWorkspace = this.db
+          .prepare(
+            `SELECT pw.patient_id, pw.folder_id, pw.created_at, f.space_id, f.name, f.deleted_at
+             FROM patient_workspaces pw JOIN folders f ON f.id = pw.folder_id
+             WHERE pw.patient_id = ?`
+          )
+          .get(duplicateId);
+        let targetWorkspace = survivorWorkspace || duplicateWorkspace || null;
+        if (survivorWorkspace && duplicateWorkspace && survivorWorkspace.folder_id !== duplicateWorkspace.folder_id) {
+          this.db
+            .prepare(
+              `UPDATE notes
+               SET folder_id = ?, space_id = ?, updated_at = CURRENT_TIMESTAMP, sync_status = 'pending'
+               WHERE folder_id = ?`
+            )
+            .run(survivorWorkspace.folder_id, survivorWorkspace.space_id, duplicateWorkspace.folder_id);
+          this.db
+            .prepare("UPDATE agent_conversations SET folder_id = ? WHERE folder_id = ?")
+            .run(survivorWorkspace.folder_id, duplicateWorkspace.folder_id);
+          this.db
+            .prepare(
+              `UPDATE folders
+               SET deleted_at = CURRENT_TIMESTAMP, sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            )
+            .run(duplicateWorkspace.folder_id);
+          this.db.prepare("DELETE FROM patient_workspaces WHERE patient_id = ?").run(duplicateId);
+        } else if (!survivorWorkspace && duplicateWorkspace) {
+          this.db.prepare("DELETE FROM patient_workspaces WHERE patient_id = ?").run(duplicateId);
+          this.db
+            .prepare("INSERT INTO patient_workspaces (patient_id, folder_id, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .run(survivorId, duplicateWorkspace.folder_id, duplicateWorkspace.created_at || now, now);
+          targetWorkspace = duplicateWorkspace;
+        } else if (survivorWorkspace && duplicateWorkspace) {
+          this.db.prepare("DELETE FROM patient_workspaces WHERE patient_id = ?").run(duplicateId);
+        }
+
+        if (targetWorkspace?.folder_id) {
+          this.db
+            .prepare("UPDATE folders SET name = ?, updated_at = CURRENT_TIMESTAMP, sync_status = 'pending' WHERE id = ? AND deleted_at IS NULL")
+            .run(survivor.name, targetWorkspace.folder_id);
+        }
+        this.db.prepare("UPDATE encounters SET patient_id = ?, updated_at = CURRENT_TIMESTAMP WHERE patient_id = ?").run(survivorId, duplicateId);
+        this.db.prepare("UPDATE calendar_patient_links SET patient_id = ?, updated_at = CURRENT_TIMESTAMP WHERE patient_id = ?").run(survivorId, duplicateId);
+        this.db.prepare("UPDATE hira_registry.appointments SET patient_id = ?, updated_at = CURRENT_TIMESTAMP WHERE patient_id = ?").run(survivorId, duplicateId);
+        this.db
+          .prepare(
+            `UPDATE hira_registry.patients
+             SET phone = ?, email = ?, normalized_phone = ?, normalized_email = ?,
+                 sms_consent_status = ?, updated_at = ?
+             WHERE patient_id = ?`
+          )
+          .run(mergedPhone, mergedEmail, mergedPhone, mergedEmail, mergedSmsStatus, now, survivorId);
+        this.db
+          .prepare(
+            `UPDATE hira_registry.patients
+             SET active = 0, merged_into_patient_id = ?, merged_at = ?, updated_at = ?
+             WHERE patient_id = ?`
+          )
+          .run(survivorId, now, now, duplicateId);
+        this.db
+          .prepare(
+            `INSERT INTO hira_registry.patient_merge_history
+             (merge_id, source_patient_id, survivor_patient_id, field_choices, created_at)
+             VALUES (?, ?, ?, ?, ?)`
+          )
+          .run(
+            randomUUID(),
+            duplicateId,
+            survivorId,
+            JSON.stringify({ phone: mergedPhone, email: mergedEmail, sms_consent_status: mergedSmsStatus }),
+            now
+          );
+        return survivorId;
+      });
+      return this.getPatientRegistryPatient(transaction());
+    } catch (error) {
+      debugLogger.error("Error merging patient registry records", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  savePatientRegistryPatient(payload = {}) {
+    try {
+      this._requirePatientRegistry();
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        const error = new Error("Patient data must be an object");
+        error.code = "PATIENT_REGISTRY_INVALID";
+        throw error;
+      }
+      const name = String(payload.name || "").trim().replace(/\s+/g, " ");
+      const dob = normalizePatientDob(payload.dob);
+      const email = payload.email == null || !String(payload.email).trim()
+        ? null
+        : normalizePatientEmail(payload.email);
+      const phone = payload.phone == null || !String(payload.phone).trim()
+        ? null
+        : normalizePatientPhone(payload.phone);
+      const smsConsentStatus = normalizePatientSmsConsentStatus(payload.sms_consent_status);
+      if (!name || name.length > 120 || !dob || (payload.email && !email) || (payload.phone && !phone)) {
+        const error = new Error("Patient name, date of birth, email, and phone must be valid");
+        error.code = "PATIENT_REGISTRY_INVALID";
+        throw error;
+      }
+      const patientId = normalizeOpaqueId(payload.patient_id);
+      const normalizedName = normalizePatientNameKey(name);
+      const now = new Date().toISOString();
+      const transaction = this.db.transaction(() => {
+        const existing = patientId
+          ? this.db.prepare("SELECT patient_id, created_at FROM hira_registry.patients WHERE patient_id = ? AND active = 1").get(patientId)
+          : null;
+        if (patientId && !existing) {
+          const error = new Error("Patient record was not found");
+          error.code = "PATIENT_REGISTRY_NOT_FOUND";
+          throw error;
+        }
+        const duplicate = (column, value) => value
+          ? this.db.prepare(`SELECT patient_id FROM hira_registry.patients WHERE ${column} = ? AND active = 1 AND patient_id != ? LIMIT 1`).get(value, patientId || "")
+          : null;
+        const duplicateIdentity = dob
+          ? this.db
+              .prepare("SELECT patient_id FROM hira_registry.patients WHERE normalized_name = ? AND normalized_dob = ? AND active = 1 AND patient_id != ? LIMIT 1")
+              .get(normalizedName, dob, patientId || "")
+          : null;
+        if (duplicateIdentity || duplicate("normalized_email", email) || duplicate("normalized_phone", phone)) {
+          const error = new Error("That patient identity, email, or phone is already assigned to another patient");
+          error.code = "PATIENT_REGISTRY_CONFLICT";
+          throw error;
+        }
+        const id = patientId || randomUUID();
+        if (existing) {
+          this.db
+            .prepare(
+              `UPDATE hira_registry.patients
+               SET name = ?, dob = ?, phone = ?, email = ?, normalized_name = ?,
+                   normalized_dob = ?, normalized_phone = ?, normalized_email = ?,
+                   sms_consent_status = ?, updated_at = ?, active = 1
+               WHERE patient_id = ?`
+            )
+            .run(name, dob, phone, email, normalizedName, dob, phone, email, smsConsentStatus, now, id);
+        } else {
+          this.db
+            .prepare(
+              `INSERT INTO hira_registry.patients
+               (patient_id, name, dob, phone, email, normalized_name, normalized_dob,
+                normalized_phone, normalized_email, sms_consent_status, created_at, updated_at, active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+            )
+            .run(id, name, dob, phone, email, normalizedName, dob, phone, email, smsConsentStatus, now, now);
+        }
+        return id;
+      });
+      const savedId = transaction();
+      // A calendar event may have been ingested before the registry record was
+      // created. Re-run the deterministic name+DOB resolver now so an already
+      // projected encounter can become usable without waiting for a later
+      // provider sync.
+      try {
+        this.refreshPatientRegistryLinks(savedId);
+      } catch (refreshError) {
+        debugLogger.warn(
+          "Patient saved but calendar encounter refresh failed",
+          { error: refreshError.message, patientId: savedId },
+          "patient-registry"
+        );
+      }
+      return this.getPatientRegistryPatient(savedId);
+    } catch (error) {
+      debugLogger.error("Error saving patient registry record", { error: error.message }, "patient-registry");
+      throw error;
+    }
+  }
+
+  refreshPatientRegistryLinks(patientId) {
+    try {
+      this._requirePatientRegistry();
+      const normalizedPatientId = normalizeOpaqueId(patientId);
+      if (!normalizedPatientId) return { success: false, matched: 0, updated: 0 };
+      const registryPatient = this.db
+        .prepare(
+          `SELECT patient_id, name, dob, normalized_name, normalized_dob, phone, email
+           FROM hira_registry.patients
+           WHERE patient_id = ? AND active = 1
+           LIMIT 1`
+        )
+        .get(normalizedPatientId);
+      if (!registryPatient) return { success: false, matched: 0, updated: 0 };
+
+      const candidateRows = this.db
+        .prepare(
+          `SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS_QUALIFIED},
+                  calendar_patient_metadata.metadata_json AS patient_metadata,
+                  calendar_patient_links.patient_id AS linked_patient_id,
+                  calendar_patient_links.status AS linked_status
+           FROM calendar_events
+           LEFT JOIN calendar_patient_metadata
+             ON calendar_patient_metadata.calendar_event_id = calendar_events.id
+           LEFT JOIN calendar_patient_links
+             ON calendar_patient_links.calendar_event_id = calendar_events.id
+           WHERE calendar_events.provider = 'ai_receptionist'
+             AND (
+               calendar_patient_links.patient_id = ?
+               OR calendar_patient_links.patient_id IS NULL
+               OR calendar_patient_links.status IN ('patient_details_required', 'identity_conflict', 'unknown_patient_id')
+             )`
+        )
+        .all(normalizedPatientId);
+
+      const refreshed = [];
+      const transaction = this.db.transaction(() => {
+        for (const row of candidateRows) {
+          let metadata = parseLegacyPatientMetadata(row.patient_metadata);
+          if (!metadata && row.dob && row.summary) {
+            // The private DOB column is retained for unresolved structured
+            // events, so a later registry save can still repair the link even
+            // if a payload omitted the description on a subsequent sync.
+            metadata = {
+              name: normalizePatientName(row.summary),
+              dob: row.dob,
+              email: null,
+              phone: null,
+              source: "structured_description",
+            };
+          }
+          if (!metadata) continue;
+
+          const name = normalizePatientName(metadata.name || row.summary);
+          const dob = normalizePatientDob(metadata.dob || row.dob);
+          if (
+            !name ||
+            !dob ||
+            normalizePatientNameKey(name) !== registryPatient.normalized_name ||
+            dob !== registryPatient.normalized_dob
+          ) {
+            continue;
+          }
+          metadata = { ...metadata, name, dob, source: "structured_description" };
+
+          const resolution = this._resolveOrCreateCalendarPatient(row, metadata);
+          if (
+            resolution.patientId !== normalizedPatientId ||
+            !["linked", "created"].includes(resolution.status)
+          ) {
+            continue;
+          }
+          this._persistCalendarPatientLink(row, resolution);
+          this.db
+            .prepare(
+              `UPDATE calendar_events
+               SET patient_id = ?, dob = ?, normalized_phone = ?, normalized_email = ?, appointment_id = ?
+               WHERE id = ?`
+            )
+            .run(
+              resolution.patientId,
+              registryPatient.dob,
+              registryPatient.phone || metadata.phone || null,
+              registryPatient.email || metadata.email || null,
+              resolution.appointmentId || null,
+              row.id
+            );
+
+          const encounter = this.db
+            .prepare("SELECT * FROM encounters WHERE calendar_event_id = ? LIMIT 1")
+            .get(row.id);
+          if (encounter) {
+            const eventForResolution = {
+              ...row,
+              patient_id: resolution.patientId,
+              appointment_id: resolution.appointmentId || null,
+              dob: registryPatient.dob,
+              normalized_phone: registryPatient.phone || metadata.phone || null,
+              normalized_email: registryPatient.email || metadata.email || null,
+              patient_metadata: JSON.stringify(metadata),
+            };
+            const managedPatient = this._resolveManagedPatientForEncounter(
+              eventForResolution,
+              { ...encounter, patient_id: resolution.patientId }
+            );
+            this.db
+              .prepare(
+                `UPDATE encounters
+                 SET patient_id = ?, dob = ?, normalized_phone = ?, normalized_email = ?,
+                     appointment_id = COALESCE(?, appointment_id), patient_resolution = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`
+              )
+              .run(
+                resolution.patientId,
+                registryPatient.dob,
+                registryPatient.phone || metadata.phone || null,
+                registryPatient.email || metadata.email || null,
+                resolution.appointmentId || null,
+                this._calendarPatientLinkResolution(resolution.status),
+                encounter.id
+              );
+            if (managedPatient.folderAvailable && managedPatient.folderId && encounter.note_id) {
+              this.db
+                .prepare(
+                  `UPDATE notes
+                   SET folder_id = ?, space_id = ?, updated_at = CURRENT_TIMESTAMP,
+                       sync_status = 'pending'
+                   WHERE id = ? AND deleted_at IS NULL`
+                )
+                .run(managedPatient.folderId, this.getPrivateSpaceId(), encounter.note_id);
+            }
+          }
+          refreshed.push({ calendarEventId: row.id, patientId: resolution.patientId });
+        }
+      });
+      transaction();
+      return {
+        success: true,
+        matched: refreshed.length,
+        updated: refreshed.length,
+        events: refreshed,
+      };
+    } catch (error) {
+      debugLogger.error(
+        "Error refreshing calendar patient links",
+        { error: error.message, patientId },
+        "patient-registry"
+      );
+      throw error;
+    }
+  }
+
+  _calendarPatientLinkResolution(status) {
+    switch (status) {
+      case "created":
+        return "created";
+      case "linked":
+        return "matched";
+      case "identity_conflict":
+        return "unassigned_conflict";
+      case "unknown_patient_id":
+        return "unassigned_unknown_patient_id";
+      default:
+        return "unassigned_missing_demographics";
+    }
+  }
+
+  _getCalendarPatientLink(calendarEventId) {
+    if (!calendarEventId) return null;
+    return this.db
+      .prepare("SELECT * FROM calendar_patient_links WHERE calendar_event_id = ? LIMIT 1")
+      .get(calendarEventId) || null;
+  }
+
+  _calendarIdentityKeyForEvent(event = {}) {
+    const eventId = event.event_id || event.event_uid || event.id;
+    if (!eventId) return null;
+    return event.calendar_identity_key || canonicalCalendarIdentityKey({
+      provider: event.provider || "google",
+      calendarId: event.calendar_id || "primary",
+      eventId,
+      recurringEventId: event.recurring_event_id || null,
+      originalStartTime: event.original_start_time || null,
+    });
+  }
+
+  _resolveCalendarEventStorageId(event = {}) {
+    if (!event.id) return null;
+    const identityKey = this._calendarIdentityKeyForEvent(event);
+    if (identityKey) {
+      const existing = this.db
+        .prepare(
+          `SELECT id FROM calendar_events
+           WHERE calendar_identity_key = ?
+           ORDER BY CASE WHEN id IN (
+             SELECT calendar_event_id FROM notes WHERE calendar_event_id IS NOT NULL AND deleted_at IS NULL
+           ) THEN 0 ELSE 1 END, synced_at DESC, id ASC
+           LIMIT 1`
+        )
+        .get(identityKey);
+      if (existing?.id) return existing.id;
+    }
+
+    // Legacy rows predate calendar_identity_key. A non-recurring Google event
+    // keeps its provider event ID when moved, so use the one unambiguous legacy
+    // row as a bridge into the durable identity model.
+    if (!event.recurring_event_id && event.event_id) {
+      const legacy = this.db
+        .prepare(
+          `SELECT id FROM calendar_events
+           WHERE provider = ? AND calendar_id = ? AND event_id = ?
+             AND recurring_event_id IS NULL
+           ORDER BY CASE WHEN id IN (
+             SELECT calendar_event_id FROM notes WHERE calendar_event_id IS NOT NULL AND deleted_at IS NULL
+           ) THEN 0 ELSE 1 END, synced_at DESC, id ASC
+           LIMIT 1`
+        )
+        .get(event.provider || "google", event.calendar_id || "primary", event.event_id);
+      if (legacy?.id) return legacy.id;
+    }
+    return event.id;
+  }
+
+  _canonicalStoredCalendarEvent(event = {}) {
+    const id = this._resolveCalendarEventStorageId(event);
+    return {
+      ...event,
+      id,
+      calendar_identity_key: this._calendarIdentityKeyForEvent(event),
+    };
+  }
+
+  _ensureCalendarRegistryAppointment({ publicEvent, patientId, requestedAppointmentId = null }) {
+    const appointmentId = normalizeAppointmentId(requestedAppointmentId) || randomUUID();
+    const calendarIdentityKey = this._calendarIdentityKeyForEvent(publicEvent);
+    const idempotencyKey = [
+      "calendar",
+      calendarIdentityKey,
+    ].map((part) => String(part || "").replace(/[^a-zA-Z0-9._:-]/g, "_")).join(":");
+
+    const updateAppointment = (existing) => {
+      this.db
+        .prepare(
+          `UPDATE hira_registry.appointments
+           SET patient_id = ?, start = ?, end = ?, type = ?, provider = ?,
+               calendar_id = ?, google_event_id = ?, calendar_identity_key = ?,
+               status = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE appointment_id = ?`
+        )
+        .run(
+          patientId,
+          publicEvent.start_time,
+          publicEvent.end_time,
+          publicEvent.summary || "calendar",
+          publicEvent.provider || "google",
+          publicEvent.calendar_id || "primary",
+          publicEvent.event_id || null,
+          calendarIdentityKey,
+          publicEvent.status || "confirmed",
+          existing.appointment_id
+        );
+    };
+
+    // AIReceptionist supplies an authoritative appointment ID. Manual events
+    // are keyed by the full calendar occurrence idempotency key so recurring
+    // instances sharing one Google event ID receive separate appointments.
+    const existingByAppointmentId = requestedAppointmentId
+      ? this.db
+        .prepare("SELECT * FROM hira_registry.appointments WHERE appointment_id = ? LIMIT 1")
+        .get(requestedAppointmentId)
+      : null;
+    if (existingByAppointmentId) {
+      if (String(existingByAppointmentId.patient_id) !== String(patientId)) {
+        return { conflict: true, appointmentId: existingByAppointmentId.appointment_id };
+      }
+      updateAppointment(existingByAppointmentId);
+      return { conflict: false, appointmentId: existingByAppointmentId.appointment_id };
+    }
+
+    let existingByKey = this.db
+      .prepare(
+        `SELECT * FROM hira_registry.appointments
+         WHERE idempotency_key = ? OR calendar_identity_key = ?
+         ORDER BY CASE WHEN calendar_identity_key = ? THEN 0 ELSE 1 END, created_at ASC
+         LIMIT 1`
+      )
+      .get(idempotencyKey, calendarIdentityKey, calendarIdentityKey);
+    if (!existingByKey && !publicEvent.recurring_event_id && publicEvent.event_id) {
+      existingByKey = this.db
+        .prepare(
+          `SELECT * FROM hira_registry.appointments
+           WHERE provider = ? AND calendar_id = ? AND google_event_id = ?
+           ORDER BY created_at ASC
+           LIMIT 1`
+        )
+        .get(publicEvent.provider || "google", publicEvent.calendar_id || "primary", publicEvent.event_id);
+    }
+    if (existingByKey) {
+      if (String(existingByKey.patient_id) !== String(patientId)) {
+        return { conflict: true, appointmentId: existingByKey.appointment_id };
+      }
+      updateAppointment(existingByKey);
+      return { conflict: false, appointmentId: existingByKey.appointment_id };
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO hira_registry.appointments (
+           appointment_id, patient_id, start, end, type, provider, calendar_id,
+           google_event_id, calendar_identity_key, status, source, idempotency_key,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .run(
+        appointmentId,
+        patientId,
+        publicEvent.start_time,
+        publicEvent.end_time,
+        publicEvent.summary || "calendar",
+        publicEvent.provider || "google",
+        publicEvent.calendar_id || "primary",
+        publicEvent.event_id,
+        calendarIdentityKey,
+        publicEvent.status || "confirmed",
+        requestedAppointmentId ? "ai_receptionist" : "manual_calendar",
+        idempotencyKey
+      );
+    return { conflict: false, appointmentId };
+  }
+
+  _resolveOrCreateCalendarPatient(publicEvent, metadata) {
+    this._requirePatientRegistry();
+    const existingLink = this._getCalendarPatientLink(publicEvent.id);
+    const patientIdFromMetadata = normalizeOpaqueId(metadata?.patient_id);
+    const appointmentIdFromMetadata = normalizeAppointmentId(metadata?.appointment_id);
+
+    if (patientIdFromMetadata) {
+      const patient = this.db
+        .prepare("SELECT * FROM hira_registry.patients WHERE patient_id = ? AND active = 1 LIMIT 1")
+        .get(patientIdFromMetadata);
+      if (!patient) {
+        return {
+          status: "unknown_patient_id",
+          patientId: null,
+          appointmentId: appointmentIdFromMetadata,
+          matchSource: "patient_id",
+        };
+      }
+      const appointment = this._ensureCalendarRegistryAppointment({
+        publicEvent,
+        patientId: patient.patient_id,
+        requestedAppointmentId: appointmentIdFromMetadata,
+      });
+      if (appointment.conflict) {
+        return {
+          status: "identity_conflict",
+          patientId: null,
+          appointmentId: appointment.appointmentId,
+          matchSource: "patient_id",
+        };
+      }
+      return {
+        status: "linked",
+        patientId: patient.patient_id,
+        appointmentId: appointment.appointmentId,
+        matchSource: "patient_id",
+        sourceName: patient.name,
+        sourceDob: patient.dob,
+      };
+    }
+
+    const normalizedName = normalizePatientNameKey(metadata?.name);
+    const normalizedDob = normalizePatientDob(metadata?.dob);
+    if (!normalizedName || !normalizedDob) {
+      return {
+        status: existingLink?.patient_id ? existingLink.status : "patient_details_required",
+        patientId: existingLink?.patient_id || null,
+        appointmentId: existingLink?.appointment_id || null,
+        matchSource: existingLink?.match_source || null,
+        sourceName: existingLink?.source_name || null,
+        sourceDob: existingLink?.source_dob || null,
+      };
+    }
+
+    const candidates = this.db
+      .prepare(
+        `SELECT * FROM hira_registry.patients
+         WHERE active = 1 AND normalized_name = ? AND normalized_dob = ?`
+      )
+      .all(normalizedName, normalizedDob);
+
+    if (candidates.length > 1) {
+      return {
+        status: "identity_conflict",
+        patientId: null,
+        appointmentId: null,
+        matchSource: "exact_name_dob",
+        sourceName: normalizePatientName(metadata.name),
+        sourceDob: normalizedDob,
+      };
+    }
+
+    let patient = candidates[0] || null;
+    let status = "linked";
+    if (!patient) {
+      // Name + DOB identify the person. Contact details are required only
+      // when this identity is genuinely new, so follow-up events can stay
+      // lightweight and use the registry's existing contact values.
+      if (!metadata.email || !metadata.phone) {
+        return {
+          status: "patient_details_required",
+          patientId: null,
+          appointmentId: null,
+          matchSource: "exact_name_dob",
+          sourceName: normalizePatientName(metadata.name),
+          sourceDob: normalizedDob,
+        };
+      }
+      const patientId = randomUUID();
+      const email = metadata.email || null;
+      const phone = metadata.phone || null;
+      const name = normalizePatientName(metadata.name);
+      this.db
+        .prepare(
+          `INSERT INTO hira_registry.patients (
+             patient_id, name, dob, phone, email, normalized_name, normalized_dob,
+             normalized_phone, normalized_email, sms_consent_status, created_at, updated_at, active
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'opted_in', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)`
+        )
+        .run(patientId, name, normalizedDob, phone, email, normalizedName, normalizedDob, phone, email);
+      patient = this.db
+        .prepare("SELECT * FROM hira_registry.patients WHERE patient_id = ?")
+        .get(patientId);
+      status = "created";
+    } else {
+      const missingPhone = !patient.phone && metadata.phone ? metadata.phone : null;
+      const missingEmail = !patient.email && metadata.email ? metadata.email : null;
+      if (missingPhone || missingEmail) {
+        this.db
+          .prepare(
+            `UPDATE hira_registry.patients
+             SET phone = COALESCE(phone, ?), email = COALESCE(email, ?),
+                 normalized_phone = COALESCE(normalized_phone, ?),
+                 normalized_email = COALESCE(normalized_email, ?),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE patient_id = ?`
+          )
+          .run(missingPhone, missingEmail, missingPhone, missingEmail, patient.patient_id);
+        patient = this.db
+          .prepare("SELECT * FROM hira_registry.patients WHERE patient_id = ?")
+          .get(patient.patient_id);
+      }
+    }
+
+    const appointment = this._ensureCalendarRegistryAppointment({
+      publicEvent,
+      patientId: patient.patient_id,
+      requestedAppointmentId: appointmentIdFromMetadata,
+    });
+    if (appointment.conflict) {
+      return {
+        status: "identity_conflict",
+        patientId: null,
+        appointmentId: appointment.appointmentId,
+        matchSource: "exact_name_dob",
+        sourceName: normalizePatientName(metadata.name),
+        sourceDob: normalizedDob,
+      };
+    }
+    return {
+      status,
+      patientId: patient.patient_id,
+      appointmentId: appointment.appointmentId,
+      matchSource: "exact_name_dob",
+      sourceName: patient.name,
+      sourceDob: patient.dob,
+    };
+  }
+
+  _persistCalendarPatientLink(publicEvent, resolution) {
+    const safeStatus = PATIENT_LINK_STATUSES.has(resolution.status)
+      ? resolution.status
+      : "patient_details_required";
+    this.db
+      .prepare(
+        `INSERT INTO calendar_patient_links (
+           calendar_event_id, patient_id, appointment_id, status, source_name,
+           source_dob, match_source, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(calendar_event_id) DO UPDATE SET
+           patient_id = excluded.patient_id,
+           appointment_id = excluded.appointment_id,
+           status = excluded.status,
+           source_name = excluded.source_name,
+           source_dob = excluded.source_dob,
+           match_source = excluded.match_source,
+           updated_at = CURRENT_TIMESTAMP`
+      )
+      .run(
+        publicEvent.id,
+        resolution.patientId || null,
+        resolution.appointmentId || null,
+        safeStatus,
+        resolution.sourceName || null,
+        resolution.sourceDob || null,
+        resolution.matchSource || null
+      );
+  }
+
   _upsertPublicCalendarEvents(events) {
     const stmt = this.db.prepare(`
       INSERT INTO calendar_events (
         id, calendar_id, provider, summary, start_time, end_time, is_all_day,
         status, hangout_link, html_link, conference_data, organizer_email,
-        attendees_count, attendees, event_id, event_uid, occurrence_id,
-        timezone, recurrence, capabilities, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        attendees_count, attendees, event_id, event_uid, calendar_identity_key,
+        occurrence_id, recurring_event_id, original_start_time, timezone,
+        recurrence, capabilities, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
         calendar_id = excluded.calendar_id,
         provider = excluded.provider,
@@ -3933,13 +5874,18 @@ class DatabaseManager {
         attendees = excluded.attendees,
         event_id = excluded.event_id,
         event_uid = excluded.event_uid,
+        calendar_identity_key = excluded.calendar_identity_key,
         occurrence_id = excluded.occurrence_id,
+        recurring_event_id = excluded.recurring_event_id,
+        original_start_time = excluded.original_start_time,
         timezone = excluded.timezone,
         recurrence = excluded.recurrence,
         capabilities = excluded.capabilities,
         synced_at = CURRENT_TIMESTAMP
     `);
-    for (const event of events) {
+    const storedEvents = [];
+    for (const inputEvent of events || []) {
+      const event = this._canonicalStoredCalendarEvent(inputEvent);
       stmt.run(
         event.id,
         event.calendar_id,
@@ -3957,12 +5903,46 @@ class DatabaseManager {
         event.attendees || null,
         event.event_id || null,
         event.event_uid || null,
+        event.calendar_identity_key || null,
         event.occurrence_id || event.id || null,
+        event.recurring_event_id || null,
+        event.original_start_time || null,
         event.timezone || null,
         event.recurrence || null,
         event.capabilities || null
       );
+      const encounter = this.db
+        .prepare(
+          `SELECT e.note_id, n.title, n.encounter_auto_title_seed
+           FROM encounters e
+           LEFT JOIN notes n ON n.id = e.note_id
+           WHERE e.calendar_event_id = ?
+           LIMIT 1`
+        )
+        .get(event.id);
+      // Keep automatically generated note titles aligned with a reschedule or
+      // title edit, while preserving any title the user has edited manually.
+      if (
+        encounter?.note_id &&
+        encounter.encounter_auto_title_seed &&
+        encounter.title === encounter.encounter_auto_title_seed
+      ) {
+        const nextTitle = formatEncounterAutoTitle({
+          startTime: event.start_time,
+          timezone: event.timezone,
+          focus: event.summary || "Encounter",
+        });
+        if (nextTitle !== encounter.title) {
+          this.db
+            .prepare(
+              "UPDATE notes SET title = ?, encounter_auto_title_seed = ?, sync_status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            )
+            .run(nextTitle, nextTitle, encounter.note_id);
+        }
+      }
+      storedEvents.push(event);
     }
+    return storedEvents;
   }
 
   // Provider callers persist only PublicCalendarEvent fields. Deliberately
@@ -3987,7 +5967,7 @@ class DatabaseManager {
       if (!this.db) throw new Error("Database not initialized");
       const transaction = this.db.transaction((ingressEnvelopes) => {
         const publicEvents = ingressEnvelopes.map(({ publicEvent }) => publicEvent);
-        this._upsertPublicCalendarEvents(publicEvents);
+        const storedPublicEvents = this._upsertPublicCalendarEvents(publicEvents);
 
         const upsertMetadata = this.db.prepare(`
           INSERT INTO calendar_patient_metadata (
@@ -4008,15 +5988,74 @@ class DatabaseManager {
         `);
         const updatePrivateEventFields = this.db.prepare(`
           UPDATE calendar_events
-          SET patient_id = ?, dob = ?, normalized_phone = ?, normalized_email = ?, appointment_id = ?
-          WHERE id = ?
+            SET patient_id = ?, dob = ?, normalized_phone = ?, normalized_email = ?, appointment_id = ?
+            WHERE id = ?
         `);
         const deleteMetadata = this.db.prepare(
           "DELETE FROM calendar_patient_metadata WHERE calendar_event_id = ?"
         );
-
-        for (const { publicEvent, patientMetadata, selfAttendeePresent } of ingressEnvelopes) {
-          const metadata = normalizePatientMetadataForStorage(patientMetadata);
+        for (const [index, envelope] of ingressEnvelopes.entries()) {
+          const { patientMetadata, selfAttendeePresent } = envelope;
+          const publicEvent = storedPublicEvents[index];
+          const storedMetadata = normalizePatientMetadataForStorage(patientMetadata);
+          const metadata = storedMetadata && !storedMetadata.name && publicEvent.summary
+            ? { ...storedMetadata, name: normalizePatientName(publicEvent.summary) }
+            : storedMetadata;
+          const previousLink = this._getCalendarPatientLink(publicEvent.id);
+          const managedRegistry = Boolean(this.patientRegistryPath);
+          const resolution = managedRegistry
+            ? metadata
+              ? this._resolveOrCreateCalendarPatient(publicEvent, metadata)
+              : previousLink?.patient_id
+                ? (() => {
+                    const linkedPatient = this.db
+                      .prepare(
+                        "SELECT patient_id, name, dob FROM hira_registry.patients WHERE patient_id = ? AND active = 1 LIMIT 1"
+                      )
+                      .get(previousLink.patient_id);
+                    if (!linkedPatient) {
+                      return {
+                        status: "unknown_patient_id",
+                        patientId: null,
+                        appointmentId: previousLink.appointment_id || null,
+                        matchSource: "durable_calendar_link",
+                        sourceName: previousLink.source_name || null,
+                        sourceDob: previousLink.source_dob || null,
+                      };
+                    }
+                    const appointment = this._ensureCalendarRegistryAppointment({
+                      publicEvent,
+                      patientId: linkedPatient.patient_id,
+                      requestedAppointmentId: previousLink.appointment_id || null,
+                    });
+                    if (appointment.conflict) {
+                      return {
+                        status: "identity_conflict",
+                        patientId: null,
+                        appointmentId: appointment.appointmentId,
+                        matchSource: "durable_calendar_link",
+                        sourceName: linkedPatient.name,
+                        sourceDob: linkedPatient.dob,
+                      };
+                    }
+                    return {
+                      status: previousLink.status === "created" ? "created" : "linked",
+                      patientId: linkedPatient.patient_id,
+                      appointmentId: appointment.appointmentId,
+                      matchSource: previousLink.match_source || "durable_calendar_link",
+                      sourceName: linkedPatient.name,
+                      sourceDob: linkedPatient.dob,
+                    };
+                  })()
+                : {
+                    status: "patient_details_required",
+                    patientId: null,
+                    appointmentId: null,
+                    matchSource: null,
+                    sourceName: null,
+                    sourceDob: null,
+                  }
+            : null;
           if (metadata) {
             upsertMetadata.run(
               publicEvent.id,
@@ -4028,6 +6067,21 @@ class DatabaseManager {
               metadata.appointment_id || null,
               normalizeSelfAttendeePresentForStorage(selfAttendeePresent)
             );
+          }
+          if (resolution) {
+            this._persistCalendarPatientLink(publicEvent, resolution);
+            updatePrivateEventFields.run(
+              resolution.patientId || null,
+              resolution.sourceDob || metadata?.dob || null,
+              metadata?.phone || null,
+              metadata?.email || null,
+              resolution.appointmentId || null,
+              publicEvent.id
+            );
+          } else if (metadata) {
+            // Standalone/legacy database consumers do not have the shared
+            // registry attachment. Preserve their previous private ingress
+            // behavior while the managed app takes the deterministic path.
             updatePrivateEventFields.run(
               metadata.patient_id || null,
               metadata.dob || null,
@@ -4043,7 +6097,7 @@ class DatabaseManager {
         }
       });
       transaction(envelopes);
-      return { success: true };
+      return { success: true, events: envelopes.map((_, index) => this._canonicalStoredCalendarEvent(envelopes[index].publicEvent)) };
     } catch (error) {
       debugLogger.error("Error upserting calendar ingress", { error: error.message }, "gcal");
       throw error;
@@ -4061,8 +6115,8 @@ class DatabaseManager {
           INSERT INTO encounters (
             calendar_event_id, provider, calendar_id, title, start_time, end_time,
             source_status, attendees_count, attendees, patient_id, dob,
-            normalized_phone, normalized_email, appointment_id, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            normalized_phone, normalized_email, appointment_id, patient_resolution, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
           ON CONFLICT(calendar_event_id) DO UPDATE SET
             provider = excluded.provider,
             calendar_id = excluded.calendar_id,
@@ -4077,6 +6131,12 @@ class DatabaseManager {
             normalized_phone = COALESCE(excluded.normalized_phone, encounters.normalized_phone),
             normalized_email = COALESCE(excluded.normalized_email, encounters.normalized_email),
             appointment_id = COALESCE(excluded.appointment_id, encounters.appointment_id),
+            patient_resolution = CASE
+              WHEN excluded.patient_id IS NOT NULL THEN excluded.patient_resolution
+              WHEN encounters.patient_resolution IN ('unassigned_missing_demographics', 'unassigned_invalid_metadata', 'unassigned_conflict')
+                THEN excluded.patient_resolution
+              ELSE encounters.patient_resolution
+            END,
             lifecycle_state = CASE
               WHEN encounters.note_id IS NULL
                 AND encounters.lifecycle_state = 'scheduled'
@@ -4093,11 +6153,13 @@ class DatabaseManager {
             END,
             updated_at = CURRENT_TIMESTAMP
         `);
-        for (const event of eventList || []) {
+        for (const inputEvent of eventList || []) {
+          const event = this._canonicalStoredCalendarEvent(inputEvent);
           if (!event?.id || !event.start_time || !event.end_time) continue;
           const privateFields = this.db
             .prepare("SELECT patient_id, dob, normalized_phone, normalized_email, appointment_id FROM calendar_events WHERE id = ?")
             .get(event.id) || {};
+          const link = this._getCalendarPatientLink(event.id);
           stmt.run(
             event.id,
             event.provider || null,
@@ -4112,7 +6174,8 @@ class DatabaseManager {
             privateFields.dob || event.dob || null,
             privateFields.normalized_phone || event.normalized_phone || null,
             privateFields.normalized_email || event.normalized_email || null,
-            privateFields.appointment_id || event.appointment_id || event.id || null
+            privateFields.appointment_id || event.appointment_id || event.id || null,
+            this._calendarPatientLinkResolution(link?.status || (privateFields.patient_id ? "linked" : "patient_details_required"))
           );
         }
       });
@@ -4206,6 +6269,113 @@ class DatabaseManager {
     }
   }
 
+  getEncountersNeedingOutputGeneration(limit) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const hasLimit = Number.isFinite(Number(limit));
+      const normalizedLimit = hasLimit ? Math.max(1, Math.min(Number(limit), 200)) : null;
+      const limitClause = normalizedLimit == null ? "" : "LIMIT ?";
+      const statement = this.db.prepare(
+        `
+          SELECT encounters.*,
+            CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+            CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+          FROM encounters
+          LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+          LEFT JOIN encounter_outputs ON encounter_outputs.encounter_id = encounters.id
+          JOIN notes ON notes.id = encounters.note_id
+          WHERE encounters.lifecycle_state = 'completed'
+            AND encounters.note_id IS NOT NULL
+            AND COALESCE(TRIM(notes.transcript), '') <> ''
+            AND (
+              encounter_outputs.encounter_id IS NULL
+              OR encounter_outputs.summary_status IN ('pending', 'stale')
+              OR encounter_outputs.soap_status IN ('pending', 'stale')
+              OR encounter_outputs.focus_status IN ('pending', 'stale')
+              OR (
+                encounter_outputs.summary_status = 'processing'
+                AND (
+                  encounter_outputs.generation_id IS NULL
+                  OR encounter_outputs.generation_started_at IS NULL
+                  OR datetime(encounter_outputs.generation_started_at) <=
+                    datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
+                )
+              )
+              OR (
+                encounter_outputs.soap_status = 'processing'
+                AND (
+                  encounter_outputs.generation_id IS NULL
+                  OR encounter_outputs.generation_started_at IS NULL
+                  OR datetime(encounter_outputs.generation_started_at) <=
+                    datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
+                )
+              )
+              OR (
+                encounter_outputs.focus_status = 'processing'
+                AND (
+                  encounter_outputs.generation_id IS NULL
+                  OR encounter_outputs.generation_started_at IS NULL
+                  OR datetime(encounter_outputs.generation_started_at) <=
+                    datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
+                )
+              )
+            )
+          ORDER BY datetime(COALESCE(encounters.completed_at, encounters.updated_at)) DESC,
+            encounters.id DESC
+          ${limitClause}
+        `
+      );
+      return normalizedLimit == null ? statement.all() : statement.all(normalizedLimit);
+    } catch (error) {
+      debugLogger.error(
+        "Error getting encounters needing output generation",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  repairCalendarEncounterProjections({ limit = MAX_CALENDAR_ROWS } = {}) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedLimit = Math.max(
+        1,
+        Math.min(Number(limit) || MAX_CALENDAR_ROWS, MAX_CALENDAR_ROWS)
+      );
+      const missing = this.db
+        .prepare(
+          "SELECT " +
+            CALENDAR_EVENT_PUBLIC_COLUMNS +
+            " FROM calendar_events " +
+            "WHERE provider = 'ai_receptionist' " +
+            "AND status IN ('confirmed', 'tentative') " +
+            "AND NOT EXISTS (" +
+            "  SELECT 1 FROM encounters " +
+            "  WHERE encounters.calendar_event_id = calendar_events.id" +
+            ") " +
+            "ORDER BY datetime(start_time) ASC, id ASC LIMIT ?"
+        )
+        .all(normalizedLimit);
+      if (missing.length > 0) this.upsertEncountersFromCalendarEvents(missing);
+      return { success: true, created: missing.length };
+    } catch (error) {
+      const safeError =
+        error?.code === CALENDAR_PROJECTION_ERROR_CODES.PROJECTION_FAILED
+          ? error
+          : this._safeCalendarProjectionError(
+              CALENDAR_PROJECTION_ERROR_CODES.PROJECTION_FAILED,
+              error
+            );
+      debugLogger.error(
+        "Error repairing calendar encounter projections",
+        { errorCode: safeError.code, error: error?.message },
+        "encounter"
+      );
+      throw safeError;
+    }
+  }
+
   /**
    * Bounded encounter read for Home/calendar surfaces. The legacy getEncounters
    * query intentionally remains unbounded for History/Search callers.
@@ -4259,7 +6429,8 @@ class DatabaseManager {
           LIMIT ?
         `
         )
-        .all(...params);
+        .all(...params)
+        .map((event) => this._enrichCalendarEventWithPatient(event));
     } catch (error) {
       debugLogger.error("Error getting bounded calendar events", { error: error.message }, "calendar");
       throw error;
@@ -4294,6 +6465,28 @@ class DatabaseManager {
         "Error cancelling calendar encounters",
         { error: error.message },
         "encounter"
+      );
+      throw error;
+    }
+  }
+
+  markRegistryAppointmentCancelled(provider, calendarId, eventId) {
+    try {
+      if (!this.db || !this.patientRegistryPath || !eventId) return { success: true, changes: 0 };
+      const result = this.db
+        .prepare(
+          `UPDATE hira_registry.appointments
+           SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+           WHERE calendar_id = ? AND google_event_id = ?
+             AND status != 'cancelled'`
+        )
+        .run(calendarId || "primary", eventId);
+      return { success: true, changes: result.changes };
+    } catch (error) {
+      debugLogger.error(
+        "Error cancelling registry appointment",
+        { error: error.message },
+        "patient-registry"
       );
       throw error;
     }
@@ -4405,7 +6598,7 @@ class DatabaseManager {
     if (!this.patientRegistryPath) return [];
     try {
       return this.db
-        .prepare("SELECT patient_id, name, dob, normalized_dob, normalized_phone, normalized_email, phone, email, active FROM hira_registry.patients WHERE active = 1")
+        .prepare("SELECT patient_id, name, normalized_name, dob, normalized_dob, normalized_phone, normalized_email, phone, email, active FROM hira_registry.patients WHERE active = 1")
         .all();
     } catch {
       // A partially initialized registry should fail closed. Returning a
@@ -4437,7 +6630,7 @@ class DatabaseManager {
     return this.db.prepare("SELECT * FROM folders WHERE id = ?").get(result.lastInsertRowid);
   }
 
-  _resolveManagedPatientForEncounter(calendarEvent, encounter) {
+  _resolveManagedPatientForEncounter(calendarEvent, _encounter) {
     const metadata = parseLegacyPatientMetadata(calendarEvent.patient_metadata) || {
       patient_id: calendarEvent.patient_id || null,
       appointment_id: calendarEvent.appointment_id || null,
@@ -4457,7 +6650,6 @@ class DatabaseManager {
     const privateSpaceId = this.getPrivateSpaceId();
 
     if (!identity.patientId) {
-      const folder = this._getOrCreateUnlinkedEncountersFolder();
       return {
         profile: null,
         patientId: null,
@@ -4465,9 +6657,13 @@ class DatabaseManager {
         dob: identity.normalizedDob || metadata.dob || null,
         normalizedEmail: identity.normalizedEmail || metadata.email || null,
         normalizedPhone: identity.phone || metadata.phone || null,
-        resolution: "unassigned_review",
-        folderAvailable: !!folder,
-        folderId: folder?.id || null,
+        resolution: identity.status === "unassigned_conflict"
+          ? "unassigned_conflict"
+          : identity.status === "unassigned_unknown_patient_id"
+            ? "unassigned_unknown_patient_id"
+            : "unassigned_missing_demographics",
+        folderAvailable: false,
+        folderId: null,
       };
     }
 
@@ -4569,8 +6765,9 @@ class DatabaseManager {
               INSERT INTO encounters (
                 calendar_event_id, provider, calendar_id, title, start_time, end_time,
                 source_status, lifecycle_state, note_id, attendees_count, attendees,
-                patient_id, dob, normalized_phone, normalized_email, appointment_id, started_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                patient_id, dob, normalized_phone, normalized_email, appointment_id,
+                patient_resolution, started_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
             )
             .run(
@@ -4590,6 +6787,10 @@ class DatabaseManager {
               calendarEvent.normalized_phone || null,
               calendarEvent.normalized_email || null,
               calendarEvent.appointment_id || null,
+              this._calendarPatientLinkResolution(
+                this._getCalendarPatientLink(calendarEvent.id)?.status
+                  || (calendarEvent.patient_id ? "linked" : "patient_details_required")
+              ),
               linkedNote ? linkedNote.created_at : null
             );
           encounter = this.db
@@ -4621,6 +6822,23 @@ class DatabaseManager {
               resolution: encounter.patient_resolution || "unassigned_legacy",
               folderAvailable: false,
             };
+        if (this.patientRegistryPath && !note && !patient.patientId) {
+          this.db
+            .prepare("UPDATE encounters SET patient_resolution = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .run(patient.resolution || "unassigned_missing_demographics", encounter.id);
+          return {
+            success: false,
+            error: "Patient details are required. Use the calendar title for the patient name and add DOB as MM/DD/YYYY; new patients also need Phone and Email in the description.",
+            code: "PATIENT_DETAILS_REQUIRED",
+          };
+        }
+        if (this.patientRegistryPath && !note && !patient.folderAvailable) {
+          return {
+            success: false,
+            error: "The patient folder is unavailable. Repair the patient workspace before starting this encounter.",
+            code: "PATIENT_FOLDER_UNAVAILABLE",
+          };
+        }
         if (!note) {
           const noteResult = this.saveNote(
             formatEncounterAutoTitle({
@@ -4632,7 +6850,7 @@ class DatabaseManager {
             "meeting",
             null,
             null,
-            patient.folderAvailable ? patient.folderId || patient.profile?.folder_id || null : this._getOrCreateUnlinkedEncountersFolder()?.id || null
+            patient.folderAvailable ? patient.folderId || patient.profile?.folder_id || null : null
           );
           note = noteResult?.note || null;
           createdNote = !!note;
@@ -4825,6 +7043,8 @@ class DatabaseManager {
              WHEN COALESCE(focus, '') = '' THEN 'pending'
              ELSE 'stale'
            END,
+           generation_id = NULL,
+           generation_started_at = NULL,
            updated_at = CURRENT_TIMESTAMP
          WHERE encounter_id = ?
            AND (transcript_hash != ? OR transcript_revision != ?)`
@@ -4908,7 +7128,49 @@ class DatabaseManager {
         const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
         if (!snapshot) return null;
         this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
-        const fields = ["updated_at = CURRENT_TIMESTAMP"];
+        let output = this._getEncounterOutputRow(normalizedId);
+        const generationState = this.db
+          .prepare(
+            `SELECT generation_id, generation_started_at,
+              CASE WHEN generation_id IS NOT NULL
+                AND generation_started_at IS NOT NULL
+                AND datetime(generation_started_at) >
+                  datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
+                THEN 1 ELSE 0 END AS generation_active
+             FROM encounter_outputs
+             WHERE encounter_id = ?`
+          )
+          .get(normalizedId);
+        const hasActiveClaim =
+          generationState?.generation_active === 1 &&
+          types.some((type) => output?.[`${type}_status`] === "processing");
+        if (hasActiveClaim) {
+          return {
+            transcript: snapshot.transcript,
+            token: null,
+            busy: true,
+            output: decorateEncounterOutput(output),
+          };
+        }
+
+        if (generationState?.generation_id) {
+          const staleClaimFields = ["generation_id = NULL", "generation_started_at = NULL"];
+          for (const type of types) {
+            staleClaimFields.push(`${type}_status = CASE WHEN ${type}_status = 'processing' THEN 'pending' ELSE ${type}_status END`);
+          }
+          this.db
+            .prepare(`UPDATE encounter_outputs SET ${staleClaimFields.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE encounter_id = ?`)
+            .run(normalizedId);
+          output = this._getEncounterOutputRow(normalizedId);
+        }
+
+        const generationId = randomUUID();
+        const fields = [
+          "generation_id = ?",
+          "generation_started_at = CURRENT_TIMESTAMP",
+          "updated_at = CURRENT_TIMESTAMP",
+        ];
+        const values = [generationId];
         for (const type of types) {
           fields.push(
             `${type}_status = 'processing'`,
@@ -4918,10 +7180,11 @@ class DatabaseManager {
         }
         this.db
           .prepare(`UPDATE encounter_outputs SET ${fields.join(", ")} WHERE encounter_id = ?`)
-          .run(normalizedId);
+          .run(...values, normalizedId);
         return {
           transcript: snapshot.transcript,
-          token: snapshot.token,
+          token: { ...snapshot.token, generationId },
+          busy: false,
           output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
         };
       });
@@ -4942,12 +7205,15 @@ class DatabaseManager {
       const normalizedId = Number(encounterId);
       const expectedRevision = Number(token?.transcriptRevision);
       const expectedHash = token?.transcriptHash;
+      const expectedGenerationId = token?.generationId;
       if (
         !Number.isInteger(normalizedId) ||
         normalizedId <= 0 ||
         !Number.isInteger(expectedRevision) ||
         expectedRevision < 0 ||
-        typeof expectedHash !== "string"
+        typeof expectedHash !== "string" ||
+        typeof expectedGenerationId !== "string" ||
+        expectedGenerationId.length === 0
       ) {
         return { applied: false, output: null };
       }
@@ -4955,10 +7221,12 @@ class DatabaseManager {
         const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
         if (!snapshot) return { applied: false, output: null };
         this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
-        const output = decorateEncounterOutput(this._getEncounterOutputRow(normalizedId));
+        const outputRow = this._getEncounterOutputRow(normalizedId);
+        const output = decorateEncounterOutput(outputRow);
         if (
           snapshot.token.transcriptRevision !== expectedRevision ||
-          snapshot.token.transcriptHash !== expectedHash
+          snapshot.token.transcriptHash !== expectedHash ||
+          outputRow?.generation_id !== expectedGenerationId
         ) {
           return { applied: false, output };
         }
@@ -4982,6 +7250,7 @@ class DatabaseManager {
           fields.push(`${type}_updated_at = CURRENT_TIMESTAMP`);
         }
         if (fields.length === 0) return { applied: false, output };
+        fields.push("generation_id = NULL", "generation_started_at = NULL");
         fields.push("updated_at = CURRENT_TIMESTAMP");
         values.push(normalizedId);
         this.db
@@ -5105,6 +7374,8 @@ class DatabaseManager {
       const fields = [
         "transcript_hash = ?",
         "transcript_revision = ?",
+        "generation_id = NULL",
+        "generation_started_at = NULL",
         "updated_at = CURRENT_TIMESTAMP",
       ];
       const values = [snapshot.token.transcriptHash, snapshot.token.transcriptRevision];
@@ -5288,7 +7559,8 @@ class DatabaseManager {
           )
         )
         .all(windowMinutes)
-        .map(stripDedupeColumn);
+        .map(stripDedupeColumn)
+        .map((event) => this._enrichCalendarEventWithPatient(event));
     } catch (error) {
       debugLogger.error("Error getting upcoming events", { error: error.message }, "gcal");
       throw error;
@@ -5298,14 +7570,89 @@ class DatabaseManager {
   getCalendarEventById(eventId) {
     try {
       if (!this.db) throw new Error("Database not initialized");
-      return (
-        this.db
-          .prepare(`SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS} FROM calendar_events WHERE id = ?`)
-          .get(eventId) || null
-      );
+      let event = this.db
+        .prepare(`SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS} FROM calendar_events WHERE id = ?`)
+        .get(eventId) || null;
+      if (!event && typeof eventId === "string" && eventId.trim()) {
+        // Older cached calendar payloads used the provider-less occurrence
+        // value as the action key. Accept it only as a compatibility fallback
+        // for managed events; new public projections use calendar_events.id.
+        event = this.db
+          .prepare(
+            `SELECT ${CALENDAR_EVENT_PUBLIC_COLUMNS}
+             FROM calendar_events
+             WHERE provider = 'ai_receptionist' AND occurrence_id = ?
+             ORDER BY datetime(start_time) DESC, id ASC
+             LIMIT 1`
+          )
+          .get(eventId) || null;
+      }
+      return this._enrichCalendarEventWithPatient(event);
     } catch (error) {
       debugLogger.error("Error getting calendar event by id", { error: error.message }, "gcal");
       return null;
+    }
+  }
+
+  _enrichCalendarEventWithPatient(event) {
+    if (!event || !this.patientRegistryPath) return event;
+    try {
+      const link = this._getCalendarPatientLink(event.id);
+      if (!link && !event.patient_id && !event.appointment_id && event.provider !== "ai_receptionist") {
+        return event;
+      }
+      let patientId = normalizeOpaqueId(event.patient_id);
+      if (!patientId && event.appointment_id) {
+        patientId = normalizeOpaqueId(this._getManagedAppointmentPatient(event.appointment_id)?.patient_id);
+      }
+      if (!patientId && link?.patient_id) patientId = normalizeOpaqueId(link.patient_id);
+      if (!patientId) {
+        return {
+          ...event,
+          patient_name: link?.source_name || null,
+          patient_dob: link?.source_dob || null,
+          patient_email: null,
+          patient_phone: null,
+          patient_link_status: link?.status || "patient_details_required",
+          patient_link_source: link?.match_source || null,
+        };
+      }
+      const patient = this.db
+        .prepare(
+          `
+          SELECT p.patient_id, p.name, p.dob, p.phone, p.email,
+                 p.sms_consent_status, pw.folder_id, f.name AS folder_name
+          FROM hira_registry.patients p
+          LEFT JOIN patient_workspaces pw ON pw.patient_id = p.patient_id
+          LEFT JOIN folders f ON f.id = pw.folder_id AND f.deleted_at IS NULL
+          WHERE p.patient_id = ? AND p.active = 1
+          LIMIT 1
+        `
+        )
+        .get(patientId);
+      if (!patient) {
+        return {
+          ...event,
+          patient_link_status: link?.status || "unknown_patient_id",
+          patient_link_source: link?.match_source || "patient_id",
+        };
+      }
+      return {
+        ...event,
+        patient_id: patient.patient_id,
+        patient_name: patient.name,
+        patient_dob: patient.dob,
+        patient_email: patient.email || null,
+        patient_phone: patient.phone || null,
+        patient_sms_consent_status: normalizePatientSmsConsentStatus(patient.sms_consent_status),
+        patient_folder_id: patient.folder_id ?? null,
+        patient_folder_name: patient.folder_name || null,
+        patient_link_status: link?.status || (event.patient_id ? "linked" : "created"),
+        patient_link_source: link?.match_source || "patient_id",
+      };
+    } catch (error) {
+      debugLogger.warn("Unable to enrich calendar event with patient registry", { error: error.message }, "patient-registry");
+      return event;
     }
   }
 

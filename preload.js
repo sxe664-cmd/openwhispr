@@ -146,6 +146,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSpaceNotes: (spaceId, limit) => ipcRenderer.invoke("db-get-space-notes", spaceId, limit),
   updateNote: (id, updates) => ipcRenderer.invoke("db-update-note", id, updates),
   deleteNote: (id) => ipcRenderer.invoke("db-delete-note", id),
+  listNoteTemplates: (kind) => ipcRenderer.invoke("db-list-note-templates", kind),
+  getNoteTemplate: (idOrKey, options) => ipcRenderer.invoke("db-get-note-template", idOrKey, options),
+  getDefaultNoteTemplate: (kind, options) => ipcRenderer.invoke("db-get-default-note-template", kind, options),
+  createNoteTemplate: (input) => ipcRenderer.invoke("db-create-note-template", input),
+  updateNoteTemplate: (id, updates) => ipcRenderer.invoke("db-update-note-template", id, updates),
+  deleteNoteTemplate: (id) => ipcRenderer.invoke("db-delete-note-template", id),
+  activateNoteTemplate: (id, revisionId) =>
+    ipcRenderer.invoke("db-activate-note-template", id, revisionId),
+  setDefaultNoteTemplate: (id, revisionId) =>
+    ipcRenderer.invoke("db-set-default-note-template", id, revisionId),
+  createNoteGenerationCandidate: (input) =>
+    ipcRenderer.invoke("db-create-note-generation-candidate", input),
+  getNoteGenerationCandidate: (candidateId) =>
+    ipcRenderer.invoke("db-get-note-generation-candidate", candidateId),
+  applyNoteGenerationCandidate: (candidateId, options) =>
+    ipcRenderer.invoke("db-apply-note-generation-candidate", candidateId, options),
+  discardNoteGenerationCandidate: (candidateId) =>
+    ipcRenderer.invoke("db-discard-note-generation-candidate", candidateId),
   exportNote: (noteId, format) => ipcRenderer.invoke("export-note", noteId, format),
   exportTranscript: (noteId, format) => ipcRenderer.invoke("export-transcript", noteId, format),
   getClinicalNoteExportPreview: (noteId) =>
@@ -880,14 +898,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gcalGetUpcomingEvents: (windowMinutes) =>
     ipcRenderer.invoke("gcal-get-upcoming-events", windowMinutes),
   gcalGetEvent: (eventId) => ipcRenderer.invoke("gcal-get-event", eventId),
+  listPatientRegistry: (query) => ipcRenderer.invoke("patient-registry-list", query),
+  getPatientRegistryPatient: (patientId) => ipcRenderer.invoke("patient-registry-get", patientId),
+  savePatientRegistryPatient: (payload) => ipcRenderer.invoke("patient-registry-save", payload),
+  getPatientEncounterHistory: (patientId, limit) => ipcRenderer.invoke("patient-registry-encounters", patientId, limit),
+  getPatientMergeCandidates: (patientId) => ipcRenderer.invoke("patient-registry-merge-candidates", patientId),
+  mergePatientRegistryPatients: (payload) => ipcRenderer.invoke("patient-registry-merge", payload),
   getEncounters: (limit) => ipcRenderer.invoke("encounters-get", limit),
   getEncountersInRange: (range) => ipcRenderer.invoke("encounters-get", range),
   getEncountersForLocalDay: (dateIso, limit) =>
     ipcRenderer.invoke("encounters-get-local-day", dateIso, limit),
   getEncounter: (encounterId) => ipcRenderer.invoke("encounter-get", encounterId),
+  getEncounterByNote: (noteId) => ipcRenderer.invoke("encounter-get-by-note", noteId),
+  getEncountersNeedingOutputGeneration: (limit) =>
+    ipcRenderer.invoke("encounters-output-pending-get", limit),
   startEncounter: (eventId, options) => ipcRenderer.invoke("encounter-start", eventId, options),
   getAppointmentActions: (eventId) => ipcRenderer.invoke("appointment-actions", eventId),
-  getAppointmentReminderStatuses: (eventIds) => ipcRenderer.invoke("appointment-reminder-statuses", eventIds),
+  getAppointmentReminderStatuses: (eventIds) =>
+    ipcRenderer.invoke("appointment-reminder-statuses", eventIds),
   sendAppointmentEmail: (eventId) => ipcRenderer.invoke("appointment-send-email", eventId),
   sendAppointmentSms: (eventId) => ipcRenderer.invoke("appointment-send-sms", eventId),
   renameAppointment: (input) => ipcRenderer.invoke("appointment-rename", input),
@@ -912,6 +940,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const listener = (_event, payload) => callback?.(payload);
     ipcRenderer.on("encounter-output-retry-requested", listener);
     return () => ipcRenderer.removeListener("encounter-output-retry-requested", listener);
+  },
+  onEncounterOutputUpdated: (callback) => {
+    const listener = (_event, payload) => callback?.(payload);
+    ipcRenderer.on("encounter-output-updated", listener);
+    return () => ipcRenderer.removeListener("encounter-output-updated", listener);
   },
   completeEncounterRecording: (noteId, transcript) =>
     ipcRenderer.invoke("encounter-recording-complete", noteId, transcript),

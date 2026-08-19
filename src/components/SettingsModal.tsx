@@ -7,7 +7,6 @@ import {
   Wrench,
   Keyboard,
   Shield,
-  CalendarDays,
 } from "lucide-react";
 import SidebarModal, { type SidebarItem } from "./ui/SidebarModal";
 import SettingsPage, { SettingsSectionType } from "./SettingsPage";
@@ -71,13 +70,6 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
         group: t("settingsModal.groups.app"),
       },
       {
-        id: "calendarReminders",
-        label: "Calendar & Reminders",
-        icon: CalendarDays,
-        description: "Connect calendars and manage meeting reminders",
-        group: t("settingsModal.groups.app"),
-      },
-      {
         id: "speechToText",
         label: t("settingsModal.sections.speechToText.label"),
         icon: Mic,
@@ -115,7 +107,6 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
     return [
       "general",
       "hotkeys",
-      "calendarReminders",
       "speechToText",
       "llms",
       "privacyData",

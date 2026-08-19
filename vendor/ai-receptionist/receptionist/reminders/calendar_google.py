@@ -230,11 +230,21 @@ def event_from_google(
         raise ValueError("Google event missing start/end")
     start = _parse_google_dt(start_raw, tz)
     end = _parse_google_dt(end_raw, tz)
-    raw_attendees = tuple(
-        attendee.get("email")
-        for attendee in item.get("attendees", [])
-        if isinstance(attendee, dict)
-    )
+    raw_attendee_items = item.get("attendees")
+    has_self_attendee: bool | None = False if isinstance(raw_attendee_items, list) else None
+    raw_attendees: list[object] = []
+    if isinstance(raw_attendee_items, list):
+        for attendee in raw_attendee_items:
+            if not isinstance(attendee, dict):
+                has_self_attendee = None
+                continue
+            self_value = attendee.get("self")
+            if self_value is True:
+                has_self_attendee = True
+                continue
+            if self_value is not None and not isinstance(self_value, bool):
+                has_self_attendee = None
+            raw_attendees.append(attendee.get("email"))
     attendees = normalize_emails(raw_attendees)
     recovered_email = extract_structured_email(item.get("description") or "")
     private = ((item.get("extendedProperties") or {}).get("private") or {})
@@ -259,6 +269,7 @@ def event_from_google(
         contact_match_keys=normalize_contact_keys(raw_attendees),
         contact_email=recovered_email,
         contact_email_source=RECOVERED_CONTACT_SOURCE if recovered_email else None,
+        has_self_attendee=has_self_attendee,
         cancelled=item.get("status") == "cancelled",
         recurring=bool(item.get("recurringEventId") or item.get("recurrence")),
         etag=item.get("etag"),

@@ -44,9 +44,13 @@ export default function NoteGenerationCandidateReview({
     <section className="mx-4 mb-3 rounded-lg border border-accent/20 bg-accent/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-semibold text-foreground/80">Enhanced encounter note</div>
+          <div className="text-xs font-semibold text-foreground/80">Clinical note ready for review</div>
           <div className="text-[11px] text-muted-foreground/70">
-            Review before applying to this note.
+            {candidate.template_name || "Clinical Encounter template"}
+            {candidate.template_revision_version != null
+              ? ` · revision ${candidate.template_revision_version}`
+              : ""}
+            {" · review before applying"}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

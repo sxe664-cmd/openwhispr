@@ -77,6 +77,29 @@ test("parser accepts structured JSON and deterministically falls back to plain o
   );
 });
 
+test("SOAP display formatting creates stable headings without changing clinical text", async () => {
+  const { formatClinicalOutputForDisplay } = await load();
+  const formatted = formatClinicalOutputForDisplay(
+    "soap",
+    "Generated SOAP note\n\nSubjective\nReports improvement.\n\nObjective\n\nAssessment\nImproving symptoms.\n\nPlan\nFollow-up in two weeks."
+  );
+
+  assert.match(formatted, /^## SOAP note\n\nGenerated SOAP note/);
+  assert.match(formatted, /## Subjective\n\nReports improvement\./);
+  assert.match(formatted, /## Objective\n\nNot documented/);
+  assert.match(formatted, /## Assessment\n\nImproving symptoms\./);
+  assert.match(formatted, /## Plan\n\nFollow-up in two weeks\./);
+});
+
+test("SOAP display formatting leaves unstructured output unchanged", async () => {
+  const { formatClinicalOutputForDisplay } = await load();
+  assert.equal(
+    formatClinicalOutputForDisplay("soap", "The model returned a plain clinical narrative."),
+    "The model returned a plain clinical narrative."
+  );
+  assert.equal(formatClinicalOutputForDisplay("summary", "A concise summary."), "A concise summary.");
+});
+
 test("provider failures return a fixed public error and keep raw exception details private", async () => {
   const { generateClinicalOutput } = await load();
   const result = await generateClinicalOutput("soap", "Transcript", {

@@ -1892,6 +1892,7 @@
       "asTranscriptMarkdown": "En Markdown (.md)",
       "raw": "Brut",
       "enhanced": "Amélioré",
+      "clinicalNote": "Note clinique",
       "saving": "Enregistrement",
       "startWriting": "Commencez à écrire...",
       "staleIndicator": "Le contenu a changé depuis l'amélioration",

@@ -7,6 +7,7 @@ import {
   Blocks,
   CalendarDays,
   Bot,
+  UsersRound,
   Settings,
   HelpCircle,
   Search,
@@ -31,6 +32,7 @@ export type ControlPanelView =
   | "personal-notes"
   | "dictionary"
   | "calendar-reminders"
+  | "patient-registry"
   | "ai-receptionist"
   | "integrations";
 
@@ -60,6 +62,7 @@ export default function ControlPanelSidebar({
     { id: "personal-notes", label: t("sidebar.notes"), icon: NotebookPen },
     { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },
     { id: "calendar-reminders", label: "Calendar & Reminders", icon: CalendarDays },
+    { id: "patient-registry", label: "Patients", icon: UsersRound },
     { id: "ai-receptionist", label: "AI Receptionist", icon: Bot },
     { id: "integrations", label: t("sidebar.integrations"), icon: Blocks },
   ];

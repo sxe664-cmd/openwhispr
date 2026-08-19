@@ -1,4 +1,4 @@
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ContainerConversationItem } from "../../hooks/useContainerChat";
 import { formatShortDate } from "../../utils/dateFormatting";
@@ -16,6 +16,7 @@ interface ConversationPickerProps {
   activeConversationId?: number | null;
   onSwitchConversation: (id: number) => void;
   onNewChat?: () => void;
+  onDeleteConversation?: (id: number) => void;
   titleClassName?: string;
 }
 
@@ -24,6 +25,7 @@ export function ConversationPicker({
   activeConversationId,
   onSwitchConversation,
   onNewChat,
+  onDeleteConversation,
   titleClassName,
 }: ConversationPickerProps) {
   const { t } = useTranslation();
@@ -63,6 +65,22 @@ export function ConversationPicker({
                 <span className="text-[10px] text-foreground/30 shrink-0">
                   {formatShortDate(conversation.updated_at)}
                 </span>
+                {onDeleteConversation && (
+                  <button
+                    type="button"
+                    aria-label={t("embeddedChat.deleteConversation")}
+                    title={t("embeddedChat.deleteConversation")}
+                    className="shrink-0 p-0.5 rounded text-foreground/25 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onDeleteConversation(conversation.id);
+                    }}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                )}
               </DropdownMenuItem>
             ))}
           </>

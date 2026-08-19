@@ -1892,6 +1892,7 @@
       "asTranscriptMarkdown": "Als Markdown (.md)",
       "raw": "Roh",
       "enhanced": "Verbessert",
+      "clinicalNote": "Klinische Notiz",
       "saving": "Wird gespeichert",
       "startWriting": "Schreibe los...",
       "staleIndicator": "Der Inhalt hat sich seit der Verbesserung geändert",

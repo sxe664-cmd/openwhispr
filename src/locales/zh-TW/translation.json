@@ -1813,6 +1813,7 @@
       "asTranscriptMarkdown": "匯出為 Markdown (.md)",
       "raw": "原始",
       "enhanced": "已增強",
+      "clinicalNote": "臨床筆記",
       "saving": "儲存中",
       "startWriting": "開始撰寫...",
       "staleIndicator": "內容在增強後已變更",
