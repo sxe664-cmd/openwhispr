@@ -22,6 +22,10 @@ const DEFAULT_SECTIONS: ClinicalNoteExportSection[] = ["summary", "soap", "encou
 const LABELS: Record<ClinicalNoteExportSection, { title: string; description: string }> = {
   summary: { title: "Summary", description: "Concise clinical overview" },
   soap: { title: "SOAP note", description: "Subjective, Objective, Assessment, and Plan" },
+  filledTemplate: {
+    title: "Filled clinical template",
+    description: "Generated Clinical Encounter v2 note with formatted sections",
+  },
   encounterDetails: { title: "Encounter details", description: "Date, context, and duration" },
   participants: { title: "Participants", description: "People identified in the encounter" },
   transcript: {
@@ -57,6 +61,10 @@ export default function ClinicalNoteExportDialog({
       const result = await window.electronAPI?.getClinicalNoteExportPreview?.(noteId);
       if (!result?.success) throw new Error(result?.error || "Unable to prepare clinical export.");
       setPreview(result);
+      setSections([
+        ...DEFAULT_SECTIONS,
+        ...(result.sections?.filledTemplate?.available ? (["filledTemplate"] as const) : []),
+      ]);
     } catch (loadError) {
       setError((loadError as Error).message);
     } finally {
@@ -128,8 +136,8 @@ export default function ClinicalNoteExportDialog({
             Export clinical note
           </DialogTitle>
           <DialogDescription>
-            Choose the sections to include in a polished PDF. Summary and SOAP are selected by
-            default.
+            Choose the sections to include in a polished PDF. Summary, SOAP, and the filled
+            clinical template are selected by default when available.
           </DialogDescription>
         </DialogHeader>
 

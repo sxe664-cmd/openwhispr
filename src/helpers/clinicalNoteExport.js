@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const MarkdownIt = require("markdown-it");
 
 const { formatTimestamp } = (() => {
   function formatTimestamp(seconds) {
@@ -13,7 +14,56 @@ const { formatTimestamp } = (() => {
 })();
 
 const SOAP_LABELS = ["Subjective", "Objective", "Assessment", "Plan"];
-const SECTION_NAMES = ["summary", "soap", "encounterDetails", "participants", "transcript"];
+const SECTION_NAMES = [
+  "summary",
+  "soap",
+  "filledTemplate",
+  "encounterDetails",
+  "participants",
+  "transcript",
+];
+
+const MEDICATION_MARKER_START = "[[OW_MEDICATION_START]]";
+const MEDICATION_MARKER_END = "[[OW_MEDICATION_END]]";
+const MEDICATION_MARK_OPEN_TOKEN = "ow_medication_open";
+const MEDICATION_MARK_CLOSE_TOKEN = "ow_medication_close";
+
+function setupMedicationMarkerMarkdown(markdown) {
+  if (markdown.renderer.rules[MEDICATION_MARK_OPEN_TOKEN]) return;
+
+  markdown.inline.ruler.before("text", "ow_medication_marker", (state, silent) => {
+    const { src, pos } = state;
+    if (src.startsWith(MEDICATION_MARKER_START, pos)) {
+      const closePos = src.indexOf(MEDICATION_MARKER_END, pos + MEDICATION_MARKER_START.length);
+      if (closePos < 0) return false;
+      if (!silent) {
+        const token = state.push(MEDICATION_MARK_OPEN_TOKEN, "span", 1);
+        token.markup = MEDICATION_MARKER_START;
+        state.owMedicationMarkerOpen = true;
+      }
+      state.pos += MEDICATION_MARKER_START.length;
+      return true;
+    }
+
+    if (src.startsWith(MEDICATION_MARKER_END, pos) && state.owMedicationMarkerOpen) {
+      if (!silent) {
+        const token = state.push(MEDICATION_MARK_CLOSE_TOKEN, "span", -1);
+        token.markup = MEDICATION_MARKER_END;
+        state.owMedicationMarkerOpen = false;
+      }
+      state.pos += MEDICATION_MARKER_END.length;
+      return true;
+    }
+    return false;
+  });
+
+  markdown.renderer.rules[MEDICATION_MARK_OPEN_TOKEN] = () =>
+    '<span data-ow-medication="true">';
+  markdown.renderer.rules[MEDICATION_MARK_CLOSE_TOKEN] = () => "</span>";
+}
+
+const clinicalMarkdown = new MarkdownIt({ html: false, breaks: true });
+setupMedicationMarkerMarkdown(clinicalMarkdown);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -136,7 +186,9 @@ function getHiraLogoDataUri() {
 }
 
 function normalizeSections(sections) {
-  const requested = Array.isArray(sections) ? sections : ["summary", "soap", "encounterDetails"];
+  const requested = Array.isArray(sections)
+    ? sections
+    : ["summary", "soap", "filledTemplate", "encounterDetails"];
   return [...new Set(requested.filter((section) => SECTION_NAMES.includes(section)))];
 }
 
@@ -156,6 +208,7 @@ function buildClinicalNoteDocument({ note, encounter, output, speakerMappings = 
     participants,
     summary: String(output?.summary || "").trim(),
     soap: parseSoap(output?.soap),
+    filledTemplate: String(note?.enhanced_content || "").trim(),
     transcript: segments.map((segment) => ({
       speaker: speakerName(segment, speakerMappings),
       timestamp: formatTimestamp(segment.timestamp),
@@ -206,6 +259,12 @@ function renderClinicalNoteHtml(document) {
     }).join("");
     body += renderSection("SOAP note", `<div class="soap-grid">${soap}</div>`);
   }
+  if (selected.has("filledTemplate") && document.filledTemplate) {
+    body += renderSection(
+      "Filled clinical template",
+      `<div class="filled-template">${clinicalMarkdown.render(document.filledTemplate)}</div>`
+    );
+  }
   if (selected.has("transcript")) {
     const transcript = document.transcript.length
       ? document.transcript
@@ -236,6 +295,17 @@ h3 { color: #374151; font-size: 10pt; margin: 0 0 5px; }
 p { margin: 0; white-space: pre-wrap; }
 .soap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .soap-block { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; min-height: 62px; break-inside: avoid; }
+.filled-template { color: #1f2937; font-size: 10pt; line-height: 1.5; }
+.filled-template h1 { color: #111827; font-size: 18pt; margin: 0 0 12px; }
+.filled-template h2 { color: #1d4ed8; font-size: 12pt; margin: 16px 0 7px; }
+.filled-template h3 { color: #374151; font-size: 10pt; margin: 12px 0 5px; }
+.filled-template p { margin: 0 0 7px; white-space: normal; }
+.filled-template ul, .filled-template ol { margin: 4px 0 9px; padding-left: 24px; }
+.filled-template li { margin: 2px 0; }
+.filled-template strong { color: #111827; font-weight: 700; }
+.filled-template em { color: #4b5563; }
+.filled-template hr { border: 0; border-top: 1px solid #e5e7eb; margin: 12px 0; }
+.filled-template [data-ow-medication="true"] { font-weight: 650; text-decoration: underline; text-decoration-color: #2563eb; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .transcript-appendix { break-before: page; }
 .transcript-line { display: grid; grid-template-columns: 48px 120px 1fr; gap: 8px; border-bottom: 1px solid #f1f5f9; padding: 7px 0; break-inside: avoid; }
 .transcript-line p { grid-column: 3; }
@@ -265,6 +335,10 @@ function buildClinicalNotePreview({ note, encounter, output }) {
       soap: {
         available: output?.soap_status === "ready" && Boolean(output?.soap),
         status: output?.soap_status || "pending",
+      },
+      filledTemplate: {
+        available: Boolean(String(note?.enhanced_content || "").trim()),
+        status: String(note?.enhanced_content || "").trim() ? "ready" : "pending",
       },
       encounterDetails: { available: true, status: "ready" },
       participants: {

@@ -21,6 +21,14 @@ function fixture() {
       transcript: JSON.stringify([
         { speaker: "SPEAKER_00", timestamp: 0, text: "Patient reports feeling better." },
       ]),
+      enhanced_content: [
+        "# Clinical Encounter",
+        "_Template: clinical-encounter v2_",
+        "## History of Present Illness",
+        "**Current Complaints:** Back pain",
+        "**Medications and Supplements:** [[OW_MEDICATION_START]]Naproxen[[OW_MEDICATION_END]]",
+        "- Monitor pain triggers",
+      ].join("\n\n"),
     },
     encounter: {
       id: 3,
@@ -41,12 +49,27 @@ function fixture() {
   };
 }
 
-test("clinical document defaults to summary, SOAP, and encounter details", () => {
+test("clinical document defaults to summary, SOAP, filled template, and encounter details", () => {
   const document = buildClinicalNoteDocument(fixture());
-  assert.deepEqual(document.selectedSections, ["summary", "soap", "encounterDetails"]);
+  assert.deepEqual(document.selectedSections, ["summary", "soap", "filledTemplate", "encounterDetails"]);
   assert.equal(document.duration, "00:03:05");
   assert.equal(document.soap.subjective, "Reports improvement.");
   assert.equal(document.soap.objective, "Not documented");
+  assert.match(document.filledTemplate, /Clinical Encounter/);
+});
+
+test("filled clinical template is available and rendered as safe polished Markdown", () => {
+  const data = fixture();
+  const preview = buildClinicalNotePreview(data);
+  assert.equal(preview.sections.filledTemplate.available, true);
+
+  const document = buildClinicalNoteDocument({ ...data, sections: ["filledTemplate"] });
+  const html = renderClinicalNoteHtml(document);
+  assert.match(html, /Filled clinical template/);
+  assert.match(html, /<h2>History of Present Illness<\/h2>/);
+  assert.match(html, /<strong>Current Complaints:<\/strong> Back pain/);
+  assert.match(html, /<span data-ow-medication="true">Naproxen<\/span>/);
+  assert.match(html, /<ul>\s*<li>Monitor pain triggers<\/li>/);
 });
 
 test("clinical HTML escapes generated and transcript content", () => {

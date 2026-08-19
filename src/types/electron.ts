@@ -36,7 +36,12 @@ export type EncounterLifecycleState = "scheduled" | "in_progress" | "completed" 
 export type EncounterOutputStatus = "pending" | "processing" | "ready" | "failed" | "stale";
 export type EncounterOutputType = "summary" | "soap" | "focus" | "all";
 export type ClinicalNoteExportSection =
-  "summary" | "soap" | "encounterDetails" | "participants" | "transcript";
+  | "summary"
+  | "soap"
+  | "filledTemplate"
+  | "encounterDetails"
+  | "participants"
+  | "transcript";
 
 export interface ClinicalNoteExportOptions {
   sections: ClinicalNoteExportSection[];

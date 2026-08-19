@@ -1823,7 +1823,9 @@ class IPCHandlers {
         const output = encounter ? this.databaseManager.getEncounterOutput(encounter.id) : null;
         if (!encounter || !output) return { success: false, error: "Encounter output is unavailable." };
 
-        const sections = Array.isArray(options?.sections) ? options.sections : ["summary", "soap", "encounterDetails"];
+        const sections = Array.isArray(options?.sections)
+          ? options.sections
+          : ["summary", "soap", "filledTemplate", "encounterDetails"];
         for (const required of ["summary", "soap"]) {
           if (sections.includes(required) && output[`${required}_status`] !== "ready") {
             return { success: false, error: `${required === "summary" ? "Summary" : "SOAP note"} is not ready yet.` };
