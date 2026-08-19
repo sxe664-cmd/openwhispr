@@ -9,6 +9,7 @@
   "directories": {
     "output": "dist"
   },
+  "publish": null,
   "npmRebuild": true,
   "buildDependenciesFromSource": false,
   "files": [
@@ -152,17 +153,11 @@
     "target": ["dmg", "zip"],
     "icon": "src/assets/icon.icns",
     "gatekeeperAssess": false,
-    "hardenedRuntime": true,
+    "hardenedRuntime": false,
     "entitlements": "resources/mac/entitlements.mac.plist",
     "entitlementsInherit": "resources/mac/entitlements.mac.plist",
-    "identity": "Gizmo Labs Inc. (T832773L2J)",
-    "notarize": true,
-    "extraResources": [
-      {
-        "from": "src/assets/Assets.car",
-        "to": "Assets.car"
-      }
-    ],
+    "identity": null,
+    "notarize": false,
     "extendInfo": {
       "LSUIElement": false,
       "CFBundleIconName": "hira-console",

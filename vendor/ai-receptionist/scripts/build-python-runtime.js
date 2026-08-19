@@ -11,6 +11,9 @@ const bundledBaseDirName = 'base';
 const runtimeManifestName = 'runtime-manifest.json';
 const standaloneRuntimeDir = path.join(rootDir, '.python-standalone-runtime');
 const pythonBuildStandaloneRepo = 'astral-sh/python-build-standalone';
+// Pin the standalone release so two Dad builds do not silently receive
+// different Python patch releases from the moving GitHub "latest" tag.
+const pinnedPythonBuildStandaloneRelease = '20260718';
 const macStandalonePythonMajorMinor = '3.14';
 
 function requestedArchitecture() {
@@ -113,10 +116,8 @@ function macStandaloneTarget() {
 
 async function resolveMacStandalonePython() {
   const target = macStandaloneTarget();
-  const releaseOverride = process.env.PYTHON_BUILD_STANDALONE_RELEASE;
-  const releasesUrl = releaseOverride
-    ? `https://api.github.com/repos/${pythonBuildStandaloneRepo}/releases/tags/${releaseOverride}`
-    : `https://api.github.com/repos/${pythonBuildStandaloneRepo}/releases/latest`;
+  const releaseTag = process.env.PYTHON_BUILD_STANDALONE_RELEASE || pinnedPythonBuildStandaloneRelease;
+  const releasesUrl = `https://api.github.com/repos/${pythonBuildStandaloneRepo}/releases/tags/${releaseTag}`;
   const release = await fetchJson(releasesUrl);
   const asset = (release.assets || []).find((candidate) => {
     const name = candidate.name || '';

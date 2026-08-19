@@ -31,7 +31,7 @@
     "dev:main": "cross-env NODE_ENV=development node scripts/run-electron.js --dev",
     "dev:renderer": "cd src && vite",
     "prebuild": "npm run compile:native && npm run download:whisper-cpp && npm run download:llama-server && npm run download:sherpa-onnx && npm run download:yt-dlp && npm run download:qdrant && npm run download:meeting-aec-helper && npm run download:whisper-vad-model && npm run download:embedding-model -- --for-build && npm run download:diarization-models -- --output-dir resources/bin/diarization-models",
-    "build": "npm run stage:ai-receptionist && cd src && vite build && cd .. && electron-builder",
+    "build": "npm run stage:ai-receptionist && cd src && vite build && cd .. && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --publish never",
     "postinstall": "electron-builder install-app-deps",
     "build:renderer": "cd src && vite build",
     "compile:mac-icon": "node scripts/compile-macos-icon.js",
