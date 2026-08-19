@@ -1,5 +1,11 @@
 const { autoUpdater } = require("electron-updater");
 
+// Updates stay disabled until a HIRA-owned release feed is configured.
+// Do not point production builds at the legacy OpenWhispr repository.
+const HIRA_UPDATES_ENABLED = false;
+const UPDATES_DISABLED_MESSAGE =
+  "HIRA updates are disabled until a HIRA-owned update feed is configured";
+
 class UpdateManager {
   constructor() {
     this.updateAvailable = false;
@@ -22,51 +28,16 @@ class UpdateManager {
   }
 
   setupAutoUpdater() {
-    if (process.env.NODE_ENV === "development") {
+    // Keep any previously downloaded update from being installed implicitly.
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    if (process.env.NODE_ENV === "development" || !HIRA_UPDATES_ENABLED) {
       return;
     }
 
-    autoUpdater.setFeedURL({
-      provider: "github",
-      owner: "OpenWhispr",
-      repo: "openwhispr",
-      private: false,
-    });
-
-    // Use arch-specific update channel on macOS to prevent arm64/x64
-    // from downloading mismatched artifacts. Both builds publish to the
-    // same GitHub release, so without this they race on latest-mac.yml.
-    // Setting channel to e.g. 'latest-arm64' makes the updater look for
-    // 'latest-arm64-mac.yml' instead of the shared 'latest-mac.yml'.
-    if (process.platform === "darwin") {
-      let nativeArch = process.arch;
-
-      // Detect Rosetta: if an x64 build is running on Apple Silicon,
-      // sysctl.proc_translated returns "1". This self-heals users who
-      // got stuck on the x64 build from older releases.
-      if (process.arch === "x64") {
-        try {
-          const { execSync } = require("child_process");
-          const translated = execSync("sysctl -n sysctl.proc_translated", {
-            encoding: "utf8",
-            timeout: 3000,
-          }).trim();
-          if (translated === "1") {
-            console.log("🔄 Rosetta detected — switching update channel to arm64");
-            nativeArch = "arm64";
-          }
-        } catch {
-          // sysctl.proc_translated doesn't exist on real Intel Macs — ignore
-        }
-      }
-
-      autoUpdater.channel = nativeArch === "arm64" ? "latest-arm64" : "latest-x64";
-    }
-
-    autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // A HIRA-owned feed must be added here before updates are re-enabled.
     autoUpdater.logger = console;
-
     this.setupEventHandlers();
   }
 
@@ -170,6 +141,10 @@ class UpdateManager {
         };
       }
 
+      if (!HIRA_UPDATES_ENABLED) {
+        return { updateAvailable: false, message: UPDATES_DISABLED_MESSAGE };
+      }
+
       console.log("🔍 Checking for updates...");
       this._suppressNotification = true;
       const result = await autoUpdater.checkForUpdates();
@@ -203,6 +178,10 @@ class UpdateManager {
           success: false,
           message: "Update downloads are disabled in development mode",
         };
+      }
+
+      if (!HIRA_UPDATES_ENABLED) {
+        return { success: false, message: UPDATES_DISABLED_MESSAGE };
       }
 
       if (this.isDownloading) {
@@ -239,6 +218,10 @@ class UpdateManager {
           success: false,
           message: "Update installation is disabled in development mode",
         };
+      }
+
+      if (!HIRA_UPDATES_ENABLED) {
+        return { success: false, message: UPDATES_DISABLED_MESSAGE };
       }
 
       if (!this.updateDownloaded) {
@@ -302,7 +285,7 @@ class UpdateManager {
   }
 
   checkForUpdatesOnStartup() {
-    if (process.env.NODE_ENV !== "development") {
+    if (HIRA_UPDATES_ENABLED && process.env.NODE_ENV !== "development") {
       setTimeout(() => {
         console.log("🔄 Checking for updates on startup...");
         autoUpdater.checkForUpdates().catch((err) => {
