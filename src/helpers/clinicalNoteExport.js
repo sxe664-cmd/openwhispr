@@ -1,3 +1,6 @@
+const fs = require("fs");
+const path = require("path");
+
 const { formatTimestamp } = (() => {
   function formatTimestamp(seconds) {
     const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -103,12 +106,33 @@ function formatDate(value) {
 }
 
 function durationSeconds(note, encounter) {
+  const intervalSeconds = (startValue, endValue) => {
+    const start = parseDate(startValue);
+    const end = parseDate(endValue);
+    if (!start || !end) return null;
+    const duration = Math.round((end - start) / 1000);
+    return duration >= 0 ? duration : null;
+  };
+
+  const lifecycleDuration = intervalSeconds(encounter?.started_at, encounter?.completed_at);
+  if (lifecycleDuration != null) return lifecycleDuration;
+
+  const scheduledDuration = intervalSeconds(encounter?.start_time, encounter?.end_time);
+  if (scheduledDuration != null) return scheduledDuration;
+
   if (Number.isFinite(Number(note?.audio_duration_seconds))) {
     return Math.max(0, Math.round(Number(note.audio_duration_seconds)));
   }
-  const start = parseDate(encounter?.start_time);
-  const end = parseDate(encounter?.end_time);
-  return start && end ? Math.max(0, Math.round((end - start) / 1000)) : null;
+  return null;
+}
+
+function getHiraLogoDataUri() {
+  try {
+    const logoPath = path.join(__dirname, "..", "assets", "hira-logo.png");
+    return `data:image/png;base64,${fs.readFileSync(logoPath).toString("base64")}`;
+  } catch {
+    return "";
+  }
 }
 
 function normalizeSections(sections) {
@@ -151,6 +175,7 @@ function renderSection(title, content, className = "") {
 
 function renderClinicalNoteHtml(document) {
   const selected = new Set(document.selectedSections);
+  const logoDataUri = getHiraLogoDataUri();
   const meta = [
     `<div><span class="label">Date</span><span>${escapeHtml(document.date)}</span></div>`,
     document.duration
@@ -199,8 +224,8 @@ function renderClinicalNoteHtml(document) {
 @page { size: Letter; margin: 0.62in 0.68in 0.7in; @bottom-right { content: "Page " counter(page); color: #6b7280; font-size: 8pt; } }
 * { box-sizing: border-box; }
 body { margin: 0; color: #1f2937; font-family: "Segoe UI", Arial, sans-serif; font-size: 10.5pt; line-height: 1.55; }
+.logo { display: block; width: 108px; height: auto; margin: 0 auto 18px; }
 .header { border-bottom: 2px solid #2563eb; padding-bottom: 18px; margin-bottom: 22px; }
-.brand { color: #2563eb; font-size: 9pt; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 h1 { color: #111827; font-size: 23pt; line-height: 1.15; margin: 8px 0 12px; }
 .meta, .details { display: flex; flex-wrap: wrap; gap: 18px; color: #4b5563; font-size: 9pt; }
 .meta div, .details div { display: flex; flex-direction: column; gap: 2px; }
@@ -218,7 +243,8 @@ p { margin: 0; white-space: pre-wrap; }
 .footer { border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 8pt; margin-top: 28px; padding-top: 9px; }
 @media print { .section, .soap-block, .transcript-line { break-inside: avoid; } }
 </style></head><body>
-<header class="header"><div class="brand">OpenWhispr · Clinical note</div><h1>${escapeHtml(document.title)}</h1><div class="meta">${meta}</div></header>
+${logoDataUri ? `<img class="logo" src="${logoDataUri}" alt="HIRA" />` : ""}
+<header class="header"><h1>${escapeHtml(document.title)}</h1><div class="meta">${meta}</div></header>
 ${body}
 <footer class="footer">AI-generated note. Review and verify before clinical use. Generated ${escapeHtml(formatDate(new Date().toISOString()))}.</footer>
 </body></html>`;

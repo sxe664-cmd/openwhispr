@@ -26,6 +26,9 @@ function fixture() {
       id: 3,
       title: "Follow-up <visit>",
       start_time: "2026-08-15 14:00:00",
+      end_time: "2026-08-15 14:30:00",
+      started_at: "2026-08-15 14:01:00",
+      completed_at: "2026-08-15 14:04:05",
       lifecycle_state: "completed",
       meeting_context: "telehealth",
     },
@@ -41,7 +44,7 @@ function fixture() {
 test("clinical document defaults to summary, SOAP, and encounter details", () => {
   const document = buildClinicalNoteDocument(fixture());
   assert.deepEqual(document.selectedSections, ["summary", "soap", "encounterDetails"]);
-  assert.equal(document.duration, "00:02:05");
+  assert.equal(document.duration, "00:03:05");
   assert.equal(document.soap.subjective, "Reports improvement.");
   assert.equal(document.soap.objective, "Not documented");
 });
@@ -53,6 +56,8 @@ test("clinical HTML escapes generated and transcript content", () => {
   const html = renderClinicalNoteHtml(document);
   assert.match(html, /&lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert/);
+  assert.doesNotMatch(html, /OpenWhispr|Clinical note/);
+  assert.match(html, /class="logo" src="data:image\/png;base64,/);
   assert.match(html, /Transcript/);
 });
 

@@ -47,7 +47,6 @@ import {
   lockTranscriptSpeaker,
   serializeTranscriptSegments,
 } from "../../utils/transcriptSpeakerState";
-import NoteParticipants from "./NoteParticipants";
 import EncounterClinicalOutputs, {
   type EncounterClinicalOutputMode,
 } from "./EncounterClinicalOutputs";
@@ -652,7 +651,6 @@ export default function NoteEditor({
                 <span className="truncate max-w-40">{calendarEventName}</span>
               </span>
             )}
-            <NoteParticipants noteId={note.id} participants={parsedParticipants} />
             {folders && onMoveToFolder && !canMoveToFolders && folderName && (
               <span className={cn(CHIP_BUTTON_CLASS, "cursor-default")}>
                 <FolderOpen size={11} className="shrink-0" />
