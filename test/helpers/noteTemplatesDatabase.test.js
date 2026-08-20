@@ -148,6 +148,40 @@ test("candidate creation never edits regular notes or transcripts and apply is g
   assert.equal(applied.note.transcript, "private transcript");
 });
 
+test("clinical generation runs persist resumable chunk evidence and clear safely", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Encounter run", "source", "meeting").note;
+  const template = db.getDefaultNoteTemplate("encounter", { includeRaw: true });
+  const saved = db.saveNoteGenerationRun({
+    noteId: note.id,
+    templateRevisionId: template.active_revision_id,
+    sourceHash: "source-hash",
+    modelId: "local-model",
+    chunkCount: 3,
+    completedChunks: 1,
+    extractions: [{ fields: { "historyOfPresentIllness.currentComplaints": { value: "pain" } } }],
+  });
+  assert.equal(saved.success, true);
+  assert.equal(db.getNoteGenerationRun(note.id).completed_chunks, 1);
+  assert.equal(db.getNoteGenerationRun(note.id).extractions.length, 1);
+
+  const updated = db.saveNoteGenerationRun({
+    noteId: note.id,
+    templateRevisionId: template.active_revision_id,
+    sourceHash: "source-hash",
+    modelId: "local-model",
+    chunkCount: 3,
+    completedChunks: 3,
+    extractions: [1, 2, 3],
+  });
+  assert.equal(updated.success, true);
+  assert.deepEqual(db.getNoteGenerationRun(note.id).extractions, [1, 2, 3]);
+  assert.deepEqual(db.clearNoteGenerationRun(note.id), { success: true });
+  assert.equal(db.getNoteGenerationRun(note.id), null);
+});
+
 test("editing a template activates the newly created revision", { concurrency: false }, (t) => {
   const db = ensureDb(t);
   if (!db) return;

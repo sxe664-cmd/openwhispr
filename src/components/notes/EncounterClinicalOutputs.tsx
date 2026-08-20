@@ -40,6 +40,7 @@ interface EncounterClinicalOutputsProps {
   mode: EncounterClinicalOutputMode;
   isRecording: boolean;
   isProcessingTranscript?: boolean;
+  isEncounterCompleted?: boolean;
   diarizationStatus?: MeetingDiarizationStatus;
   transcript?: string | null;
 }
@@ -87,6 +88,7 @@ export default function EncounterClinicalOutputs({
   mode,
   isRecording,
   isProcessingTranscript = false,
+  isEncounterCompleted = false,
   diarizationStatus = "idle",
   transcript = "",
 }: EncounterClinicalOutputsProps) {
@@ -251,8 +253,8 @@ export default function EncounterClinicalOutputs({
   });
   const content = mode === "summary" ? output?.summary : output?.soap;
   const formattedContent = formatClinicalOutputForDisplay(mode, content);
-  const showRetry = generationFailed || outputStatus === "failed";
-  const showRegenerate = outputStatus === "stale" && !isGenerating;
+  const showRetry = !isEncounterCompleted && (generationFailed || outputStatus === "failed");
+  const showRegenerate = !isEncounterCompleted && outputStatus === "stale" && !isGenerating;
 
   if (isLoading && !output) {
     return (

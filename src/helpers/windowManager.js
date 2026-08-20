@@ -49,12 +49,14 @@ class WindowManager {
     this.macCompoundPushState = null;
     this.winPushState = null;
     this._cachedActivationMode = "tap";
-    this._floatingIconAutoHide = false;
+    this._floatingIconAutoHide = true;
     this._agentAnimationState = null;
     this._panelStartPosition = "bottom-right";
     this._isDictatingToggle = false;
     this._pendingMeetingNoteNavigation = null;
     this._pendingNoteNavigation = null;
+    this._mainWindowCreationPromise = null;
+    this._dictationLifecycleGeneration = 0;
 
     app.on("before-quit", () => {
       this.isQuitting = true;
@@ -63,6 +65,41 @@ class WindowManager {
   }
 
   async createMainWindow() {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      return this.mainWindow;
+    }
+
+    if (this._mainWindowCreationPromise) {
+      return this._mainWindowCreationPromise;
+    }
+
+    const creationPromise = this._createMainWindow();
+    this._mainWindowCreationPromise = creationPromise;
+
+    try {
+      return await creationPromise;
+    } catch (error) {
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.destroy();
+      }
+      this.mainWindow = null;
+      this.hotkeyManager.setMainWindow?.(null);
+      throw error;
+    } finally {
+      if (this._mainWindowCreationPromise === creationPromise) {
+        this._mainWindowCreationPromise = null;
+      }
+    }
+  }
+
+  async ensureMainWindow() {
+    if (this.isQuitting) {
+      throw new Error("Cannot create the dictation window while the app is quitting");
+    }
+    return this.createMainWindow();
+  }
+
+  async _createMainWindow() {
     const cursorPos = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursorPos);
     const position = WindowPositionUtil.getMainWindowPosition(
@@ -75,6 +112,8 @@ class WindowManager {
       ...MAIN_WINDOW_CONFIG,
       ...position,
     });
+    this.hotkeyManager.setMainWindow?.(this.mainWindow);
+    this.tray?.syncMainWindow?.();
 
     this.setMainWindowInteractivity(false);
     this.registerMainWindowEvents();
@@ -109,9 +148,17 @@ class WindowManager {
     });
 
     await this.loadMainWindow();
-    await this.initializeHotkey();
+    if (this.isQuitting) {
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.destroy();
+      }
+      this.mainWindow = null;
+      this.hotkeyManager.setMainWindow?.(null);
+      throw new Error("Dictation window creation was cancelled during shutdown");
+    }
     this.dragManager.setTargetWindow(this.mainWindow);
     MenuManager.setupMainMenu(() => this.openSettings());
+    return this.mainWindow;
   }
 
   setMainWindowInteractivity(shouldCapture) {
@@ -249,7 +296,7 @@ class WindowManager {
         !isGlobeLikeHotkey(currentHotkey) &&
         currentHotkey.includes("+")
       ) {
-        this.startMacCompoundPushToTalk(currentHotkey);
+        void this.startMacCompoundPushToTalk(currentHotkey);
         return;
       }
 
@@ -270,11 +317,11 @@ class WindowManager {
       // Capture target app PID before the window might steal focus
       if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
 
-      this.sendToggleDictation();
+      void this.sendToggleDictation();
     };
   }
 
-  startMacCompoundPushToTalk(hotkey) {
+  async startMacCompoundPushToTalk(hotkey) {
     if (this.macCompoundPushState?.active) {
       return;
     }
@@ -289,8 +336,38 @@ class WindowManager {
     const downTime = Date.now();
 
     if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
-    this.showDictationPanel();
-    this.sendPrepareDictation();
+
+    // Establish the press state before awaiting window creation. A key-up
+    // received while the renderer is loading can therefore cancel this press
+    // and prevent the delayed recording start.
+    this.macCompoundPushState = {
+      active: true,
+      downTime,
+      isRecording: false,
+      requiredModifiers,
+      safetyTimeoutId: null,
+    };
+
+    try {
+      const window = await this.ensureMainWindow();
+      if (!this.macCompoundPushState?.active || this.macCompoundPushState.downTime !== downTime) {
+        return;
+      }
+      this._showDictationPanelWindow(window);
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send("prepare-dictation");
+      }
+      if (!this.macCompoundPushState?.active || this.macCompoundPushState.downTime !== downTime) {
+        return;
+      }
+    } catch (error) {
+      if (this.macCompoundPushState?.downTime === downTime) {
+        this.macCompoundPushState = null;
+        this.hideDictationPanel();
+      }
+      debugLogger.error("Failed to prepare macOS push-to-talk", { error: error.message }, "ptt");
+      return;
+    }
 
     const safetyTimeoutId = setTimeout(() => {
       if (this.macCompoundPushState?.active) {
@@ -298,14 +375,7 @@ class WindowManager {
         this.forceStopMacCompoundPush("timeout");
       }
     }, MAX_PUSH_DURATION_MS);
-
-    this.macCompoundPushState = {
-      active: true,
-      downTime,
-      isRecording: false,
-      requiredModifiers,
-      safetyTimeoutId,
-    };
+    this.macCompoundPushState.safetyTimeoutId = safetyTimeoutId;
 
     setTimeout(() => {
       if (!this.macCompoundPushState || this.macCompoundPushState.downTime !== downTime) {
@@ -314,7 +384,7 @@ class WindowManager {
 
       if (!this.macCompoundPushState.isRecording) {
         this.macCompoundPushState.isRecording = true;
-        this.sendStartDictation();
+        void this.sendStartDictation({ type: "mac", downTime });
       }
     }, MIN_HOLD_DURATION_MS);
   }
@@ -336,7 +406,7 @@ class WindowManager {
     this.macCompoundPushState = null;
 
     if (wasRecording) {
-      this.sendStopDictation();
+      void this.sendStopDictation();
     } else {
       this.sendCancelDictationPreparation();
       this.hideDictationPanel();
@@ -356,7 +426,7 @@ class WindowManager {
     this.macCompoundPushState = null;
 
     if (wasRecording) {
-      this.sendStopDictation();
+      void this.sendStopDictation();
     } else {
       this.sendCancelDictationPreparation();
     }
@@ -409,16 +479,13 @@ class WindowManager {
     return required;
   }
 
-  startWindowsPushToTalk(key) {
+  async startWindowsPushToTalk(key) {
     if (this.winPushState?.active) {
       return;
     }
 
     const MIN_HOLD_DURATION_MS = 150;
     const downTime = Date.now();
-
-    this.showDictationPanel();
-    this.sendPrepareDictation();
 
     this.winPushState = {
       active: true,
@@ -427,6 +494,27 @@ class WindowManager {
       isRecording: false,
     };
 
+    try {
+      const window = await this.ensureMainWindow();
+      if (!this.winPushState?.active || this.winPushState.downTime !== downTime) {
+        return;
+      }
+      this._showDictationPanelWindow(window);
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send("prepare-dictation");
+      }
+      if (!this.winPushState?.active || this.winPushState.downTime !== downTime) {
+        return;
+      }
+    } catch (error) {
+      if (this.winPushState?.downTime === downTime) {
+        this.winPushState = null;
+        this.hideDictationPanel();
+      }
+      debugLogger.error("Failed to prepare push-to-talk", { error: error.message }, "ptt");
+      return;
+    }
+
     setTimeout(() => {
       if (!this.winPushState || this.winPushState.downTime !== downTime) {
         return;
@@ -434,7 +522,7 @@ class WindowManager {
 
       if (!this.winPushState.isRecording) {
         this.winPushState.isRecording = true;
-        this.sendStartDictation();
+        void this.sendStartDictation({ type: "push", downTime });
       }
     }, MIN_HOLD_DURATION_MS);
   }
@@ -453,7 +541,7 @@ class WindowManager {
     this.winPushState = null;
 
     if (wasRecording) {
-      this.sendStopDictation();
+      void this.sendStopDictation();
     } else {
       this.sendCancelDictationPreparation();
       this.hideDictationPanel();
@@ -468,57 +556,93 @@ class WindowManager {
     this.handleWindowsPushKeyUp();
   }
 
-  _sendDictationToggle(channel) {
+  async _sendDictationToggle(channel) {
     if (this.hotkeyManager.isInListeningMode()) {
       return;
     }
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      // Capture the paste target and any selection on every toggle press,
-      // before the overlay steals focus — the paste can't refocus the target
-      // otherwise (#668). The renderer owns the real recording state and may
-      // decline a toggle (mic error, silence gate, Esc cancel), so gating this
-      // on _isDictatingToggle desyncs and leaves a stale target from a
-      // previous app. Press-time capture matches the dictation hotkey call
-      // sites in main.js; a stop-press capture resolves the same frontmost
-      // app, since NSWorkspace ignores the overlay panel.
-      if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
-      void this.selectionManager?.captureTarget?.();
-      this.showDictationPanel();
+    const lifecycleGeneration = this._dictationLifecycleGeneration;
+    // Capture before awaiting creation: the overlay must not become the target
+    // application for the eventual paste.
+    if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
+    void this.selectionManager?.captureTarget?.();
+
+    try {
+      await this.showDictationPanel();
+      if (
+        lifecycleGeneration !== this._dictationLifecycleGeneration ||
+        !this.mainWindow ||
+        this.mainWindow.isDestroyed()
+      ) {
+        return;
+      }
       // About-to-start guess: open the mic one IPC message ahead of the toggle.
       // A wrong guess (renderer declines) is bounded by the prepared capture's
       // max-age expiry, and the renderer dedups its own prepare call.
-      if (!this._isDictatingToggle) this.sendPrepareDictation();
+      if (!this._isDictatingToggle) await this.sendPrepareDictation();
+      if (
+        lifecycleGeneration !== this._dictationLifecycleGeneration ||
+        !this.mainWindow ||
+        this.mainWindow.isDestroyed()
+      ) {
+        return;
+      }
       this.mainWindow.webContents.send(channel);
       this._isDictatingToggle = !this._isDictatingToggle;
       this.meetingDetectionEngine?.setUserRecording(this._isDictatingToggle);
+    } catch (error) {
+      debugLogger.error(`Failed to toggle dictation channel ${channel}`, { error: error.message });
     }
   }
 
   sendToggleDictation() {
-    this._sendDictationToggle("toggle-dictation");
+    return this._sendDictationToggle("toggle-dictation");
   }
 
   sendToggleVoiceAgent() {
-    this._sendDictationToggle("toggle-voice-agent");
+    return this._sendDictationToggle("toggle-voice-agent");
   }
 
   sendToggleTranslation() {
     // Same PID-capture need as the voice agent: translation hotkeys don't
     // capture the target at their call sites.
     if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
-    this._sendDictationToggle("toggle-translation");
+    return this._sendDictationToggle("toggle-translation");
   }
 
-  sendStartDictation() {
+  async sendStartDictation(expectedPushState = null) {
     if (this.hotkeyManager.isInListeningMode()) {
       return;
     }
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
-      void this.selectionManager?.captureTarget?.();
-      this.showDictationPanel();
-      this.mainWindow.webContents.send("start-dictation");
-      this.meetingDetectionEngine?.setUserRecording(true);
+    const lifecycleGeneration = this._dictationLifecycleGeneration;
+
+    const isExpectedPushStillActive = () => {
+      if (!expectedPushState) return true;
+      const state =
+        expectedPushState.type === "mac"
+          ? this.macCompoundPushState
+          : this.winPushState;
+      return state?.active === true && state.downTime === expectedPushState.downTime;
+    };
+
+    if (!isExpectedPushStillActive()) {
+      return;
+    }
+    if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
+    void this.selectionManager?.captureTarget?.();
+    try {
+      await this.showDictationPanel();
+      if (
+        lifecycleGeneration !== this._dictationLifecycleGeneration ||
+        !isExpectedPushStillActive()
+      ) {
+        return;
+      }
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send("start-dictation");
+        this.meetingDetectionEngine?.setUserRecording(true);
+      }
+    } catch (error) {
+      debugLogger.error("Failed to start dictation", { error: error.message });
     }
   }
 
@@ -533,11 +657,17 @@ class WindowManager {
     }
   }
 
-  sendPrepareDictation() {
+  async sendPrepareDictation() {
     if (this.hotkeyManager.isInListeningMode()) {
       return;
     }
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+    const lifecycleGeneration = this._dictationLifecycleGeneration;
+    await this.showDictationPanel();
+    if (
+      lifecycleGeneration === this._dictationLifecycleGeneration &&
+      this.mainWindow &&
+      !this.mainWindow.isDestroyed()
+    ) {
       this.mainWindow.webContents.send("prepare-dictation");
     }
   }
@@ -574,7 +704,6 @@ class WindowManager {
    * activation mode. No-op during hotkey capture (listeners are stopped then).
    */
   reconcileNativeKeyListeners() {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return;
     if (this.hotkeyManager.isInListeningMode()) return;
     // GNOME/KDE/Hyprland deliver hotkeys via D-Bus native shortcuts; the low-level
     // listener would be redundant there and could double-fire, so watch nothing.
@@ -615,7 +744,7 @@ class WindowManager {
   }
 
   async initializeHotkey() {
-    await this.hotkeyManager.initializeHotkey(this.mainWindow, this.createHotkeyCallback());
+    await this.hotkeyManager.initializeHotkey(this.createHotkeyCallback());
   }
 
   async updateHotkey(hotkey) {
@@ -1145,31 +1274,44 @@ class WindowManager {
     this.mainWindow.setBounds(newPos);
   }
 
-  showDictationPanel(options = {}) {
-    const { focus = false } = options;
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      // Reading the target's window costs a helper spawn, so show now and move
-      // when the answer lands: a visible hop only happens when the panel was on
-      // the wrong display, which is the case being corrected.
-      void this._repositionToActiveDisplay();
+  _showDictationPanelWindow(window, focus = false) {
+    if (!window || window.isDestroyed()) {
+      return;
+    }
 
-      if (this.mainWindow.isMinimized()) {
-        this.mainWindow.restore();
+    // Reading the target's window costs a helper spawn, so show now and move
+    // when the answer lands: a visible hop only happens when the panel was on
+    // the wrong display, which is the case being corrected.
+    void this._repositionToActiveDisplay();
+
+    if (window.isMinimized()) {
+      window.restore();
+    }
+    if (!window.isVisible()) {
+      if (typeof window.showInactive === "function") {
+        window.showInactive();
+      } else {
+        window.show();
       }
-      if (!this.mainWindow.isVisible()) {
-        if (typeof this.mainWindow.showInactive === "function") {
-          this.mainWindow.showInactive();
-        } else {
-          this.mainWindow.show();
-        }
-      }
-      if (focus) {
-        this.mainWindow.focus();
-      }
+    }
+    if (focus) {
+      window.focus();
     }
   }
 
+  async showDictationPanel(options = {}) {
+    const { focus = false } = options;
+    const lifecycleGeneration = this._dictationLifecycleGeneration;
+    const window = await this.ensureMainWindow();
+    if (lifecycleGeneration !== this._dictationLifecycleGeneration) {
+      this.hideDictationPanel();
+      return;
+    }
+    this._showDictationPanelWindow(window, focus);
+  }
+
   hideControlPanelToTray() {
+    void this.cancelAndHideDictation();
     if (!this.controlPanelWindow || this.controlPanelWindow.isDestroyed()) {
       return;
     }
@@ -1181,6 +1323,29 @@ class WindowManager {
   hideDictationPanel() {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.hide();
+    }
+  }
+
+  async cancelAndHideDictation() {
+    this._dictationLifecycleGeneration += 1;
+    if (this.macCompoundPushState?.safetyTimeoutId) {
+      clearTimeout(this.macCompoundPushState.safetyTimeoutId);
+    }
+    this.macCompoundPushState = null;
+    this.winPushState = null;
+
+    const window = this.mainWindow;
+    this._isDictatingToggle = false;
+    this.meetingDetectionEngine?.setUserRecording(false);
+
+    if (window && !window.isDestroyed()) {
+      try {
+        window.webContents.send("cancel-dictation-preparation");
+        window.webContents.send("cancel-hotkey-pressed");
+      } catch (error) {
+        debugLogger.warn("Failed to cancel dictation before hiding", error.message);
+      }
+      window.hide();
     }
   }
 
@@ -1201,41 +1366,26 @@ class WindowManager {
       return;
     }
 
-    // Safety timeout: force show the window if ready-to-show doesn't fire within 10 seconds
-    const showTimeout = setTimeout(() => {
-      if (
-        this.mainWindow &&
-        !this.mainWindow.isDestroyed() &&
-        !this.mainWindow.isVisible() &&
-        !this._floatingIconAutoHide
-      ) {
-        this.showDictationPanel();
-      }
-    }, 10000);
+    const window = this.mainWindow;
 
-    this.mainWindow.once("ready-to-show", () => {
-      clearTimeout(showTimeout);
-      this.enforceMainWindowOnTop();
-      if (!this.mainWindow.isVisible() && !this._floatingIconAutoHide) {
-        if (typeof this.mainWindow.showInactive === "function") {
-          this.mainWindow.showInactive();
-        } else {
-          this.mainWindow.show();
-        }
-      }
-    });
-
-    this.mainWindow.on("show", () => {
+    window.once("ready-to-show", () => {
       this.enforceMainWindowOnTop();
     });
 
-    this.mainWindow.on("focus", () => {
+    window.on("show", () => {
       this.enforceMainWindowOnTop();
     });
 
-    this.mainWindow.on("closed", () => {
+    window.on("focus", () => {
+      this.enforceMainWindowOnTop();
+    });
+
+    window.on("closed", () => {
       this.dragManager.cleanup();
-      this.mainWindow = null;
+      if (this.mainWindow === window) {
+        this.mainWindow = null;
+        this.hotkeyManager.setMainWindow?.(null);
+      }
     });
   }
 

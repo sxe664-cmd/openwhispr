@@ -508,6 +508,12 @@ export interface ClinicalEncounterCompactActionRequest {
   responseSchema: typeof CLINICAL_ENCOUNTER_COMPACT_JSON_SCHEMA;
   sectionKey?: ClinicalEncounterSectionKey;
   fieldKeys: string[];
+  /** Renderer-only metadata used to resolve evidence back to the full transcript. */
+  sourceText?: string;
+  sourceStart?: number;
+  sourceEnd?: number;
+  chunkIndex?: number;
+  chunkCount?: number;
 }
 
 export interface ClinicalEncounterCompactExtraction {
@@ -916,7 +922,10 @@ function compactFieldKey(
   return `${section.key}.${fieldDefinition.key}`;
 }
 
-function compactFieldCatalog(sectionKey?: ClinicalEncounterSectionKey): {
+function compactFieldCatalog(
+  sectionKey?: ClinicalEncounterSectionKey,
+  templateText?: string
+): {
   fieldKeys: string[];
   text: string;
 } {
@@ -927,12 +936,33 @@ function compactFieldCatalog(sectionKey?: ClinicalEncounterSectionKey): {
     throw new Error(`Unsupported clinical encounter section: ${sectionKey}`);
   }
 
+  const presentation = templateText
+    ? parseClinicalEncounterTemplatePresentation(templateText)
+    : null;
   const fieldKeys: string[] = [];
   const lines = sections.map((section) => {
-    const fields = section.fields.map((fieldDefinition) => {
+    const presentationSection = presentation?.sections.find((item) => item.id === section.key);
+    const visiblePresentationFields = presentation
+      ? presentationSection?.fields.filter((item) => item.visible) ?? []
+      : null;
+    const presentationById = new Map(
+      (visiblePresentationFields ?? []).map((item) => [item.id, item])
+    );
+    const fields = section.fields
+      .filter((fieldDefinition) => !visiblePresentationFields || presentationById.has(fieldDefinition.key))
+      .map((fieldDefinition) => {
       const key = compactFieldKey(section, fieldDefinition);
       fieldKeys.push(key);
-      return `- ${key}`;
+      const presentationField = presentationById.get(fieldDefinition.key);
+      const labels = [
+        presentationField?.label,
+        fieldDefinition.label,
+        ...fieldAliases(section, fieldDefinition),
+      ]
+        .filter((label): label is string => Boolean(label?.trim()))
+        .filter((label, index, all) => all.indexOf(label) === index)
+        .join(", ");
+      return `- ${key} — ${labels} — format: ${presentationField?.format ?? fieldDefinition.format}`;
     });
     return `${section.key}\n${fields.join("\n")}`;
   });
@@ -965,9 +995,9 @@ export function buildClinicalEncounterCompactActionRequest(
   } = {}
 ): ClinicalEncounterCompactActionRequest {
   if (options.templateText !== undefined) validateClinicalEncounterTemplateText(options.templateText);
-  const catalog = compactFieldCatalog(options.sectionKey);
+  const catalog = compactFieldCatalog(options.sectionKey, options.templateText);
   const sectionInstruction = options.sectionKey
-    ? `Extract only fields in the ${options.sectionKey} section.`
+    ? `Extract only fields in the ${options.sectionKey} section. Use the active template labels and formats as aliases and presentation metadata; always return canonical field IDs.`
     : "Extract any supported documented fields from the transcript.";
   return {
     systemPrompt: `${CLINICAL_ENCOUNTER_COMPACT_SYSTEM_PROMPT}\nAllowed canonical field IDs for this request:\n${catalog.text}\n${sectionInstruction}`,
@@ -1289,6 +1319,62 @@ export function parseClinicalEncounterCompactOutput(
   return { ok: true, extraction: { fields, issues } };
 }
 
+function sourceReferenceKey(reference: ClinicalEncounterSourceReference): string {
+  return [reference.start ?? "", reference.end ?? "", reference.quote ?? ""].join(":");
+}
+
+function mergeClinicalEncounterFieldValues(
+  existing: ClinicalEncounterFieldValue | undefined,
+  incoming: ClinicalEncounterFieldValue
+): ClinicalEncounterFieldValue {
+  if (!existing || existing.assertion !== "documented") return incoming;
+  if (incoming.assertion !== "documented") return existing;
+
+  const values: string[] = [];
+  for (const value of [existing.value, incoming.value]) {
+    const clean = value.trim();
+    if (!clean) continue;
+    const normalized = normalizeWhitespace(clean).toLocaleLowerCase();
+    const containsExisting = values.some((candidate) => {
+      const normalizedCandidate = normalizeWhitespace(candidate).toLocaleLowerCase();
+      return normalizedCandidate === normalized || normalizedCandidate.includes(normalized);
+    });
+    if (containsExisting) {
+      const index = values.findIndex(
+        (candidate) => normalizeWhitespace(candidate).toLocaleLowerCase().includes(normalized)
+      );
+      if (index >= 0 && clean.length > values[index].length) values[index] = clean;
+      continue;
+    }
+    // If the new value contains an older, less specific value, retain only the
+    // more specific one. Distinct values are intentionally kept in source order
+    // so later conflicts (for example, two pain scores) remain reviewable.
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const normalizedCandidate = normalizeWhitespace(values[index]).toLocaleLowerCase();
+      if (normalized.includes(normalizedCandidate)) values.splice(index, 1);
+    }
+    values.push(clean);
+  }
+
+  const references = [...existing.sourceRefs, ...incoming.sourceRefs]
+    .filter((reference, index, all) => {
+      const key = sourceReferenceKey(reference);
+      return all.findIndex((candidate) => sourceReferenceKey(candidate) === key) === index;
+    })
+    .sort((left, right) => (left.start ?? Number.MAX_SAFE_INTEGER) - (right.start ?? Number.MAX_SAFE_INTEGER));
+  const spans = [...existing.spans, ...incoming.spans].filter((span, index, all) => {
+    const key = `${span.kind}:${span.start}:${span.end}:${span.text ?? ""}`;
+    return all.findIndex((candidate) => `${candidate.kind}:${candidate.start}:${candidate.end}:${candidate.text ?? ""}` === key) === index;
+  });
+
+  return {
+    value: values.join("\n"),
+    assertion: "documented",
+    sourceRefs: references,
+    spans,
+  };
+}
+
 /** Merge sparse extractions and run the existing canonical validator once. */
 export function mergeClinicalEncounterCompactExtractions(
   extractions: readonly ClinicalEncounterCompactExtraction[],
@@ -1308,7 +1394,12 @@ export function mergeClinicalEncounterCompactExtractions(
       }
       const section = sections[lookup.section.key];
       const fields = section?.fields as Record<string, unknown> | undefined;
-      if (fields) fields[lookup.field.key] = fieldValue;
+      if (fields) {
+        fields[lookup.field.key] = mergeClinicalEncounterFieldValues(
+          fields[lookup.field.key] as ClinicalEncounterFieldValue | undefined,
+          fieldValue
+        );
+      }
     }
   }
 

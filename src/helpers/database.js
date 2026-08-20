@@ -1984,10 +1984,25 @@ class DatabaseManager {
         applied_at DATETIME,
         discarded_at DATETIME
       );
+      CREATE TABLE IF NOT EXISTS note_generation_runs (
+        note_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+        template_revision_id INTEGER NOT NULL REFERENCES note_template_revisions(id),
+        source_hash TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        chunk_count INTEGER NOT NULL DEFAULT 0,
+        completed_chunks INTEGER NOT NULL DEFAULT 0,
+        extractions_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'processing'
+          CHECK (status IN ('processing', 'failed')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
       CREATE INDEX IF NOT EXISTS idx_note_template_revisions_template
         ON note_template_revisions(template_id, version);
       CREATE INDEX IF NOT EXISTS idx_note_generation_candidates_note
         ON note_generation_candidates(note_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_note_generation_runs_updated
+        ON note_generation_runs(updated_at);
     `);
   }
 
@@ -3327,6 +3342,105 @@ class DatabaseManager {
     return { success: true, template: this._noteTemplateRow(result) };
   }
 
+  _safeNoteGenerationRun(row) {
+    if (!row) return null;
+    let extractions = [];
+    try {
+      const parsed = JSON.parse(row.extractions_json || "[]");
+      if (Array.isArray(parsed)) extractions = parsed;
+    } catch {
+      extractions = [];
+    }
+    return {
+      note_id: row.note_id,
+      template_revision_id: row.template_revision_id,
+      source_hash: row.source_hash,
+      model_id: row.model_id,
+      chunk_count: row.chunk_count,
+      completed_chunks: row.completed_chunks,
+      extractions,
+      status: row.status,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  getNoteGenerationRun(noteId) {
+    const normalizedNoteId = Number(noteId);
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) return null;
+    return this._safeNoteGenerationRun(
+      this.db
+        .prepare("SELECT * FROM note_generation_runs WHERE note_id = ?")
+        .get(normalizedNoteId)
+    );
+  }
+
+  saveNoteGenerationRun(input = {}) {
+    const noteId = Number(input.noteId ?? input.note_id);
+    const templateRevisionId = Number(input.templateRevisionId ?? input.template_revision_id);
+    const sourceHash = String(input.sourceHash ?? input.source_hash ?? "").trim();
+    const modelId = String(input.modelId ?? input.model_id ?? "").trim();
+    const chunkCount = Number(input.chunkCount ?? input.chunk_count);
+    const completedChunks = Number(input.completedChunks ?? input.completed_chunks);
+    const extractions = Array.isArray(input.extractions) ? input.extractions : [];
+    if (
+      !Number.isInteger(noteId) ||
+      noteId <= 0 ||
+      !Number.isInteger(templateRevisionId) ||
+      templateRevisionId <= 0 ||
+      !sourceHash ||
+      !modelId ||
+      !Number.isInteger(chunkCount) ||
+      chunkCount < 0 ||
+      !Number.isInteger(completedChunks) ||
+      completedChunks < 0 ||
+      completedChunks > chunkCount
+    ) {
+      return { success: false, errorCode: "INVALID_GENERATION_RUN" };
+    }
+    const note = this.db.prepare("SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL").get(noteId);
+    const revision = this.db
+      .prepare("SELECT id FROM note_template_revisions WHERE id = ?")
+      .get(templateRevisionId);
+    if (!note || !revision) return { success: false, errorCode: "GENERATION_RUN_NOT_FOUND" };
+
+    this.db
+      .prepare(
+        `INSERT INTO note_generation_runs
+          (note_id, template_revision_id, source_hash, model_id, chunk_count,
+           completed_chunks, extractions_json, status, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', CURRENT_TIMESTAMP)
+         ON CONFLICT(note_id) DO UPDATE SET
+           template_revision_id = excluded.template_revision_id,
+           source_hash = excluded.source_hash,
+           model_id = excluded.model_id,
+           chunk_count = excluded.chunk_count,
+           completed_chunks = excluded.completed_chunks,
+           extractions_json = excluded.extractions_json,
+           status = 'processing',
+           updated_at = CURRENT_TIMESTAMP`
+      )
+      .run(
+        noteId,
+        templateRevisionId,
+        sourceHash,
+        modelId,
+        chunkCount,
+        completedChunks,
+        JSON.stringify(extractions)
+      );
+    return { success: true, run: this._safeNoteGenerationRun(this.db.prepare("SELECT * FROM note_generation_runs WHERE note_id = ?").get(noteId)) };
+  }
+
+  clearNoteGenerationRun(noteId) {
+    const normalizedNoteId = Number(noteId);
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) {
+      return { success: false, errorCode: "INVALID_GENERATION_RUN" };
+    }
+    this.db.prepare("DELETE FROM note_generation_runs WHERE note_id = ?").run(normalizedNoteId);
+    return { success: true };
+  }
+
   _safeNoteGenerationCandidate(row, { includeClinicalSource = false } = {}) {
     if (!row) return null;
     const candidate = {
@@ -3434,6 +3548,15 @@ class DatabaseManager {
       if (candidate.status !== "pending") return noteTemplateFailure("CANDIDATE_NOT_PENDING", { candidate: this._safeNoteGenerationCandidate(candidate), note: null });
       const note = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(candidate.note_id);
       if (!note) return noteTemplateFailure("CANDIDATE_NOT_FOUND", { candidate: null, note: null });
+      const encounter = this.db
+        .prepare("SELECT lifecycle_state FROM encounters WHERE note_id = ?")
+        .get(note.id);
+      if (encounter?.lifecycle_state === "completed") {
+        return noteTemplateFailure("ENCOUNTER_COMPLETED", {
+          candidate: this._safeNoteGenerationCandidate(candidate),
+          note,
+        });
+      }
       const currentContentHash = hashNoteGenerationSource(note);
       const currentEnhancedHash = hashEncounterTranscript(note.enhanced_content);
       // Candidates created before source hashing included transcript content
@@ -3657,6 +3780,16 @@ class DatabaseManager {
   updateNote(id, updates) {
     try {
       if (!this.db) throw new Error("Database not initialized");
+      const encounter = this.db
+        .prepare("SELECT lifecycle_state FROM encounters WHERE note_id = ?")
+        .get(id);
+      if (encounter?.lifecycle_state === "completed") {
+        return {
+          success: false,
+          errorCode: "ENCOUNTER_COMPLETED",
+          error: "This encounter is complete and read-only.",
+        };
+      }
       if (updates.folder_id != null) {
         // D2: a note's space always follows its folder's space.
         const folder = this.db
@@ -6284,7 +6417,7 @@ class DatabaseManager {
           LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
           LEFT JOIN encounter_outputs ON encounter_outputs.encounter_id = encounters.id
           JOIN notes ON notes.id = encounters.note_id
-          WHERE encounters.lifecycle_state = 'completed'
+          WHERE encounters.lifecycle_state IN ('in_progress', 'completed')
             AND encounters.note_id IS NOT NULL
             AND COALESCE(TRIM(notes.transcript), '') <> ''
             AND (
@@ -6796,6 +6929,14 @@ class DatabaseManager {
           encounter = this.db
             .prepare("SELECT * FROM encounters WHERE calendar_event_id = ?")
             .get(eventId);
+        }
+
+        if (encounter?.lifecycle_state === "completed") {
+          return {
+            success: false,
+            error: "This encounter is complete and read-only.",
+            code: "ENCOUNTER_COMPLETED",
+          };
         }
 
         let note = encounter.note_id
@@ -7425,7 +7566,7 @@ class DatabaseManager {
     }
   }
 
-  completeEncounterRecording(noteId, transcript) {
+  saveEncounterRecording(noteId, transcript) {
     try {
       if (!this.db) throw new Error("Database not initialized");
       const normalizedNoteId = Number(noteId);
@@ -7437,6 +7578,13 @@ class DatabaseManager {
           .prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL")
           .get(normalizedNoteId);
         if (!note) return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+
+        const encounter = this.db
+          .prepare("SELECT * FROM encounters WHERE note_id = ?")
+          .get(normalizedNoteId);
+        if (encounter?.lifecycle_state === "completed") {
+          return { success: false, errorCode: "ENCOUNTER_COMPLETED" };
+        }
 
         const nextTranscript = typeof transcript === "string" ? transcript : note.transcript || "";
         const transcriptChanged = nextTranscript !== note.transcript;
@@ -7453,9 +7601,6 @@ class DatabaseManager {
           )
           .run(nextTranscript, nextTranscript, normalizedNoteId);
 
-        const encounter = this.db
-          .prepare("SELECT * FROM encounters WHERE note_id = ?")
-          .get(normalizedNoteId);
         if (!encounter) {
           return {
             success: true,
@@ -7471,15 +7616,6 @@ class DatabaseManager {
             this._getNoteTranscriptToken(normalizedNoteId)
           );
         }
-        this.db
-          .prepare(
-            `UPDATE encounters
-             SET lifecycle_state = 'completed',
-               completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
-               updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`
-          )
-          .run(encounter.id);
         return {
           success: true,
           note: this.db.prepare("SELECT * FROM notes WHERE id = ?").get(normalizedNoteId),
@@ -7490,7 +7626,90 @@ class DatabaseManager {
       return transaction();
     } catch (error) {
       debugLogger.error(
-        "Error completing encounter recording",
+        "Error saving encounter recording",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
+  markEncounterComplete(encounterId) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+        return { success: false, errorCode: "ENCOUNTER_NOT_FOUND" };
+      }
+
+      const transaction = this.db.transaction(() => {
+        const encounter = this.db
+          .prepare("SELECT * FROM encounters WHERE id = ?")
+          .get(normalizedId);
+        if (!encounter) return { success: false, errorCode: "ENCOUNTER_NOT_FOUND" };
+        if (encounter.lifecycle_state === "completed") {
+          return {
+            success: true,
+            encounter,
+            output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
+          };
+        }
+
+        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+        const output = this._getEncounterOutputRow(normalizedId);
+        const outputsReady =
+          snapshot &&
+          snapshot.transcript.trim().length > 0 &&
+          output &&
+          output.transcript_revision === snapshot.token.transcriptRevision &&
+          output.transcript_hash === snapshot.token.transcriptHash &&
+          output.summary_status === "ready" &&
+          output.soap_status === "ready" &&
+          output.focus_status === "ready";
+        if (!outputsReady) {
+          return {
+            success: false,
+            errorCode: "ENCOUNTER_OUTPUTS_NOT_READY",
+            output: decorateEncounterOutput(output),
+          };
+        }
+
+        const note = this.db
+          .prepare("SELECT enhanced_content, enhanced_template_revision_id FROM notes WHERE id = ?")
+          .get(encounter.note_id);
+        const templateReady = Boolean(
+          note &&
+            normalizeNoteTemplateText(note.enhanced_content) &&
+            note.enhanced_template_revision_id != null
+        );
+        if (!templateReady) {
+          return {
+            success: false,
+            errorCode: "ENCOUNTER_TEMPLATE_NOT_READY",
+            error: "Generate and apply the clinical encounter template before completing this encounter.",
+            output: decorateEncounterOutput(output),
+          };
+        }
+
+        this.db
+          .prepare(
+            `UPDATE encounters
+             SET lifecycle_state = 'completed',
+               completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
+          )
+          .run(normalizedId);
+        return {
+          success: true,
+          encounter: this.db.prepare("SELECT * FROM encounters WHERE id = ?").get(normalizedId),
+          output: decorateEncounterOutput(output),
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error(
+        "Error marking encounter complete",
         { error: error.message },
         "encounter"
       );

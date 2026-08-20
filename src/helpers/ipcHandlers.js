@@ -16,6 +16,8 @@ const ENCOUNTER_PUBLIC_ERRORS = Object.freeze({
   ENCOUNTER_RECORDING_ACTIVE: "Another encounter is already recording.",
   ENCOUNTER_RECORDING_INVALID_NOTE: "This recording could not be saved.",
   ENCOUNTER_RECORDING_SAVE_FAILED: "The final transcript could not be saved.",
+  ENCOUNTER_OUTPUTS_NOT_READY: "All clinical notes must be generated before completing this encounter.",
+  ENCOUNTER_COMPLETED: "This encounter is complete and read-only.",
 });
 
 function encounterIpcError(code) {
@@ -835,8 +837,6 @@ class IPCHandlers {
         // still has case-variant dupes), so renderers don't flash ghost rows.
         broadcastToWindows("dictionary-updated", this.databaseManager.getDictionary());
 
-        // Show the overlay so the toast is visible (it may have been hidden after dictation)
-        this.windowManager.showDictationPanel();
         broadcastToWindows("corrections-learned", corrections);
         debugLogger.debug("[AutoLearn] Saved corrections", { corrections });
       }
@@ -966,8 +966,8 @@ class IPCHandlers {
       this.windowManager.hideDictationPanel();
     });
 
-    ipcMain.handle("show-dictation-panel", () => {
-      this.windowManager.showDictationPanel();
+    ipcMain.handle("show-dictation-panel", async () => {
+      await this.windowManager.showDictationPanel();
     });
 
     ipcMain.handle("capture-dictation-target", async () => {
@@ -1354,6 +1354,15 @@ class IPCHandlers {
         ? { ...result, candidate: projectSafeNoteGenerationCandidate(result.candidate) }
         : result;
     });
+    ipcMain.handle("db-get-note-generation-run", async (_event, noteId) =>
+      this.databaseManager.getNoteGenerationRun(noteId)
+    );
+    ipcMain.handle("db-save-note-generation-run", async (_event, input) =>
+      this.databaseManager.saveNoteGenerationRun(input)
+    );
+    ipcMain.handle("db-clear-note-generation-run", async (_event, noteId) =>
+      this.databaseManager.clearNoteGenerationRun(noteId)
+    );
 
     ipcMain.handle("db-update-note", async (event, id, updates) => {
       const result = this.databaseManager.updateNote(id, updates);
@@ -3079,8 +3088,8 @@ class IPCHandlers {
 
     ipcMain.handle("register-cancel-hotkey", async (event, key) => {
       const hotkeyManager = this.windowManager.hotkeyManager;
-      const mainWindow = this.windowManager.mainWindow;
       return hotkeyManager.registerSlot("cancel", key, () => {
+        const mainWindow = this.windowManager.mainWindow;
         mainWindow?.webContents?.send("cancel-hotkey-pressed");
       });
     });
@@ -3750,6 +3759,10 @@ class IPCHandlers {
 
     ipcMain.handle("get-activation-mode", async () => {
       return this.environmentManager.getActivationMode();
+    });
+
+    ipcMain.handle("get-floating-icon-auto-hide", async () => {
+      return this.environmentManager.getFloatingIconAutoHide();
     });
 
     ipcMain.handle("save-activation-mode", async (event, mode) => {
@@ -8128,20 +8141,19 @@ class IPCHandlers {
       }
     });
 
-    // The renderer owns the fully merged transcript segments. This single
-    // transaction writes that canonical transcript before moving its encounter
-    // to completed, so a crash cannot create a completed encounter without the
-    // final local transcript.
-    ipcMain.handle("encounter-recording-complete", async (_event, noteId, transcript) => {
+    // The renderer owns the fully merged transcript segments. Saving the
+    // canonical transcript intentionally does not complete the encounter;
+    // clinical output generation and explicit clinician confirmation do that.
+    ipcMain.handle("encounter-recording-save", async (_event, noteId, transcript) => {
       try {
-        const result = this.databaseManager.completeEncounterRecording(noteId, transcript);
+        const result = this.databaseManager.saveEncounterRecording(noteId, transcript);
         if (!result?.success) {
           const error = encounterIpcError(result?.errorCode || "ENCOUNTER_RECORDING_INVALID_NOTE");
           return { success: false, error: error.message, code: error.code };
         }
         if (result.note) this._publishNoteUpdated(result.note);
         if (result.encounter?.id && result.note?.id) {
-          broadcastToWindows("encounter-recording-completed", {
+          broadcastToWindows("encounter-recording-saved", {
             encounterId: result.encounter.id,
             noteId: result.note.id,
             transcriptRevision: Number(result.note.transcript_revision) || 0,
@@ -8151,6 +8163,32 @@ class IPCHandlers {
       } catch {
         const error = encounterIpcError("ENCOUNTER_RECORDING_SAVE_FAILED");
         return { success: false, error: error.message, code: error.code };
+      }
+    });
+
+    ipcMain.handle("encounter-mark-complete", async (_event, encounterId) => {
+      try {
+        const result = this.databaseManager.markEncounterComplete(encounterId);
+        if (!result?.success) {
+          const error = encounterIpcError(result?.errorCode || "ENCOUNTER_OUTPUT_UNAVAILABLE");
+          return {
+            success: false,
+            encounter: null,
+            output: result?.output || null,
+            error: error.message,
+            code: error.code,
+          };
+        }
+        if (result.encounter?.id) {
+          broadcastToWindows("encounter-completed", {
+            encounterId: result.encounter.id,
+            noteId: result.encounter.note_id || null,
+          });
+        }
+        return result;
+      } catch {
+        const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
+        return { success: false, encounter: null, output: null, error: error.message, code: error.code };
       }
     });
 

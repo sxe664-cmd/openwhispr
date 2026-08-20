@@ -5,21 +5,28 @@ import { appendDictionarySuffix } from "../config/prompts";
 import { generateNoteTitle } from "../utils/generateTitle";
 import { buildNoteFormattingOverrides } from "../helpers/noteFormattingOverrides";
 import {
-  CLINICAL_ENCOUNTER_TEMPLATE,
   buildClinicalEncounterActionRequest,
   buildClinicalEncounterCompactActionRequest,
   compileClinicalEncounterMarkdown,
   mergeClinicalEncounterCompactExtractions,
   parseClinicalEncounterCompactOutput,
   parseClinicalEncounterOutput,
+  type ClinicalEncounterCompactExtraction,
 } from "../services/clinicalEncounterTemplateEngine";
 import type { ActionItem, NoteGenerationCandidate, NoteItem } from "../types/electron";
 
 export type ActionProcessingStatus = "idle" | "processing" | "success";
 
+export type ActionProcessingProgress = {
+  stage: "preparing" | "extracting" | "compiling" | "generating";
+  current: number;
+  total: number;
+};
+
 export interface NoteActionState {
   status: ActionProcessingStatus;
   actionName: string | null;
+  progress: ActionProcessingProgress | null;
 }
 
 export interface ActionErrorEvent {
@@ -62,7 +69,7 @@ const cancelledFlags = new Map<number, boolean>();
 const processingFlags = new Map<number, boolean>();
 const successTimers = new Map<number, NodeJS.Timeout>();
 
-const IDLE_STATE: NoteActionState = { status: "idle", actionName: null };
+const IDLE_STATE: NoteActionState = { status: "idle", actionName: null, progress: null };
 
 function setNoteState(noteId: number, patch: Partial<NoteActionState>) {
   const { noteStates } = useActionProcessingStore.getState();
@@ -128,6 +135,8 @@ export function isEncounterNoteForGeneration(
 }
 
 export const LOCAL_CLINICAL_REQUEST_CHAR_BUDGET = 48_000;
+const LOCAL_CLINICAL_SOURCE_CHUNK_CHAR_LIMIT = 18_000;
+const LOCAL_CLINICAL_SOURCE_CHUNK_OVERLAP = 900;
 
 function clinicalRequestSize(
   request: Pick<ReturnType<typeof buildClinicalEncounterCompactActionRequest>, "systemPrompt" | "userPrompt" | "responseSchema">
@@ -139,15 +148,21 @@ function clinicalRequestSize(
   );
 }
 
-function splitClinicalSource(sourceText: string, maxChars: number): string[] {
-  if (sourceText.length <= maxChars) return [sourceText];
+interface ClinicalSourceChunk {
+  text: string;
+  start: number;
+  end: number;
+}
 
-  const chunks: string[] = [];
+function splitClinicalSource(sourceText: string, maxChars: number): ClinicalSourceChunk[] {
+  if (sourceText.length <= maxChars) return [{ text: sourceText, start: 0, end: sourceText.length }];
+
+  const chunks: ClinicalSourceChunk[] = [];
   let offset = 0;
   while (offset < sourceText.length) {
     const remaining = sourceText.length - offset;
     if (remaining <= maxChars) {
-      chunks.push(sourceText.slice(offset));
+      chunks.push({ text: sourceText.slice(offset), start: offset, end: sourceText.length });
       break;
     }
 
@@ -159,11 +174,12 @@ function splitClinicalSource(sourceText: string, maxChars: number): string[] {
     const end = boundary?.index == null
       ? hardEnd
       : windowStart + boundary.index + 1;
-    chunks.push(sourceText.slice(offset, end));
-    offset = end;
+    chunks.push({ text: sourceText.slice(offset, end), start: offset, end });
+    const overlap = Math.min(LOCAL_CLINICAL_SOURCE_CHUNK_OVERLAP, Math.floor(maxChars / 4));
+    offset = Math.max(end - overlap, offset + 1);
   }
 
-  return chunks.filter((chunk) => chunk.trim());
+  return chunks.filter((chunk) => chunk.text.trim());
 }
 
 export function planLocalClinicalEncounterRequests(
@@ -171,27 +187,64 @@ export function planLocalClinicalEncounterRequests(
   templateText: string,
   budget = LOCAL_CLINICAL_REQUEST_CHAR_BUDGET
 ): Array<ReturnType<typeof buildClinicalEncounterCompactActionRequest>> {
-  // The bundled LFM model is small enough that a one-shot catalog of every
-  // clinical field is unreliable even when it fits the context window. Keep
-  // every request section-scoped, and split only unusually long transcripts.
-  return CLINICAL_ENCOUNTER_TEMPLATE.sections.flatMap((section) => {
-    const emptyRequest = buildClinicalEncounterCompactActionRequest("", {
-      templateText,
-      sectionKey: section.key,
-    });
-    const maxSourceChars = Math.max(1_000, budget - clinicalRequestSize(emptyRequest));
-    return splitClinicalSource(noteContent, maxSourceChars).map((sourceChunk) =>
-      buildClinicalEncounterCompactActionRequest(sourceChunk, {
-        templateText,
-        sectionKey: section.key,
-      })
-    );
-  });
+  // One evidence pass per source chunk prevents the old section × chunk
+  // explosion. The active template still constrains the allowed field IDs and
+  // supplies labels/aliases inside the request, but the transcript is not
+  // repeatedly sent once per section.
+  const emptyRequest = buildClinicalEncounterCompactActionRequest("", { templateText });
+  const maxSourceChars = Math.max(
+    1_000,
+    Math.min(LOCAL_CLINICAL_SOURCE_CHUNK_CHAR_LIMIT, budget - clinicalRequestSize(emptyRequest))
+  );
+  const chunks = splitClinicalSource(noteContent, maxSourceChars);
+  return chunks.map((chunk, chunkIndex) => ({
+    ...buildClinicalEncounterCompactActionRequest(chunk.text, { templateText }),
+    sourceText: chunk.text,
+    sourceStart: chunk.start,
+    sourceEnd: chunk.end,
+    chunkIndex,
+    chunkCount: chunks.length,
+  }));
 }
 
 function setCandidate(noteId: number, candidate: NoteGenerationCandidate | null): void {
   const { candidates } = useActionProcessingStore.getState();
   useActionProcessingStore.setState({ candidates: { ...candidates, [noteId]: candidate } });
+}
+
+function rebaseCompactExtraction(
+  extraction: ClinicalEncounterCompactExtraction,
+  sourceStart = 0,
+  chunkIndex = 0
+): ClinicalEncounterCompactExtraction {
+  return {
+    issues: extraction.issues,
+    fields: Object.fromEntries(
+      Object.entries(extraction.fields).map(([fieldKey, fieldValue]) => [
+        fieldKey,
+        {
+          ...fieldValue,
+          sourceRefs: fieldValue.sourceRefs.map((reference) => ({
+            ...reference,
+            ...(reference.start !== undefined ? { start: reference.start + sourceStart } : {}),
+            ...(reference.end !== undefined ? { end: reference.end + sourceStart } : {}),
+            sourceId: reference.sourceId ?? `clinical-chunk-${chunkIndex}`,
+          })),
+        },
+      ])
+    ),
+  };
+}
+
+function isReusableCompactExtraction(value: unknown): value is ClinicalEncounterCompactExtraction {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as { fields?: unknown; issues?: unknown };
+  return Boolean(
+    candidate.fields &&
+      typeof candidate.fields === "object" &&
+      !Array.isArray(candidate.fields) &&
+      Array.isArray(candidate.issues)
+  );
 }
 
 export function clearNoteGenerationCandidate(noteId: number): void {
@@ -244,7 +297,13 @@ async function generateLocalClinicalEncounter(
   noteContent: string,
   templateText: string,
   modelId: string,
-  providerOverrides: Record<string, unknown>
+  providerOverrides: Record<string, unknown>,
+  onProgress?: (progress: ActionProcessingProgress) => void,
+  resumeContext?: {
+    noteId: number;
+    templateRevisionId: number;
+    sourceHash: string;
+  }
 ): Promise<string> {
   const runExtraction = async (
     request: ReturnType<typeof buildClinicalEncounterCompactActionRequest>
@@ -262,6 +321,7 @@ async function generateLocalClinicalEncounter(
         // structured response, regardless of the general note setting.
         disableThinking: true,
         requireCompleteOutput: true,
+        maxTokens: 3_072,
         responseFormat: {
           type: "json_schema",
           json_schema: {
@@ -272,29 +332,88 @@ async function generateLocalClinicalEncounter(
         },
       }
     );
-    const parsed = parseClinicalEncounterCompactOutput(rawOutput, noteContent, {
+    const sourceText = request.sourceText ?? noteContent;
+    const parsed = parseClinicalEncounterCompactOutput(rawOutput, sourceText, {
       allowedFieldKeys: request.fieldKeys,
     });
     if (!parsed.ok || !parsed.extraction) {
       throw new Error("Local clinical evidence extraction returned unsupported output.");
     }
-    return parsed.extraction;
+    return rebaseCompactExtraction(
+      parsed.extraction,
+      request.sourceStart ?? 0,
+      request.chunkIndex ?? 0
+    );
   };
 
   const extractionRequests = planLocalClinicalEncounterRequests(noteContent, templateText);
-  const extractions = [];
+  const extractions: ClinicalEncounterCompactExtraction[] = [];
+  let resumeCount = 0;
+  if (resumeContext && window.electronAPI.getNoteGenerationRun) {
+    try {
+      const saved = await window.electronAPI.getNoteGenerationRun(resumeContext.noteId);
+      if (
+        saved &&
+        saved.template_revision_id === resumeContext.templateRevisionId &&
+        saved.source_hash === resumeContext.sourceHash &&
+        saved.model_id === modelId &&
+        saved.chunk_count === extractionRequests.length &&
+        saved.completed_chunks <= extractionRequests.length &&
+        Array.isArray(saved.extractions) &&
+        saved.extractions.length >= saved.completed_chunks &&
+        saved.extractions.slice(0, saved.completed_chunks).every(isReusableCompactExtraction)
+      ) {
+        extractions.push(...(saved.extractions as ClinicalEncounterCompactExtraction[]));
+        resumeCount = Math.min(saved.completed_chunks, extractions.length);
+        extractions.length = resumeCount;
+      }
+    } catch {
+      // A missing/old progress record must never block a fresh generation.
+    }
+  }
+  onProgress?.({ stage: "extracting", current: resumeCount, total: extractionRequests.length });
   // Keep each batch independent and sequential. The local reasoning bridge
   // also serializes requests, but explicit sequencing makes the merge order
   // deterministic and avoids unnecessary queue growth for long encounters.
-  for (const request of extractionRequests) {
+  for (const [index, request] of extractionRequests.entries()) {
+    if (index < resumeCount) continue;
+    onProgress?.({
+      stage: "extracting",
+      current: index,
+      total: extractionRequests.length,
+    });
     extractions.push(await runExtraction(request));
+    onProgress?.({
+      stage: "extracting",
+      current: index + 1,
+      total: extractionRequests.length,
+    });
+    if (resumeContext && window.electronAPI.saveNoteGenerationRun) {
+      try {
+        await window.electronAPI.saveNoteGenerationRun({
+          noteId: resumeContext.noteId,
+          templateRevisionId: resumeContext.templateRevisionId,
+          sourceHash: resumeContext.sourceHash,
+          modelId,
+          chunkCount: extractionRequests.length,
+          completedChunks: index + 1,
+          extractions,
+        });
+      } catch {
+        // Progress persistence is best effort; the current generation remains
+        // authoritative even if an older database cannot store the run.
+      }
+    }
   }
 
+  onProgress?.({ stage: "compiling", current: 0, total: 1 });
   const parsed = mergeClinicalEncounterCompactExtractions(extractions, noteContent);
   if (!parsed.ok || !parsed.document) {
     throw new Error("Local clinical evidence could not be validated against the transcript.");
   }
-  return compileClinicalEncounterMarkdown(parsed.document, templateText);
+  const compiled = compileClinicalEncounterMarkdown(parsed.document, templateText);
+  onProgress?.({ stage: "compiling", current: 1, total: 1 });
+  return compiled;
 }
 
 const BASE_SYSTEM_PROMPT = `You are a note enhancement assistant. The user will provide raw notes — possibly voice-transcribed, rough, or unstructured. Your job is to clean them up according to the instructions below while preserving all original meaning and information. Output clean markdown.
@@ -379,7 +498,11 @@ export function runBackgroundAction(
     successTimers.delete(noteId);
   }
   processingFlags.set(noteId, true);
-  setNoteState(noteId, { status: "processing", actionName: action.name });
+  setNoteState(noteId, {
+    status: "processing",
+    actionName: action.name,
+    progress: { stage: "preparing", current: 0, total: 1 },
+  });
 
   (async () => {
     try {
@@ -398,9 +521,16 @@ export function runBackgroundAction(
             noteContent,
             template.templateText,
             modelId,
-            providerOverrides
+            providerOverrides,
+            (progress) => setNoteState(noteId, { progress }),
+            {
+              noteId,
+              templateRevisionId: template.revisionId,
+              sourceHash: contentHash,
+            }
           );
         } else {
+          setNoteState(noteId, { progress: { stage: "generating", current: 0, total: 1 } });
           const request = buildClinicalEncounterActionRequest(noteContent, template.templateText);
           const schemaText = JSON.stringify(request.responseSchema);
           const systemPrompt = appendDictionarySuffix(
@@ -435,6 +565,7 @@ export function runBackgroundAction(
         if (!candidateResult.success || !candidateResult.candidate) {
           throw new Error(candidateResult.error || candidateResult.code || "Unable to create note review candidate.");
         }
+        await window.electronAPI.clearNoteGenerationRun?.(noteId);
         setCandidate(noteId, candidateResult.candidate);
       } else {
         const basePrompt = options.isMeetingNote ? MEETING_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT;
@@ -462,7 +593,7 @@ export function runBackgroundAction(
       if (cancelledFlags.get(noteId)) return;
 
       if (isEncounterNote && settings.encounterEnhancedNotesEnabled !== false) {
-        setNoteState(noteId, { status: "success", actionName: action.name });
+        setNoteState(noteId, { status: "success", actionName: action.name, progress: null });
         if (getActionLifecycleSettlement("success").scheduleSuccessCleanup) {
           scheduleSuccessCleanup(noteId);
         }
@@ -477,7 +608,7 @@ export function runBackgroundAction(
       if (title) updates.title = title;
       await window.electronAPI.updateNote(noteId, updates);
 
-      setNoteState(noteId, { status: "success", actionName: action.name });
+      setNoteState(noteId, { status: "success", actionName: action.name, progress: null });
       if (getActionLifecycleSettlement("success").scheduleSuccessCleanup) {
         scheduleSuccessCleanup(noteId);
       }

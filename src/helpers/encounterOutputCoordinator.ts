@@ -18,7 +18,7 @@ interface CoordinatorBridge extends EncounterOutputGenerationBridge {
     success?: boolean;
     encounters?: LocalEncounter[];
   }>;
-  onEncounterRecordingCompleted?: (
+  onEncounterRecordingSaved?: (
     callback: (payload: {
       encounterId?: number | null;
       noteId?: number | null;
@@ -114,19 +114,24 @@ export function createEncounterOutputCoordinator({
   }
 
   async function reconcile() {
-    // This endpoint is already filtered to completed encounters with missing
-    // or stale outputs. Do not apply the appointment-list window here: a
-    // large scheduled backlog must not hide older clinical work.
+    // This endpoint is already filtered to active/completed encounters with
+    // missing or stale outputs. Do not apply the appointment-list window here:
+    // a large scheduled backlog must not hide older clinical work.
     const result = await bridge.getEncountersNeedingOutputGeneration?.();
     for (const encounter of result?.encounters ?? []) {
-      if (encounter.lifecycle_state === "completed" && encounter.note_id) enqueue(encounter.id);
+      if (
+        (encounter.lifecycle_state === "in_progress" || encounter.lifecycle_state === "completed") &&
+        encounter.note_id
+      ) {
+        enqueue(encounter.id);
+      }
     }
   }
 
   function start() {
-    if (bridge.onEncounterRecordingCompleted) {
+    if (bridge.onEncounterRecordingSaved) {
       cleanups.push(
-        bridge.onEncounterRecordingCompleted((payload) => enqueue(payload.encounterId, true))
+        bridge.onEncounterRecordingSaved((payload) => enqueue(payload.encounterId, true))
       );
     }
     if (bridge.onNoteUpdated) {

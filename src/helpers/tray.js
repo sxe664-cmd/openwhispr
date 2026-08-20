@@ -11,6 +11,7 @@ class TrayManager {
     this.mainWindow = null;
     this.controlPanelWindow = null;
     this.windowManager = null;
+    this.attachedMainWindows = new WeakSet();
     this.attachedControlPanels = new WeakSet();
   }
 
@@ -18,12 +19,7 @@ class TrayManager {
     this.mainWindow = mainWindow;
     this.controlPanelWindow = controlPanelWindow;
 
-    if (this.mainWindow) {
-      this.mainWindow.on("show", () => this.updateTrayMenu?.());
-      this.mainWindow.on("hide", () => this.updateTrayMenu?.());
-      this.mainWindow.on("minimize", () => this.updateTrayMenu?.());
-      this.mainWindow.on("restore", () => this.updateTrayMenu?.());
-    }
+    this.syncMainWindow();
 
     if (this.controlPanelWindow) {
       this.attachControlPanelListeners(this.controlPanelWindow);
@@ -34,6 +30,12 @@ class TrayManager {
 
   setWindowManager(windowManager) {
     this.windowManager = windowManager;
+    if (this.windowManager) {
+      this.windowManager.tray = this;
+    }
+    this.syncMainWindow();
+    this.syncControlPanelWindow();
+    this.updateTrayMenu?.();
   }
 
   setCreateControlPanelCallback(callback) {
@@ -67,6 +69,41 @@ class TrayManager {
       this.controlPanelWindow = null;
       this.updateTrayMenu?.();
     });
+  }
+
+  attachMainWindowListeners(window) {
+    if (!window || this.attachedMainWindows.has(window)) {
+      return;
+    }
+
+    this.attachedMainWindows.add(window);
+
+    window.on("show", () => {
+      this.updateTrayMenu?.();
+    });
+    window.on("hide", () => {
+      this.updateTrayMenu?.();
+    });
+    window.on("minimize", () => {
+      this.updateTrayMenu?.();
+    });
+    window.on("restore", () => {
+      this.updateTrayMenu?.();
+    });
+    window.on("closed", () => {
+      if (this.mainWindow === window) {
+        this.mainWindow = null;
+      }
+      this.updateTrayMenu?.();
+    });
+  }
+
+  syncMainWindow() {
+    if (this.windowManager) {
+      this.mainWindow = this.windowManager.mainWindow || null;
+    }
+    this.attachMainWindowListeners(this.mainWindow);
+    return this.mainWindow;
   }
 
   syncControlPanelWindow() {
@@ -252,6 +289,7 @@ class TrayManager {
   }
 
   buildContextMenuTemplate() {
+    this.syncMainWindow();
     const dictationVisible = this.windowManager?.isDictationPanelVisible?.() ?? false;
 
     return [
@@ -264,7 +302,15 @@ class TrayManager {
           if (this.windowManager.isDictationPanelVisible()) {
             this.windowManager.hideDictationPanel();
           } else {
-            this.windowManager.showDictationPanel({ focus: true });
+            void this.windowManager
+              .showDictationPanel({ focus: true })
+              .catch((error) =>
+                debugLogger.error(
+                  "Failed to open dictation panel",
+                  { error: error.message },
+                  "tray"
+                )
+              );
           }
           this.updateTrayMenu();
         },

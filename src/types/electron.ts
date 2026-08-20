@@ -1093,6 +1093,28 @@ declare global {
         code?: string;
         error?: string;
       }>;
+      getNoteGenerationRun?: (noteId: number) => Promise<{
+        note_id: number;
+        template_revision_id: number;
+        source_hash: string;
+        model_id: string;
+        chunk_count: number;
+        completed_chunks: number;
+        extractions: unknown[];
+        status: "processing" | "failed";
+        created_at?: string;
+        updated_at?: string;
+      } | null>;
+      saveNoteGenerationRun?: (input: {
+        noteId: number;
+        templateRevisionId: number;
+        sourceHash: string;
+        modelId: string;
+        chunkCount: number;
+        completedChunks: number;
+        extractions: unknown[];
+      }) => Promise<{ success: boolean; run?: unknown; errorCode?: string }>;
+      clearNoteGenerationRun?: (noteId: number) => Promise<{ success: boolean; errorCode?: string }>;
       exportNote: (
         noteId: number,
         format: "txt" | "md"
@@ -1250,12 +1272,15 @@ declare global {
       // Note event listeners
       onNoteAdded?: (callback: (note: NoteItem) => void) => () => void;
       onNoteUpdated?: (callback: (note: NoteItem) => void) => () => void;
-      onEncounterRecordingCompleted?: (
+      onEncounterRecordingSaved?: (
         callback: (payload: {
           encounterId?: number | null;
           noteId?: number | null;
           transcriptRevision?: number;
         }) => void
+      ) => () => void;
+      onEncounterCompleted?: (
+        callback: (payload: { encounterId?: number | null; noteId?: number | null }) => void
       ) => () => void;
       onNoteDeleted?: (callback: (payload: { id: number }) => void) => () => void;
       onFolderDeleted?: (callback: (payload: { id: number }) => void) => () => void;
@@ -1693,6 +1718,7 @@ declare global {
       // Activation mode persistence (file-based for reliable startup)
       getActivationMode?: () => Promise<"tap" | "push">;
       saveActivationMode?: (mode: "tap" | "push") => Promise<void>;
+      getFloatingIconAutoHide?: () => Promise<boolean>;
 
       // Debug logging
       getLogLevel?: () => Promise<string>;
@@ -2263,12 +2289,19 @@ declare global {
       onEncounterOutputUpdated?: (
         callback: (payload: { encounterId?: number | null; applied?: boolean }) => void
       ) => () => void;
-      completeEncounterRecording?: (
+      saveEncounterRecording?: (
         noteId: number,
         transcript: string
       ) => Promise<{
         success: boolean;
         note?: NoteItem;
+        encounter?: LocalEncounter | null;
+        output?: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      markEncounterComplete?: (encounterId: number) => Promise<{
+        success: boolean;
         encounter?: LocalEncounter | null;
         output?: EncounterOutput | null;
         error?: string;

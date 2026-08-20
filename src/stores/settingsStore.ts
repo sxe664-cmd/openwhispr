@@ -1216,7 +1216,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   saveDiscardedTranscriptions: readBoolean("saveDiscardedTranscriptions", false),
   audioCuesEnabled: readBoolean("audioCuesEnabled", true),
   pauseMediaOnDictation: readBoolean("pauseMediaOnDictation", false),
-  floatingIconAutoHide: readBoolean("floatingIconAutoHide", false),
+  floatingIconAutoHide: readBoolean("floatingIconAutoHide", true),
   startMinimized: readBoolean("startMinimized", false),
   notificationsEnabled: readBoolean("notificationsEnabled", true),
   notifyMeetingDetection: readBoolean("notifyMeetingDetection", true),
@@ -2794,15 +2794,47 @@ export async function initializeSettings(): Promise<void> {
     // localStorage holds the user's preferred hotkey. Only populate from .env
     // when localStorage is empty (fresh install / cleared data).
     try {
+      const envKey = await window.electronAPI.getDictationKey?.();
       if (!state.dictationKey) {
-        const envKey = await window.electronAPI.getDictationKey?.();
         if (envKey) {
           createStringSetter("dictationKey")(envKey);
+        }
+      } else if (!envKey) {
+        // Older installations stored the preferred key only in the dictation
+        // renderer's localStorage. Once the control panel is available, make
+        // that legacy preference the backend authority without creating the
+        // floating widget just to read it.
+        const legacyKey = state.dictationKey;
+        const updateResult = await window.electronAPI.updateHotkey?.(legacyKey);
+        if (!updateResult?.success) {
+          await window.electronAPI.saveDictationKey?.(legacyKey);
         }
       }
     } catch (err) {
       logger.warn(
         "Failed to sync dictation key on startup",
+        { error: (err as Error).message },
+        "settings"
+      );
+    }
+
+    // Reconcile the auto-hide preference without requiring the floating
+    // widget to exist. localStorage is the renderer-era preference store;
+    // the environment value is the backend fallback for new installations.
+    try {
+      const envAutoHide = await window.electronAPI.getFloatingIconAutoHide?.();
+      const localAutoHide = localStorage.getItem("floatingIconAutoHide");
+      if (localAutoHide === null && typeof envAutoHide === "boolean") {
+        useSettingsStore.setState({ floatingIconAutoHide: envAutoHide });
+      } else if (localAutoHide !== null) {
+        const preferredAutoHide = localAutoHide !== "false";
+        if (preferredAutoHide !== envAutoHide) {
+          window.electronAPI.notifyFloatingIconAutoHideChanged?.(preferredAutoHide);
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        "Failed to sync floating icon visibility preference",
         { error: (err as Error).message },
         "settings"
       );

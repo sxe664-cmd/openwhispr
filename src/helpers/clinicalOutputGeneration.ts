@@ -47,7 +47,9 @@ async function resolveReasoner(reasoner?: ClinicalReasoner): Promise<ClinicalRea
   return module.default;
 }
 
-const MAX_TRANSCRIPT_CHARS = 24_000;
+const CLINICAL_SOURCE_CHUNK_CHARS = 14_000;
+const CLINICAL_SOURCE_CHUNK_OVERLAP = 900;
+const MAX_SYNTHESIS_SOURCE_CHARS = 24_000;
 const MAX_SUMMARY_CHARS = 8_000;
 const MAX_SOAP_FIELD_CHARS = 4_000;
 const MAX_FOCUS_CHARS = 120;
@@ -115,12 +117,40 @@ export function formatClinicalOutputForDisplay(
   return preamble ? `## SOAP note\n\n${preamble}\n\n${renderedSections}` : renderedSections;
 }
 
-function boundedTranscript(transcript: string): string {
+export function splitClinicalTranscript(
+  transcript: string,
+  maxChars = CLINICAL_SOURCE_CHUNK_CHARS
+): Array<{ text: string; start: number; end: number }> {
   const clean = transcript.trim();
-  if (clean.length <= MAX_TRANSCRIPT_CHARS) return clean;
-  const head = Math.floor(MAX_TRANSCRIPT_CHARS * 0.7);
-  const tail = MAX_TRANSCRIPT_CHARS - head;
-  return `${clean.slice(0, head)}\n\n[Transcript shortened for note generation]\n\n${clean.slice(-tail)}`;
+  if (clean.length <= maxChars) return [{ text: clean, start: 0, end: clean.length }];
+
+  const chunks: Array<{ text: string; start: number; end: number }> = [];
+  let offset = 0;
+  while (offset < clean.length) {
+    const remaining = clean.length - offset;
+    if (remaining <= maxChars) {
+      chunks.push({ text: clean.slice(offset), start: offset, end: clean.length });
+      break;
+    }
+
+    const hardEnd = offset + maxChars;
+    const searchStart = offset + Math.floor(maxChars * 0.55);
+    const candidate = clean.slice(searchStart, hardEnd);
+    const boundaries = [...candidate.matchAll(/[.!?\r\n](?=\s|$)/g)];
+    const boundary = boundaries.at(-1);
+    const end = boundary?.index == null ? hardEnd : searchStart + boundary.index + 1;
+    chunks.push({ text: clean.slice(offset, end), start: offset, end });
+    offset = Math.max(end - Math.min(CLINICAL_SOURCE_CHUNK_OVERLAP, Math.floor(maxChars / 4)), offset + 1);
+  }
+  return chunks.filter((chunk) => chunk.text.trim());
+}
+
+function synthesisSource(partials: string[]): string {
+  const joined = partials
+    .map((partial, index) => `EXTRACTED ENCOUNTER EVIDENCE ${index + 1}\n${partial.trim()}`)
+    .join("\n\n");
+  if (joined.length <= MAX_SYNTHESIS_SOURCE_CHARS) return joined;
+  return joined.slice(0, MAX_SYNTHESIS_SOURCE_CHARS);
 }
 
 function boundedText(value: unknown, maxLength: number): string {
@@ -225,6 +255,28 @@ export function getClinicalGenerationConfig(): ClinicalGenerationConfig {
   return { ...config, disableThinking: true };
 }
 
+async function generateClinicalOutputOnce(
+  kind: ClinicalOutputKind,
+  sourceText: string,
+  route: Extract<ReturnType<typeof routeFor>, { ok: true }>,
+  reasoner: ClinicalReasoner
+): Promise<ClinicalOutputResult> {
+  try {
+    const output = await reasoner.processText(sourceText, route.model, null, {
+      ...route.overrides,
+      systemPrompt: getClinicalOutputSystemPrompt(kind),
+      maxTokens: kind === "focus" ? 80 : kind === "summary" ? 700 : 1_200,
+      temperature: 0.1,
+      requireCompleteOutput: true,
+    });
+    const content = parseClinicalOutput(kind, output);
+    if (!content) throw new Error("empty clinical output");
+    return { success: true, kind, content, provider: route.provider, model: route.model };
+  } catch {
+    return { success: false, kind, errorCode: "GENERATION_FAILED", error: PUBLIC_ERRORS.GENERATION_FAILED };
+  }
+}
+
 export async function generateClinicalOutput(
   kind: ClinicalOutputKind,
   transcript: string,
@@ -234,29 +286,38 @@ export async function generateClinicalOutput(
   if (route.ok === false) {
     return { success: false, kind, errorCode: route.errorCode, error: PUBLIC_ERRORS[route.errorCode] };
   }
-  if (!transcript.trim()) {
+  const cleanTranscript = transcript.trim();
+  if (!cleanTranscript) {
     return { success: false, kind, errorCode: "GENERATION_FAILED", error: PUBLIC_ERRORS.GENERATION_FAILED };
   }
 
-  try {
-    const output = await (await resolveReasoner(options.reasoner)).processText(
-      boundedTranscript(transcript),
-      route.model,
-      null,
-      {
-        ...route.overrides,
-        systemPrompt: getClinicalOutputSystemPrompt(kind),
-        maxTokens: kind === "focus" ? 80 : kind === "summary" ? 700 : 1_200,
-        temperature: 0.1,
-        requireCompleteOutput: true,
-      }
-    );
-    const content = parseClinicalOutput(kind, output);
-    if (!content) throw new Error("empty clinical output");
-    return { success: true, kind, content, provider: route.provider, model: route.model };
-  } catch {
-    return { success: false, kind, errorCode: "GENERATION_FAILED", error: PUBLIC_ERRORS.GENERATION_FAILED };
+  const reasoner = await resolveReasoner(options.reasoner);
+  const chunks = splitClinicalTranscript(cleanTranscript);
+  if (chunks.length === 1) {
+    return generateClinicalOutputOnce(kind, chunks[0].text, route, reasoner);
   }
+
+  // Map each chunk first so the middle of a long encounter is never silently
+  // discarded. Reduce the bounded chunk outputs only after every source chunk
+  // has produced a valid result.
+  const partials: string[] = [];
+  for (const chunk of chunks) {
+    const partial = await generateClinicalOutputOnce(kind, chunk.text, route, reasoner);
+    if (!partial.success) return partial;
+    partials.push(partial.content);
+  }
+
+  const synthesis = await generateClinicalOutputOnce(
+    kind,
+    [
+      "The following are evidence-preserving summaries of every chronological transcript chunk.",
+      "Synthesize them into one final clinical output. Do not mention chunks or this instruction.",
+      synthesisSource(partials),
+    ].join("\n\n"),
+    route,
+    reasoner
+  );
+  return synthesis;
 }
 
 export async function generateClinicalOutputs(

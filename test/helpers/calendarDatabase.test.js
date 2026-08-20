@@ -906,7 +906,7 @@ test("encounter outputs are local, retry-safe, and stale when the canonical tran
   db.db.close();
 });
 
-test("final encounter transcript is persisted before the encounter is completed", (t) => {
+test("final encounter transcript is persisted without completing the encounter", (t) => {
   const db = createDb(t);
   if (!db) return;
 
@@ -920,11 +920,48 @@ test("final encounter transcript is persisted before the encounter is completed"
   });
 
   const finalTranscript = '[{"id":"segment-1","text":"Final transcript"}]';
-  const result = db.completeEncounterRecording(started.note.id, finalTranscript);
+  const result = db.saveEncounterRecording(started.note.id, finalTranscript);
   assert.equal(result.success, true);
   assert.equal(db.getNote(started.note.id).transcript, finalTranscript);
-  assert.equal(db.getEncounterById(started.encounter.id).lifecycle_state, "completed");
+  assert.equal(db.getEncounterById(started.encounter.id).lifecycle_state, "in_progress");
   assert.equal(db.getEncounterOutput(started.encounter.id).summary_status, "stale");
+  db.db.close();
+});
+
+test("encounter completion requires current clinical outputs and locks note edits", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const event = restEvent("ai_receptionist", "primary", "encounter-lock");
+  db.upsertCalendarEvents([event]);
+  db.upsertEncountersFromCalendarEvents([event]);
+  const started = db.startEncounterForCalendarEvent(event.id);
+  db.saveEncounterRecording(started.note.id, '[{"text":"Ready to complete"}]');
+
+  const notReady = db.markEncounterComplete(started.encounter.id);
+  assert.equal(notReady.success, false);
+  assert.equal(notReady.errorCode, "ENCOUNTER_OUTPUTS_NOT_READY");
+
+  db.updateEncounterOutput(started.encounter.id, {
+    summary: "Summary",
+    summary_status: "ready",
+    soap: "SOAP",
+    soap_status: "ready",
+    focus: "Focus",
+    focus_status: "ready",
+  });
+  const template = db.getDefaultNoteTemplate("encounter", { includeRaw: true });
+  db.updateNote(started.note.id, {
+    enhanced_content: "# Clinical Encounter\n\nApplied template",
+    enhanced_template_revision_id: template.active_revision_id,
+  });
+  const completed = db.markEncounterComplete(started.encounter.id);
+  assert.equal(completed.success, true);
+  assert.equal(completed.encounter.lifecycle_state, "completed");
+  const edit = db.updateNote(started.note.id, { content: "Should not save" });
+  assert.equal(edit.success, false);
+  assert.equal(edit.errorCode, "ENCOUNTER_COMPLETED");
+  assert.equal(db.getNote(started.note.id).content, "");
   db.db.close();
 });
 
@@ -936,7 +973,7 @@ test("direct encounter resolution and output reconciliation do not depend on sch
   db.upsertCalendarEvents([completedEvent]);
   db.upsertEncountersFromCalendarEvents([completedEvent]);
   const started = db.startEncounterForCalendarEvent(completedEvent.id);
-  const completed = db.completeEncounterRecording(
+  const completed = db.saveEncounterRecording(
     started.note.id,
     '[{"text":"The patient reports improvement."}]'
   );
@@ -1388,7 +1425,7 @@ test("timezone-aware focus title promotion preserves manual and stale-output gua
   db.upsertEncountersFromCalendarEvents([event]);
   const started = db.startEncounterForCalendarEvent(event.id);
   assert.equal(started.note.title, "2026-08-14 — Calendar follow-up");
-  db.completeEncounterRecording(started.note.id, "Medication tolerance improved.");
+  db.saveEncounterRecording(started.note.id, "Medication tolerance improved.");
   const begun = db.beginEncounterOutputGeneration(started.encounter.id, "focus");
   const refined = db.finishEncounterOutputGeneration(started.encounter.id, begun.token, {
     focus: "Medication tolerance follow-up",

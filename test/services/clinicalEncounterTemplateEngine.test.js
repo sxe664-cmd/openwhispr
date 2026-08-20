@@ -165,6 +165,69 @@ test("compact evidence is exact and merges through the canonical validator", () 
   );
 });
 
+test("compact evidence merges overlapping chunks without overwriting distinct observations", () => {
+  const source = "Pain is 6/10 today. Later, pain is 3/10 after treatment.";
+  const request = buildClinicalEncounterCompactActionRequest(source);
+  const first = parseClinicalEncounterCompactOutput(
+    JSON.stringify({
+      fields: [{
+        field: "historyOfPresentIllness.painLevel",
+        value: "6/10",
+        evidence: ["6/10 today"],
+      }],
+    }),
+    source,
+    { allowedFieldKeys: request.fieldKeys }
+  );
+  const second = parseClinicalEncounterCompactOutput(
+    JSON.stringify({
+      fields: [{
+        field: "historyOfPresentIllness.painLevel",
+        value: "3/10",
+        evidence: ["pain is 3/10 after treatment"],
+      }],
+    }),
+    source,
+    { allowedFieldKeys: request.fieldKeys }
+  );
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  const merged = mergeClinicalEncounterCompactExtractions(
+    [first.extraction, second.extraction],
+    source
+  );
+  assert.equal(merged.ok, true);
+  assert.equal(
+    merged.document.sections.historyOfPresentIllness.fields.painLevel.value,
+    "6/10\n3/10"
+  );
+  assert.equal(
+    merged.document.sections.historyOfPresentIllness.fields.painLevel.sourceRefs.length,
+    2
+  );
+});
+
+test("compact requests honor active template visibility and presentation labels", () => {
+  const template = `## History of Present Illness
+### Current Complaints [bullets]:
+### Quality:
+## Plan
+### Follow-up:`;
+  const request = buildClinicalEncounterCompactActionRequest("Patient reports pain.", {
+    templateText: template,
+  });
+
+  assert.deepEqual(new Set(request.fieldKeys), new Set([
+    "historyOfPresentIllness.currentComplaints",
+    "historyOfPresentIllness.painQuality",
+    "plan.followUp",
+  ]));
+  assert.match(request.systemPrompt, /current complaints/);
+  assert.match(request.systemPrompt, /quality/);
+  assert.doesNotMatch(request.systemPrompt, /diagnosis\.documentedDiagnosis/);
+});
+
 test("compact parser rejects unknown fields and malformed evidence without inventing values", () => {
   const result = parseClinicalEncounterCompactOutput(
     JSON.stringify({

@@ -20,6 +20,11 @@ from receptionist.reminders.models import AppointmentEvent, ReminderJob, Reminde
 # Version 11 preserves private self-attendee provenance without backfilling it.
 SCHEMA_VERSION = 11
 
+# A manual provider call is normally short-lived, but a process crash can
+# leave its ledger row claimed. Reclaim after a bounded interval so a failed
+# desktop process cannot permanently block a reminder channel.
+MANUAL_CLAIM_TIMEOUT_SECONDS = 15 * 60
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -28,6 +33,17 @@ def utc_now_iso() -> str:
 def _parse_event_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _manual_claim_is_stale(claimed_at: str | None, now: datetime) -> bool:
+    if not claimed_at:
+        return True
+    raw_timestamp = claimed_at.removeprefix("manual:")
+    try:
+        started_at = _parse_event_datetime(raw_timestamp)
+    except (TypeError, ValueError):
+        return True
+    return (now - started_at).total_seconds() >= MANUAL_CLAIM_TIMEOUT_SECONDS
 
 
 def _self_attendee_presence(value: object) -> bool | None:
@@ -970,8 +986,13 @@ class ReminderStore:
                 ON CONFLICT(idempotency_key) DO UPDATE SET
                     event_summary=excluded.event_summary, event_end=excluded.event_end,
                     event_timezone=excluded.event_timezone, recipient_id=excluded.recipient_id, due_at=excluded.due_at,
-                    status=CASE WHEN reminder_jobs.status='sent' THEN reminder_jobs.status ELSE excluded.status END,
-                    reason=excluded.reason, claimed_at=NULL, updated_at=excluded.updated_at
+                    status=CASE WHEN reminder_jobs.status IN ('sent', 'claimed')
+                                THEN reminder_jobs.status ELSE excluded.status END,
+                    reason=CASE WHEN reminder_jobs.status='claimed'
+                                THEN reminder_jobs.reason ELSE excluded.reason END,
+                    claimed_at=CASE WHEN reminder_jobs.status='claimed'
+                                    THEN reminder_jobs.claimed_at ELSE NULL END,
+                    updated_at=excluded.updated_at
                 """,
                 (key, event.source, event.calendar_id, event.event_id, event.event_uid, event.summary,
                  event.start.isoformat(), event.end.isoformat(), event.timezone,
@@ -991,9 +1012,40 @@ class ReminderStore:
         """
         self.init_db()
         claim_token = f"manual:{utc_now_iso()}"
+        claim_now = _parse_event_datetime(claim_token.removeprefix("manual:"))
         event_start = event.start.isoformat()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+
+            stale_claims = conn.execute(
+                """
+                SELECT id, claimed_at FROM reminder_jobs
+                WHERE source=? AND calendar_id=? AND event_id=? AND event_start=?
+                  AND channel=? AND phase IN ('pre', 'manual')
+                  AND status='claimed' AND reason='manual_send_pending'
+                  AND claimed_at IS NOT NULL
+                """,
+                (event.source, event.calendar_id, event.event_id, event_start, channel),
+            ).fetchall()
+            for stale in stale_claims:
+                if not _manual_claim_is_stale(stale["claimed_at"], claim_now):
+                    continue
+                conn.execute(
+                    """
+                    UPDATE reminder_jobs
+                    SET status='failed', reason='manual_send_interrupted',
+                        claimed_at=NULL, updated_at=?
+                    WHERE id=? AND status='claimed' AND claimed_at=?
+                    """,
+                    (claim_token.removeprefix("manual:"), stale["id"], stale["claimed_at"]),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO reminder_attempts(job_id, attempted_at, status, provider, detail)
+                    VALUES (?, ?, 'failed', 'manual', 'manual send interrupted before completion')
+                    """,
+                    (stale["id"], claim_token.removeprefix("manual:")),
+                )
 
             sent = conn.execute(
                 """

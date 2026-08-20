@@ -457,7 +457,10 @@ class EnvironmentManager {
   }
 
   getFloatingIconAutoHide() {
-    return this._getKey("FLOATING_ICON_AUTO_HIDE") === "true";
+    // Missing values are new installations and should default to hiding the
+    // widget after an intentional dictation cycle. Preserve an explicit false
+    // preference for existing users.
+    return this._getKey("FLOATING_ICON_AUTO_HIDE") !== "false";
   }
 
   saveFloatingIconAutoHide(enabled) {

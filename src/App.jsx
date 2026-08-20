@@ -249,7 +249,10 @@ export default function App() {
         window.electronAPI?.hideWindow?.();
       }, 500);
     } else if (!floatingIconAutoHide && prevAutoHideRef.current) {
-      window.electronAPI?.showDictationPanel?.();
+      const showPromise = window.electronAPI?.showDictationPanel?.();
+      void showPromise?.catch((error) => {
+        console.debug("Dictation panel is unavailable while updating visibility", error);
+      });
     }
 
     prevAutoHideRef.current = floatingIconAutoHide;

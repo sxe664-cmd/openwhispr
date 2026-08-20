@@ -124,5 +124,12 @@ export function useEncounters(limit = 100): UseEncountersReturn {
     return () => unsubscribe?.();
   }, [loadLocal]);
 
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.onEncounterCompleted?.(() => {
+      void loadLocal();
+    });
+    return () => unsubscribe?.();
+  }, [loadLocal]);
+
   return { encounters, isLoading, syncState, lastSyncedAt, error, refresh };
 }

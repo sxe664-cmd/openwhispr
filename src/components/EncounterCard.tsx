@@ -60,7 +60,9 @@ export default function EncounterCard({
   const patientReady = hasLinkedPatientFolder(encounter);
   const canStart = Boolean(encounter.calendar_event_id) && patientReady &&
     (encounter.lifecycle_state === "scheduled" || encounter.lifecycle_state === "in_progress");
-  const canOpen = encounter.lifecycle_state === "completed" && encounter.note_id != null;
+  const canOpen =
+    (encounter.lifecycle_state === "in_progress" || encounter.lifecycle_state === "completed") &&
+    encounter.note_id != null;
   const patientState = patientReady ? "linked" : "review";
   const patientStateLabel = patientState === "linked"
     ? t("encounters.patient.linked")

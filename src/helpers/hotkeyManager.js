@@ -726,12 +726,15 @@ class HotkeyManager extends EventEmitter {
     return false;
   }
 
-  async initializeHotkey(mainWindow, callback) {
-    if (!mainWindow || !callback) {
-      throw new Error("mainWindow and callback are required");
+  setMainWindow(mainWindow) {
+    this.mainWindow = mainWindow || null;
+  }
+
+  async initializeHotkey(callback) {
+    if (!callback) {
+      throw new Error("Hotkey callback is required");
     }
 
-    this.mainWindow = mainWindow;
     this.hotkeyCallback = callback;
 
     // Try GNOME native shortcuts on any GNOME session (X11 or Wayland).
@@ -759,7 +762,7 @@ class HotkeyManager extends EventEmitter {
               });
               if (!ok) {
                 this.useGnome = false;
-                this.loadSavedHotkeyOrDefault(mainWindow, callback);
+                this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
               }
             }
           } catch (err) {
@@ -768,7 +771,7 @@ class HotkeyManager extends EventEmitter {
               err.message
             );
             this.useGnome = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
           }
         };
 
@@ -805,7 +808,7 @@ class HotkeyManager extends EventEmitter {
               );
               if (!ok) {
                 this.useHyprland = false;
-                this.loadSavedHotkeyOrDefault(mainWindow, callback);
+                this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
               }
             }
           } catch (err) {
@@ -814,7 +817,7 @@ class HotkeyManager extends EventEmitter {
               err.message
             );
             this.useHyprland = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
           }
         };
 
@@ -858,7 +861,7 @@ class HotkeyManager extends EventEmitter {
               this.kdeManager.close();
               this.kdeManager = null;
               this.useKDE = false;
-              this.loadSavedHotkeyOrDefault(mainWindow, callback);
+              this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
             }
           } catch (err) {
             debugLogger.log(
@@ -868,7 +871,7 @@ class HotkeyManager extends EventEmitter {
             this.kdeManager?.close();
             this.kdeManager = null;
             this.useKDE = false;
-            this.loadSavedHotkeyOrDefault(mainWindow, callback);
+            this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
           }
         };
 
@@ -891,12 +894,12 @@ class HotkeyManager extends EventEmitter {
         debugLogger.log(`[HotkeyManager] Hotkey "${envHotkey}" registered from env`);
       } else {
         debugLogger.log(`[HotkeyManager] Env hotkey "${envHotkey}" failed, waiting for page`);
-        this.loadSavedHotkeyOrDefault(mainWindow, callback);
+        this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
       }
     } else {
-      const loadHotkey = () => this.loadSavedHotkeyOrDefault(mainWindow, callback);
-      if (mainWindow.webContents.isLoading()) {
-        mainWindow.webContents.once("did-finish-load", loadHotkey);
+      const loadHotkey = () => this.loadSavedHotkeyOrDefault(this.mainWindow, callback);
+      if (this.mainWindow?.webContents?.isLoading?.()) {
+        this.mainWindow.webContents.once("did-finish-load", loadHotkey);
       } else {
         loadHotkey();
       }
@@ -911,7 +914,7 @@ class HotkeyManager extends EventEmitter {
       let savedHotkey = process.env.DICTATION_KEY || "";
 
       // Fall back to localStorage if env var is empty
-      if (!savedHotkey) {
+      if (!savedHotkey && mainWindow && !mainWindow.isDestroyed()) {
         try {
           savedHotkey = await mainWindow.webContents.executeJavaScript(`
             localStorage.getItem("dictationKey") || ""
@@ -1008,19 +1011,8 @@ class HotkeyManager extends EventEmitter {
       debugLogger.warn("[HotkeyManager] Failed to save dictation key to env:", err.message);
     }
 
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      try {
-        this.mainWindow.webContents.send("setting-updated", { key: "dictationKey", value: hotkey });
-        debugLogger.log(`[HotkeyManager] Sent dictationKey update to main window`);
-        return true;
-      } catch (err) {
-        debugLogger.error("[HotkeyManager] Failed to send dictationKey update:", err.message);
-        return false;
-      }
-    } else {
-      debugLogger.warn("[HotkeyManager] Main window not available for setting sync");
-      return false;
-    }
+    this.sendToRenderers("setting-updated", { key: "dictationKey", value: hotkey });
+    return true;
   }
 
   async getSavedHotkey() {
@@ -1104,12 +1096,21 @@ class HotkeyManager extends EventEmitter {
     return false;
   }
 
-  notifyActiveHotkey(hotkey) {
-    for (const win of BrowserWindow.getAllWindows()) {
+  sendToRenderers(channel, payload) {
+    const windows = BrowserWindow.getAllWindows?.() || [];
+    for (const win of windows) {
       if (!win.isDestroyed()) {
-        win.webContents.send("dictation-key-active", hotkey);
+        try {
+          win.webContents.send(channel, payload);
+        } catch (err) {
+          debugLogger.warn(`[HotkeyManager] Failed to send ${channel}:`, err.message);
+        }
       }
     }
+  }
+
+  notifyActiveHotkey(hotkey) {
+    this.sendToRenderers("dictation-key-active", hotkey);
   }
 
   // Tell the renderer which hotkeys actually registered and which failed.
@@ -1121,22 +1122,18 @@ class HotkeyManager extends EventEmitter {
   }
 
   notifyHotkeyFallback(originalHotkey, fallbackHotkey) {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send("hotkey-fallback-used", {
-        original: originalHotkey,
-        fallback: fallbackHotkey,
-      });
-    }
+    this.sendToRenderers("hotkey-fallback-used", {
+      original: originalHotkey,
+      fallback: fallbackHotkey,
+    });
   }
 
   notifyHotkeyFailure(hotkey, result) {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send("hotkey-registration-failed", {
-        hotkey,
-        error: result?.error || i18nMain.t("hotkey.errors.registrationFailed", { hotkey }),
-        suggestions: result?.suggestions || ["F8", "F9", "Control+Shift+Space"],
-      });
-    }
+    this.sendToRenderers("hotkey-registration-failed", {
+      hotkey,
+      error: result?.error || i18nMain.t("hotkey.errors.registrationFailed", { hotkey }),
+      suggestions: result?.suggestions || ["F8", "F9", "Control+Shift+Space"],
+    });
   }
 
   async updateHotkey(hotkeyInput, callback) {

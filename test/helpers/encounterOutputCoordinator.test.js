@@ -11,7 +11,7 @@ function output(status = "pending") {
   };
 }
 
-test("coordinator serializes duplicate completion events and generates pending output", async () => {
+test("coordinator serializes duplicate recording-saved events and generates pending output", async () => {
   const { createEncounterOutputCoordinator } = await load();
   let beginCalls = 0;
   let generateCalls = 0;
@@ -32,9 +32,9 @@ test("coordinator serializes duplicate completion events and generates pending o
       applied: true,
       output: output("ready"),
     }),
-    onEncounterRecordingCompleted: (callback) => {
-      listeners.completed = callback;
-      return () => delete listeners.completed;
+    onEncounterRecordingSaved: (callback) => {
+      listeners.saved = callback;
+      return () => delete listeners.saved;
     },
     onNoteUpdated: () => () => {},
     getEncounters: async () => ({ success: true, encounters: [] }),
@@ -64,8 +64,8 @@ test("coordinator serializes duplicate completion events and generates pending o
     },
   });
   coordinator.start();
-  listeners.completed({ encounterId: 7 });
-  listeners.completed({ encounterId: 7 });
+  listeners.saved({ encounterId: 7 });
+  listeners.saved({ encounterId: 7 });
   await new Promise((resolve) => setTimeout(resolve, 20));
   coordinator.stop();
 

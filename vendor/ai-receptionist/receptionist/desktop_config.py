@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -652,6 +653,20 @@ def reminders_sync(args: argparse.Namespace) -> None:
     _print_json({"ok": True, "synced_events": synced_events, "source": "local-cache"})
 
 
+def reminder_statuses(args: argparse.Namespace) -> None:
+    """Return persisted manual reminder delivery state for calendar occurrences."""
+    try:
+        events = json.loads(args.events_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("reminder-status requires valid JSON in --events-json") from exc
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise ValueError("reminder-status requires --events-json to be a JSON array of objects")
+
+    config = _load_app_config()
+    store = ReminderStore(config.reminders.store_path)
+    _print_json({"ok": True, "statuses": store.get_reminder_statuses(events)})
+
+
 def calendar_feed(args: argparse.Namespace) -> None:
     """Sync configured calendar sources and emit a safe encounter feed.
 
@@ -861,6 +876,59 @@ def reschedule_appointment(args: argparse.Namespace) -> None:
     _print_json(result)
 
 
+def _run_manual_send(
+    *,
+    store: ReminderStore,
+    event: AppointmentEvent,
+    channel: str,
+    provider: str,
+    send: Callable[[], Any],
+) -> tuple[Any | None, bool]:
+    """Run one manual provider call with an atomic, persisted delivery lease."""
+    claim = store.claim_manual_slot(event=event, channel=channel)
+    if not claim:
+        raise RuntimeError(f"appointment {channel} reminder could not be claimed")
+    if claim.get("already_sent"):
+        return None, True
+    if claim.get("busy"):
+        raise RuntimeError(f"appointment {channel} reminder is already being sent")
+
+    job = claim.get("job")
+    claim_token = claim.get("claim_token")
+    if job is None or job.id is None or not claim_token:
+        raise RuntimeError(f"appointment {channel} reminder claim was incomplete")
+
+    try:
+        result = send()
+    except Exception as exc:
+        released = store.release_manual_slot(
+            job_id=job.id,
+            claim_token=claim_token,
+            previous_status=claim.get("previous_status"),
+            previous_reason=claim.get("previous_reason"),
+            created=bool(claim.get("created")),
+            provider=provider,
+            detail=f"{type(exc).__name__}: {exc}"[:500],
+        )
+        if not released:
+            raise RuntimeError(
+                f"appointment {channel} reminder failed and its ledger claim could not be released"
+            ) from exc
+        raise
+
+    completed = store.complete_manual_slot(
+        job_id=job.id,
+        claim_token=claim_token,
+        provider=provider,
+        detail="manual send completed",
+    )
+    if not completed:
+        raise RuntimeError(
+            f"appointment {channel} reminder was sent but its delivery could not be recorded"
+        )
+    return result, False
+
+
 def send_appointment_email(args: argparse.Namespace) -> None:
     registry_patient = None
     if getattr(args, "patient_id", ""):
@@ -874,7 +942,8 @@ def send_appointment_email(args: argparse.Namespace) -> None:
     if attendee_email is None:
         raise ValueError("appointment email requires a valid attendee email")
     config = _load_app_config()
-    event = ReminderStore(config.reminders.store_path).get_active_google_event(
+    store = ReminderStore(config.reminders.store_path)
+    event = store.get_active_google_event(
         calendar_id=args.calendar_id or "primary",
         event_id=args.event_id,
         event_uid=args.event_uid or None,
@@ -888,26 +957,36 @@ def send_appointment_email(args: argparse.Namespace) -> None:
         allowed_emails.add(normalize_email(registry_patient.email) or "")
     if attendee_email not in allowed_emails:
         raise ValueError("appointment email recipient is not an attendee or recovered contact for the stored event")
-    result = asyncio.run(
-        send_manual_appointment_email(
-            config=config,
-            event=event,
-            attendee_email=attendee_email,
-            registry_recipient=(
-                ReminderRecipient(
-                    recipient_id=registry_patient.patient_id,
-                    display_name=registry_patient.name,
-                    email=registry_patient.email,
-                    phone=registry_patient.phone,
-                    preferred_channels=("email",),
-                    sms_consent_status=registry_patient.sms_consent_status,
-                    consent_source="patient_registry",
-                )
-                if registry_patient is not None
-                else None
-            ),
+    recipient = (
+        ReminderRecipient(
+            recipient_id=registry_patient.patient_id,
+            display_name=registry_patient.name,
+            email=registry_patient.email,
+            phone=registry_patient.phone,
+            preferred_channels=("email",),
+            sms_consent_status=registry_patient.sms_consent_status,
+            consent_source="patient_registry",
         )
+        if registry_patient is not None
+        else None
     )
+    result, already_sent = _run_manual_send(
+        store=store,
+        event=event,
+        channel="email",
+        provider=str(config.reminders.email_provider or "email"),
+        send=lambda: asyncio.run(
+            send_manual_appointment_email(
+                config=config,
+                event=event,
+                attendee_email=attendee_email,
+                registry_recipient=recipient,
+            )
+        ),
+    )
+    if already_sent:
+        _print_json({"ok": True, "already_sent": True, "event_id": args.event_id, "channel": "email"})
+        return
     _print_json(
         {
             "ok": True,
@@ -920,7 +999,8 @@ def send_appointment_email(args: argparse.Namespace) -> None:
 
 def send_appointment_sms(args: argparse.Namespace) -> None:
     config = _load_app_config()
-    event = ReminderStore(config.reminders.store_path).get_active_google_event(
+    store = ReminderStore(config.reminders.store_path)
+    event = store.get_active_google_event(
         calendar_id=args.calendar_id or "primary",
         event_id=args.event_id,
         event_uid=args.event_uid or None,
@@ -944,13 +1024,22 @@ def send_appointment_sms(args: argparse.Namespace) -> None:
             sms_consent_status=patient.sms_consent_status,
             consent_source="patient_registry",
         )
-    result = asyncio.run(
-        send_manual_appointment_sms(
-            config=config,
-            event=event,
-            registry_recipient=registry_recipient,
-        )
+    result, already_sent = _run_manual_send(
+        store=store,
+        event=event,
+        channel="sms",
+        provider=str(config.sms.provider.type),
+        send=lambda: asyncio.run(
+            send_manual_appointment_sms(
+                config=config,
+                event=event,
+                registry_recipient=registry_recipient,
+            )
+        ),
     )
+    if already_sent:
+        _print_json({"ok": True, "already_sent": True, "event_id": args.event_id, "channel": "sms"})
+        return
     _print_json(
         {
             "ok": True,
@@ -1480,6 +1569,13 @@ def build_parser() -> argparse.ArgumentParser:
     reminders_sync_parser.add_argument("--limit", type=int, default=500)
     reminders_sync_parser.add_argument("--now", default=None)
     reminders_sync_parser.set_defaults(func=reminders_sync)
+
+    reminder_status_parser = subparsers.add_parser(
+        "reminder-status",
+        help="Return persisted manual reminder delivery state for calendar occurrences",
+    )
+    reminder_status_parser.add_argument("--events-json", required=True)
+    reminder_status_parser.set_defaults(func=reminder_statuses)
 
     rename_parser = subparsers.add_parser("appointment-rename")
     rename_parser.add_argument("--calendar-id", default="primary")

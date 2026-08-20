@@ -65,10 +65,10 @@ function anything() {
 function buildFakeThis() {
   const target = {
     databaseManager: {
-      completeEncounterRecording: (_noteId, transcript) => ({
+      saveEncounterRecording: (_noteId, transcript) => ({
         success: true,
         note: { id: 17, transcript },
-        encounter: { id: 23, lifecycle_state: "completed" },
+        encounter: { id: 23, lifecycle_state: "in_progress" },
         output: null,
       }),
     },
@@ -93,15 +93,15 @@ test.before(() => {
   const fake = buildFakeThis();
   Object.setPrototypeOf(fake, Ctor.prototype);
   Ctor.prototype.setupHandlers.call(fake);
-  completionHandler = handlers.get("encounter-recording-complete");
-  assert.ok(completionHandler, "encounter completion handler must be registered");
+  completionHandler = handlers.get("encounter-recording-save");
+  assert.ok(completionHandler, "encounter recording save handler must be registered");
 });
 
 test.after(() => {
   Module._load = originalLoad;
 });
 
-test("final encounter completion publishes the canonical note for live renderer refresh", async () => {
+test("final encounter transcript save publishes the canonical note for live renderer refresh", async () => {
   broadcasts.length = 0;
 
   for (const transcript of [
@@ -116,4 +116,8 @@ test("final encounter completion publishes the canonical note for live renderer 
   const noteEvents = broadcasts.filter((entry) => entry.channel === "note-updated");
   assert.equal(noteEvents.length, 2);
   assert.equal(noteEvents.at(-1).payload.transcript, '[{"speaker":"SPEAKER_00","text":"Diarization failed but transcript remains"}]');
+  assert.equal(
+    broadcasts.filter((entry) => entry.channel === "encounter-recording-saved").length,
+    2
+  );
 });

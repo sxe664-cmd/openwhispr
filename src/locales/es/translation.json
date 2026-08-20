@@ -1797,7 +1797,28 @@
         "empty": "Clinical notes will appear here after the encounter is processed.",
         "unavailable": "Encounter output is unavailable.",
         "retry": "Retry",
-        "regenerate": "Regenerate"
+      "regenerate": "Regenerate"
+      },
+      "processingStatus": {
+        "label": "Encounter processing status",
+        "speakers": "Speakers",
+        "waitingForTranscript": "Waiting",
+        "skipped": "Skipped",
+        "processingEvidence": "Processing evidence",
+        "compiling": "Compiling note",
+        "generating": "Generating note"
+      },
+      "encounterCompleted": "Encounter complete",
+      "encounterCompletion": {
+        "title": "All clinical notes are ready",
+        "description": "Review the generated notes, then mark the encounter complete. Completed encounters can no longer be edited.",
+        "templateRequired": "Apply the clinical encounter note first",
+        "templateRequiredDescription": "Generate the clinical note from the transcript and apply it from the review panel before completing this encounter.",
+        "markComplete": "Mark complete",
+        "confirm": "Confirm complete",
+        "completing": "Completing…",
+        "warning": "This locks the transcript and clinical notes. You will not be able to edit or regenerate them afterward.",
+        "unavailable": "The encounter could not be completed. Please try again."
       },
       "untitled": "Sin título",
       "noteTitle": "Título de la nota",

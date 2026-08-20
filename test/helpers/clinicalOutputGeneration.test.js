@@ -31,6 +31,34 @@ test("local generation creates separate summary, SOAP, and focus outputs", async
   assert.equal(calls.find((call) => call.config.maxTokens === 80).config.maxTokens, 80);
 });
 
+test("long transcript generation maps every chunk before synthesis", async () => {
+  const { generateClinicalOutput, splitClinicalTranscript } = await load();
+  const transcript = [
+    "Beginning of encounter.",
+    "routine detail ".repeat(1_500),
+    "The middle-only finding is a documented change in shoulder pain.",
+    "routine detail ".repeat(1_500),
+    "End of encounter.",
+  ].join(" ");
+  const chunks = splitClinicalTranscript(transcript);
+  const calls = [];
+  const result = await generateClinicalOutput("summary", transcript, {
+    reasoner: {
+      processText: async (text, _model, _agent, config) => {
+        calls.push({ text, config });
+        return JSON.stringify({ summary: text.includes("middle-only") ? "Middle finding captured." : "Chunk captured." });
+      },
+    },
+    config: { mode: "local", model: "qwen-local" },
+  });
+
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.some((chunk) => chunk.text.includes("middle-only")));
+  assert.ok(calls.length >= chunks.length + 1);
+  assert.ok(calls.some((call) => call.text.includes("middle-only")));
+  assert.equal(result.success, true);
+});
+
 test("missing local model fails safely without invoking a provider", async () => {
   const { generateClinicalOutput } = await load();
   let called = false;

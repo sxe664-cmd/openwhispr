@@ -60,6 +60,14 @@ export interface TranscriptSegment {
   speakerLockSource?: TranscriptSpeakerLockSource;
 }
 
+export type TranscriptPersistenceStatus =
+  | "idle"
+  | "recording"
+  | "finalizing"
+  | "saving"
+  | "ready"
+  | "failed";
+
 export const SIDE_PANEL_BREAKPOINT_PX = 1024;
 
 interface SpeakerIdentification {
@@ -79,6 +87,8 @@ interface RecentSystemSpeaker {
 interface MeetingRecordingState {
   isRecording: boolean;
   isTranscribing: boolean;
+  /** The durable transcript lifecycle; recording=false alone is not completion. */
+  transcriptStatus: TranscriptPersistenceStatus;
   recordingNoteId: number | null;
   recordingNoteTitle: string | null;
   recordingFolderId: number | null;
@@ -439,6 +449,7 @@ let pushConfigTimeout: ReturnType<typeof setTimeout> | null = null;
 export const useMeetingRecordingStore = create<MeetingRecordingState>()(() => ({
   isRecording: false,
   isTranscribing: false,
+  transcriptStatus: "idle",
   recordingNoteId: null,
   recordingNoteTitle: null,
   recordingFolderId: null,
@@ -814,6 +825,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
   useMeetingRecordingStore.setState({
     isRecording: true,
     isTranscribing: true,
+    transcriptStatus: "recording",
     recordingNoteId: args.noteId,
     recordingNoteTitle: args.noteTitle,
     recordingFolderId: args.folderId,
@@ -917,6 +929,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       reportMeetingError(startResult?.error || "Failed to start meeting transcription", {
         isRecording: false,
         isTranscribing: false,
+        transcriptStatus: "failed",
       });
       stopMediaStream(micResult);
       stopMediaStream(systemCaptureResult.stream);
@@ -965,7 +978,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
             ? "No microphone is available and system audio capture is unsupported on this device."
             : systemCaptureError?.message ||
               "No microphone is available and system audio capture could not be started.",
-        { isRecording: false, isTranscribing: false }
+        { isRecording: false, isTranscribing: false, transcriptStatus: "failed" }
       );
       await window.electronAPI?.meetingTranscriptionStop?.();
       isRecordingFlag = false;
@@ -1339,6 +1352,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       error: (err as Error).message,
       isRecording: false,
       isTranscribing: false,
+      transcriptStatus: "failed",
     });
     isRecordingFlag = false;
     isStartingFlag = false;
@@ -1360,6 +1374,8 @@ export async function stopRecording(): Promise<StopRecordingResult> {
   isRecordingFlag = false;
   isStartingFlag = false;
 
+  useMeetingRecordingStore.setState({ transcriptStatus: "finalizing" });
+
   await cleanup();
 
   let diarizationSessionId: string | null = null;
@@ -1367,34 +1383,25 @@ export async function stopRecording(): Promise<StopRecordingResult> {
     const result = await window.electronAPI?.meetingTranscriptionStop?.();
     if (result?.diarizationSessionId) {
       diarizationSessionId = result.diarizationSessionId;
-      useMeetingRecordingStore.setState({ diarizationSessionId, diarizationStatus: "processing" });
+      useMeetingRecordingStore.setState({
+        diarizationSessionId,
+        diarizationStatus: "processing",
+        transcriptStatus: "saving",
+      });
+    } else if (result?.success) {
+      useMeetingRecordingStore.setState({ diarizationStatus: "skipped", transcriptStatus: "saving" });
     }
     if (result?.success && result.transcript) {
       useMeetingRecordingStore.setState({ transcript: result.transcript });
     } else if (result?.error) {
       reportMeetingError(result.error);
-      useMeetingRecordingStore.setState({ diarizationStatus: "failed" });
+      useMeetingRecordingStore.setState({ diarizationStatus: "failed", transcriptStatus: "failed" });
     }
 
-    if (result?.success) {
-      const state = useMeetingRecordingStore.getState();
-      const transcript =
-        state.segments.length > 0
-          ? serializeTranscriptSegments(state.segments)
-          : result.transcript ?? state.transcript;
-      if (state.recordingNoteId != null) {
-        const completed = await window.electronAPI?.completeEncounterRecording?.(
-          state.recordingNoteId,
-          transcript
-        );
-        if (completed && !completed.success) {
-          reportMeetingError(completed.error || "The final transcript could not be saved.");
-        }
-      }
-    }
   } catch (err) {
     reportMeetingError((err as Error).message);
     logger.error("Meeting transcription stop failed", { error: (err as Error).message }, "meeting");
+    useMeetingRecordingStore.setState({ transcriptStatus: "failed" });
   }
 
   useMeetingRecordingStore.setState({
@@ -1409,6 +1416,10 @@ export async function stopRecording(): Promise<StopRecordingResult> {
 
   logger.info("Meeting transcription stopped", {}, "meeting");
   return { diarizationSessionId };
+}
+
+export function setTranscriptPersistenceStatus(status: TranscriptPersistenceStatus): void {
+  useMeetingRecordingStore.setState({ transcriptStatus: status });
 }
 
 export function lockSpeaker(speakerId: string, displayName: string): void {

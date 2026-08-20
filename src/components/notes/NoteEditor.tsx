@@ -13,6 +13,7 @@ import {
   Search,
   Plus,
   Check,
+  LockKeyhole,
 } from "lucide-react";
 import { RichTextEditor } from "../ui/RichTextEditor";
 import type { Editor } from "@tiptap/react";
@@ -35,7 +36,7 @@ import type {
   NoteItem,
   FolderItem,
 } from "../../types/electron";
-import type { ActionProcessingState } from "../../hooks/useActionProcessing";
+import type { ActionProcessingProgress, ActionProcessingState } from "../../hooks/useActionProcessing";
 import ActionProcessingOverlay from "./ActionProcessingOverlay";
 import NoteBottomBar from "./NoteBottomBar";
 import EmbeddedChat, { type EmbeddedChatMode } from "./EmbeddedChat";
@@ -50,7 +51,9 @@ import {
 import EncounterClinicalOutputs, {
   type EncounterClinicalOutputMode,
 } from "./EncounterClinicalOutputs";
+import EncounterProcessingStatus from "./EncounterProcessingStatus";
 import type { CalendarAttendee } from "../../types/calendar";
+import type { TranscriptPersistenceStatus } from "../../stores/meetingRecordingStore";
 
 const CHIP_BUTTON_CLASS =
   "inline-flex items-center gap-1.5 text-[11px] px-1.5 py-0.5 rounded-md border border-border/70 dark:border-white/25 text-foreground/50 dark:text-foreground/35 hover:text-foreground/60 hover:border-border/60 hover:bg-foreground/3 dark:hover:text-foreground/40 dark:hover:border-white/10 dark:hover:bg-white/3 transition-all duration-150 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring/30";
@@ -152,6 +155,8 @@ interface NoteEditorProps {
   isSaving: boolean;
   isRecording: boolean;
   isProcessing: boolean;
+  transcriptStatus?: TranscriptPersistenceStatus;
+  isEncounterCompleted?: boolean;
   recordingAllowed?: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
@@ -164,6 +169,7 @@ interface NoteEditorProps {
   actionPicker?: React.ReactNode;
   actionProcessingState?: ActionProcessingState;
   actionName?: string | null;
+  actionProgress?: ActionProcessingProgress | null;
   diarizationSessionId?: string | null;
   diarizationStatus?: MeetingDiarizationStatus;
   onLiveSpeakerLock?: (speakerId: string, displayName: string) => void;
@@ -188,6 +194,8 @@ export default function NoteEditor({
   isSaving,
   isRecording,
   isProcessing,
+  transcriptStatus,
+  isEncounterCompleted = false,
   recordingAllowed = true,
   onStartRecording,
   onStopRecording,
@@ -200,6 +208,7 @@ export default function NoteEditor({
   actionPicker,
   actionProcessingState,
   actionName,
+  actionProgress,
   diarizationSessionId,
   diarizationStatus = "idle",
   onLiveSpeakerLock,
@@ -222,8 +231,8 @@ export default function NoteEditor({
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [isDiarizing, setIsDiarizing] = useState(false);
-  const canEditNote = true;
-  const canMoveToFolders = true;
+  const canEditNote = !isEncounterCompleted;
+  const canMoveToFolders = !isEncounterCompleted;
   const isClinicalEncounter = note.note_type === "meeting" && Boolean(note.calendar_event_id);
   const [diarizedSegments, setDiarizedSegments] = useState<TranscriptSegment[] | null>(null);
   const [speakerMappings, setSpeakerMappings] = useState<Record<string, string>>({});
@@ -652,10 +661,10 @@ export default function NoteEditor({
                 <span className="truncate max-w-40">{calendarEventName}</span>
               </span>
             )}
-            {folders && onMoveToFolder && !canMoveToFolders && folderName && (
-              <span className={cn(CHIP_BUTTON_CLASS, "cursor-default")}>
-                <FolderOpen size={11} className="shrink-0" />
-                {folderName}
+            {isEncounterCompleted && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/5 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                <LockKeyhole size={10} />
+                {t("notes.editor.encounterCompleted")}
               </span>
             )}
             {folders && onMoveToFolder && canMoveToFolders && (
@@ -930,16 +939,29 @@ export default function NoteEditor({
               )}
             </div>
           </div>
+          {note.note_type === "meeting" && (
+            <EncounterProcessingStatus
+              noteId={note.id}
+              hasTranscript={Boolean(note.transcript?.trim())}
+              isRecording={isRecording}
+              isProcessingTranscript={isProcessing}
+              transcriptStatus={transcriptStatus}
+              diarizationStatus={diarizationStatus}
+              diarizationEnabled={sessionDiarizationEnabled !== false}
+              hasDiarizedTranscript={displaySegments.some((segment) => Boolean(segment.speakerName))}
+            />
+          )}
         </div>
 
         <div className="flex-1 relative min-h-0">
-          <div className="h-full overflow-y-auto">
+          <div className="h-full overflow-hidden">
             {viewMode === "summary" || viewMode === "soap" ? (
               <EncounterClinicalOutputs
                 noteId={note.id}
                 mode={viewMode}
                 isRecording={isRecording}
                 isProcessingTranscript={isProcessing}
+                isEncounterCompleted={isEncounterCompleted}
                 diarizationStatus={diarizationStatus}
                 transcript={note.transcript}
               />
@@ -974,21 +996,21 @@ export default function NoteEditor({
                   userTouchedStepper={userTouchedStepper}
                   onSetSessionDiarizationEnabled={onSetSessionDiarizationEnabled}
                   onSetSessionExpectedCount={onSetSessionExpectedCount}
-                  onMapSpeaker={handleMapSpeaker}
-                  onConfirmSuggestion={handleConfirmSuggestion}
-                  onDismissSuggestion={handleDismissSuggestion}
-                  onAttachSpeakerEmail={handleAttachSpeakerEmail}
-                  selectedSegmentIds={selectedSegmentIds}
-                  onToggleSelect={handleToggleSelect}
+                  onMapSpeaker={canEditNote ? handleMapSpeaker : undefined}
+                  onConfirmSuggestion={canEditNote ? handleConfirmSuggestion : undefined}
+                  onDismissSuggestion={canEditNote ? handleDismissSuggestion : undefined}
+                  onAttachSpeakerEmail={canEditNote ? handleAttachSpeakerEmail : undefined}
+                  selectedSegmentIds={canEditNote ? selectedSegmentIds : undefined}
+                  onToggleSelect={canEditNote ? handleToggleSelect : undefined}
                 />
               )
             ) : viewMode === "transcript" && hasMeetingTranscript ? (
-              <RichTextEditor value={note.transcript || ""} disabled />
+              <RichTextEditor value={note.transcript || ""} readOnly />
             ) : viewMode === "enhanced" && enhancement ? (
               <RichTextEditor
                 value={enhancement.content}
                 onChange={handleEnhancedChange}
-                disabled={!canEditNote}
+                readOnly={!canEditNote}
               />
             ) : (
               <RichTextEditor
@@ -996,13 +1018,15 @@ export default function NoteEditor({
                 onChange={handleContentChange}
                 editorRef={editorRef}
                 placeholder={t("notes.editor.startWriting")}
-                disabled={!canEditNote || actionProcessingState === "processing"}
+                disabled={actionProcessingState === "processing"}
+                readOnly={!canEditNote}
               />
             )}
           </div>
           <ActionProcessingOverlay
             state={actionProcessingState ?? "idle"}
             actionName={actionName ?? null}
+            progress={actionProgress}
           />
           <div
             className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"

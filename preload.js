@@ -164,6 +164,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("db-apply-note-generation-candidate", candidateId, options),
   discardNoteGenerationCandidate: (candidateId) =>
     ipcRenderer.invoke("db-discard-note-generation-candidate", candidateId),
+  getNoteGenerationRun: (noteId) => ipcRenderer.invoke("db-get-note-generation-run", noteId),
+  saveNoteGenerationRun: (input) => ipcRenderer.invoke("db-save-note-generation-run", input),
+  clearNoteGenerationRun: (noteId) => ipcRenderer.invoke("db-clear-note-generation-run", noteId),
   exportNote: (noteId, format) => ipcRenderer.invoke("export-note", noteId, format),
   exportTranscript: (noteId, format) => ipcRenderer.invoke("export-transcript", noteId, format),
   getClinicalNoteExportPreview: (noteId) =>
@@ -249,10 +252,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("note-updated", listener);
     return () => ipcRenderer.removeListener("note-updated", listener);
   },
-  onEncounterRecordingCompleted: (callback) => {
+  onEncounterRecordingSaved: (callback) => {
     const listener = (_event, payload) => callback?.(payload);
-    ipcRenderer.on("encounter-recording-completed", listener);
-    return () => ipcRenderer.removeListener("encounter-recording-completed", listener);
+    ipcRenderer.on("encounter-recording-saved", listener);
+    return () => ipcRenderer.removeListener("encounter-recording-saved", listener);
+  },
+  onEncounterCompleted: (callback) => {
+    const listener = (_event, payload) => callback?.(payload);
+    ipcRenderer.on("encounter-completed", listener);
+    return () => ipcRenderer.removeListener("encounter-completed", listener);
   },
   onNoteDeleted: (callback) => {
     const listener = (_event, data) => callback?.(data);
@@ -535,6 +543,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Activation mode persistence (file-based for reliable startup)
   getActivationMode: () => ipcRenderer.invoke("get-activation-mode"),
   saveActivationMode: (mode) => ipcRenderer.invoke("save-activation-mode", mode),
+  getFloatingIconAutoHide: () => ipcRenderer.invoke("get-floating-icon-auto-hide"),
 
   saveAllKeysToEnv: () => ipcRenderer.invoke("save-all-keys-to-env"),
   syncStartupPreferences: (prefs) => ipcRenderer.invoke("sync-startup-preferences", prefs),
@@ -946,8 +955,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("encounter-output-updated", listener);
     return () => ipcRenderer.removeListener("encounter-output-updated", listener);
   },
-  completeEncounterRecording: (noteId, transcript) =>
-    ipcRenderer.invoke("encounter-recording-complete", noteId, transcript),
+  saveEncounterRecording: (noteId, transcript) =>
+    ipcRenderer.invoke("encounter-recording-save", noteId, transcript),
+  markEncounterComplete: (encounterId) => ipcRenderer.invoke("encounter-mark-complete", encounterId),
   aiReceptionistGetStatus: () => ipcRenderer.invoke("ai-receptionist-status"),
   aiReceptionistStart: (options) => ipcRenderer.invoke("ai-receptionist-start", options),
   aiReceptionistStop: () => ipcRenderer.invoke("ai-receptionist-stop"),

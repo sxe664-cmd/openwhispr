@@ -11,10 +11,12 @@ import {
   runBackgroundAction,
   cancelAction as storeCancelAction,
   type ActionProcessingStatus,
+  type ActionProcessingProgress,
   type RunActionOptions,
 } from "../stores/actionProcessingStore";
 
 export type ActionProcessingState = ActionProcessingStatus;
+export type { ActionProcessingProgress };
 
 type CandidateAction = "apply" | "discard";
 
@@ -36,7 +38,7 @@ function candidateActionError(action: CandidateAction, code?: string): string {
 export function useActionProcessing(noteId: number | null) {
   const { t } = useTranslation();
 
-  const { status: state, actionName } = useActionProcessingStore(
+  const { status: state, actionName, progress } = useActionProcessingStore(
     useShallow((s) => selectNoteActionState(s, noteId))
   );
   const candidate = useActionProcessingStore(
@@ -127,6 +129,7 @@ export function useActionProcessing(noteId: number | null) {
   return {
     state,
     actionName,
+    progress,
     runAction,
     cancel,
     candidate,

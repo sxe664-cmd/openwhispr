@@ -3,15 +3,18 @@ import { useTranslation } from "react-i18next";
 import { Check } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { ActionProcessingState } from "../../hooks/useActionProcessing";
+import type { ActionProcessingProgress } from "../../hooks/useActionProcessing";
 
 interface ActionProcessingOverlayProps {
   state: ActionProcessingState;
   actionName: string | null;
+  progress?: ActionProcessingProgress | null;
 }
 
 export default function ActionProcessingOverlay({
   state,
   actionName,
+  progress,
 }: ActionProcessingOverlayProps) {
   const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
@@ -87,6 +90,16 @@ export default function ActionProcessingOverlay({
         ) : (
           <>
             <span className="text-xs font-medium text-accent/70 tracking-tight">{actionName}</span>
+            {progress && progress.total > 1 && (
+              <span className="text-[10px] text-foreground/45">
+                {progress.stage === "extracting"
+                  ? t("notes.editor.processingStatus.processingEvidence")
+                  : progress.stage === "compiling"
+                    ? t("notes.editor.processingStatus.compiling")
+                    : t("notes.editor.processingStatus.generating")}{" "}
+                · {progress.current}/{progress.total}
+              </span>
+            )}
             <div className="w-32 h-0.5 bg-accent/10 rounded-full overflow-hidden">
               <div
                 className="h-full w-1/3 bg-accent/40 rounded-full"

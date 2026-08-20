@@ -405,7 +405,9 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     // Show dictation panel when entering activation step
     if (newStep === activationStepIndex) {
       if (window.electronAPI?.showDictationPanel) {
-        window.electronAPI.showDictationPanel();
+        void window.electronAPI.showDictationPanel().catch((error) => {
+          console.error("Failed to open dictation panel during onboarding", error);
+        });
       }
     }
   }, [
