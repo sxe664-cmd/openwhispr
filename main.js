@@ -337,7 +337,7 @@ function initializeCoreManagers() {
     // emergency opt-out for diagnostics, but make normal launches live-call
     // ready without requiring a hidden environment variable.
     agentEnabled: process.env.OPENWHISPR_AI_RECEPTIONIST_AUTOSTART !== "0",
-    log: (message) => debugLogger.debug?.(message, {}, "ai-receptionist"),
+    log: (message, meta) => debugLogger.debug?.(message, meta, "ai-receptionist"),
   });
   receptionistCalendarBridge = new ReceptionistCalendarBridge({
     runtime: aiReceptionistRuntime,

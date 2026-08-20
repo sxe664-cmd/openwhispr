@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,24 @@ def _copy_if_missing(source: Path, target: Path) -> None:
     if source.exists() and not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+
+
+def _secure_oauth_token(path: Path) -> None:
+    """Keep the managed OAuth token private on Unix-like platforms.
+
+    Git-tracked seed files normally arrive with mode 0644. ``shutil.copy2``
+    preserves that mode, but Google auth rejects token files readable by
+    group/other users. Normalize both newly copied and already existing
+    runtime tokens so a first launch cannot fail on macOS before refresh.
+    """
+    if os.name == "nt" or not path.exists():
+        return
+    try:
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        # The auth layer will report a precise permissions error if the mode
+        # cannot be tightened, without exposing token contents.
+        pass
 
 
 def _rewrite_paths(node: Any, root: Path) -> Any:
@@ -128,6 +147,7 @@ def ensure_app_runtime() -> Path:
             Path.home() / ".aireceptionist" / "secrets" / "santiago" / "google-calendar-oauth.json",
             target_root / "secrets" / "google-oauth.json",
         )
+        _secure_oauth_token(target_root / "secrets" / "google-oauth.json")
         return config_path
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,5 +185,6 @@ def ensure_app_runtime() -> Path:
         Path.home() / ".aireceptionist" / "secrets" / "santiago" / "google-calendar-oauth.json",
         target_root / "secrets" / "google-oauth.json",
     )
+    _secure_oauth_token(target_root / "secrets" / "google-oauth.json")
     marker.write_text("single-app migration complete\n", encoding="utf-8")
     return config_path
