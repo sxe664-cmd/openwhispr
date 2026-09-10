@@ -17,6 +17,7 @@ const SOAP_LABELS = ["Subjective", "Objective", "Assessment", "Plan"];
 const SECTION_NAMES = [
   "summary",
   "soap",
+  "notes",
   "filledTemplate",
   "encounterDetails",
   "participants",
@@ -188,7 +189,7 @@ function getHiraLogoDataUri() {
 function normalizeSections(sections) {
   const requested = Array.isArray(sections)
     ? sections
-    : ["summary", "soap", "filledTemplate", "encounterDetails"];
+    : ["summary", "soap", "notes", "filledTemplate", "encounterDetails"];
   return [...new Set(requested.filter((section) => SECTION_NAMES.includes(section)))];
 }
 
@@ -208,6 +209,7 @@ function buildClinicalNoteDocument({ note, encounter, output, speakerMappings = 
     participants,
     summary: String(output?.summary || "").trim(),
     soap: parseSoap(output?.soap),
+    notes: String(note?.content || "").trim(),
     filledTemplate: String(note?.enhanced_content || "").trim(),
     transcript: segments.map((segment) => ({
       speaker: speakerName(segment, speakerMappings),
@@ -259,6 +261,12 @@ function renderClinicalNoteHtml(document) {
     }).join("");
     body += renderSection("SOAP note", `<div class="soap-grid">${soap}</div>`);
   }
+  if (selected.has("notes") && document.notes) {
+    body += renderSection(
+      "Additional notes",
+      `<div class="additional-notes">${clinicalMarkdown.render(document.notes)}</div>`
+    );
+  }
   if (selected.has("filledTemplate") && document.filledTemplate) {
     body += renderSection(
       "Filled clinical template",
@@ -296,6 +304,11 @@ p { margin: 0; white-space: pre-wrap; }
 .soap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .soap-block { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; min-height: 62px; break-inside: avoid; }
 .filled-template { color: #1f2937; font-size: 10pt; line-height: 1.5; }
+.additional-notes { color: #1f2937; font-size: 10pt; line-height: 1.5; }
+.additional-notes p { margin: 0 0 7px; white-space: normal; }
+.additional-notes ul, .additional-notes ol { margin: 4px 0 9px; padding-left: 24px; }
+.additional-notes li { margin: 2px 0; }
+.additional-notes h1, .additional-notes h2, .additional-notes h3 { color: #374151; border: 0; margin: 12px 0 5px; padding: 0; }
 .filled-template h1 { color: #111827; font-size: 18pt; margin: 0 0 12px; }
 .filled-template h2 { color: #1d4ed8; font-size: 12pt; margin: 16px 0 7px; }
 .filled-template h3 { color: #374151; font-size: 10pt; margin: 12px 0 5px; }
@@ -335,6 +348,10 @@ function buildClinicalNotePreview({ note, encounter, output }) {
       soap: {
         available: output?.soap_status === "ready" && Boolean(output?.soap),
         status: output?.soap_status || "pending",
+      },
+      notes: {
+        available: Boolean(String(note?.content || "").trim()),
+        status: String(note?.content || "").trim() ? "ready" : "empty",
       },
       filledTemplate: {
         available: Boolean(String(note?.enhanced_content || "").trim()),

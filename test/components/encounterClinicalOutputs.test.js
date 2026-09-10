@@ -190,4 +190,106 @@ test("generation failure also uses guarded finish for the safe failed state", as
   assert.equal(failureUpdates.focus_error_code, "GENERATION_FAILED");
   assert.equal(failureUpdates.summary_error_code, "GENERATION_FAILED");
   assert.equal(failureUpdates.soap_error_code, "GENERATION_FAILED");
+  assert.equal(failureUpdates.generation_phase, null);
+  assert.equal(failureUpdates.generation_next_retry_at, null);
+});
+
+test("transient generation failures are marked for bounded automatic retry", async () => {
+  const { runEncounterOutputGeneration } = await load();
+  let failureUpdates;
+  const retryAt = new Date(Date.now() + 5_000).toISOString();
+  const bridge = {
+    beginEncounterOutputGeneration: async () => ({
+      success: true,
+      output: output({ generation_attempt: 1 }),
+      transcript: "Canonical transcript",
+      token: { transcriptRevision: 8, transcriptHash: "canonical-sha256", generationId: "generation-retry" },
+    }),
+    finishEncounterOutputGeneration: async (_encounterId, _token, updates) => {
+      failureUpdates = updates;
+      return {
+        success: true,
+        applied: true,
+        output: output({
+          summary_status: "failed",
+          soap_status: "failed",
+          focus_status: "failed",
+          status: "failed",
+          generation_phase: "retrying",
+          generation_next_retry_at: retryAt,
+          generation_attempt: 1,
+        }),
+      };
+    },
+  };
+
+  const result = await runEncounterOutputGeneration(bridge, 42, false, async () => {
+    throw Object.assign(new Error("temporary network timeout"), { code: "ETIMEDOUT" });
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.retryable, true);
+  assert.equal(result.retryAt, retryAt);
+  assert.equal(failureUpdates.generation_phase, "retrying");
+  assert.equal(typeof failureUpdates.generation_next_retry_at, "string");
+
+  for (const [attempt, phase] of [
+    [2, "retrying"],
+    [3, null],
+  ]) {
+    let updates;
+    const boundedBridge = {
+      beginEncounterOutputGeneration: async () => ({
+        success: true,
+        output: output({ generation_attempt: attempt }),
+        transcript: "Canonical transcript",
+        token: { transcriptRevision: 8, transcriptHash: "canonical-sha256", generationId: `generation-${attempt}` },
+      }),
+      finishEncounterOutputGeneration: async (_encounterId, _token, nextUpdates) => {
+        updates = nextUpdates;
+        return { success: true, applied: true, output: output({ generation_phase: phase }) };
+      },
+    };
+    await runEncounterOutputGeneration(boundedBridge, 42, false, async () => {
+      throw Object.assign(new Error("temporary network timeout"), { code: "ETIMEDOUT" });
+    });
+    assert.equal(updates.generation_phase, phase);
+  }
+});
+
+test("progress callbacks pass through mapping and synthesis state", async () => {
+  const { runEncounterOutputGeneration } = await load();
+  const progress = [];
+  const bridge = {
+    beginEncounterOutputGeneration: async () => ({
+      success: true,
+      output: output({ generation_attempt: 1 }),
+      transcript: "Canonical transcript",
+      token: { transcriptRevision: 8, transcriptHash: "canonical-sha256", generationId: "generation-progress" },
+    }),
+    finishEncounterOutputGeneration: async () => ({
+      success: true,
+      applied: true,
+      output: output({ summary_status: "ready", soap_status: "ready", focus_status: "ready", status: "ready" }),
+    }),
+  };
+
+  await runEncounterOutputGeneration(
+    bridge,
+    42,
+    false,
+    async (_transcript, options) => {
+      options.onProgress({ phase: "mapping", current: 1, total: 3 });
+      options.onProgress({ phase: "synthesizing", current: 1, total: 1 });
+      return generatedResult();
+    },
+    undefined,
+    (value) => progress.push(value)
+  );
+
+  assert.deepEqual(progress, [
+    { phase: "mapping", current: 0, total: 0 },
+    { phase: "mapping", current: 1, total: 3 },
+    { phase: "synthesizing", current: 1, total: 1 },
+  ]);
 });

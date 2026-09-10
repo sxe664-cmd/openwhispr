@@ -18,7 +18,7 @@ import {
 import type { ActionItem } from "../../types/electron";
 
 interface ActionPickerProps {
-  onRunAction: (action: ActionItem) => void;
+  onRunAction: (action: ActionItem) => void | Promise<void>;
   onManageActions: () => void;
   disabled?: boolean;
 }

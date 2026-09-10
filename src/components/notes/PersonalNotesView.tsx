@@ -13,6 +13,10 @@ import ClinicalNoteExportDialog from "./ClinicalNoteExportDialog";
 import NoteGenerationCandidateReview from "./NoteGenerationCandidateReview";
 import EncounterCompletionPrompt from "./EncounterCompletionPrompt";
 import { useActionProcessing } from "../../hooks/useActionProcessing";
+import {
+  isBuiltInGenerateNotesAction,
+  resolveEncounterTemplate,
+} from "../../stores/actionProcessingStore";
 import type { NoteMoveTarget } from "../../hooks/useNoteDragAndDrop";
 import {
   normalizeMeetingContext,
@@ -21,6 +25,7 @@ import {
   type NoteItem,
 } from "../../types/electron";
 import {
+  getSettings,
   useSettingsStore,
   selectIsCloudNoteFormattingMode,
   selectPolicyEffectiveSettings,
@@ -29,7 +34,6 @@ import {
 import { cn } from "../lib/utils";
 import logger from "../../utils/logger";
 import { parseTranscriptSegments } from "../../utils/parseTranscriptSegments";
-import { serializeTranscriptSegments } from "../../utils/transcriptSpeakerState";
 import { isExplicitSpeakerCount, resolveExpectedSpeakerCount } from "../../utils/participants";
 import {
   useNotes,
@@ -54,7 +58,7 @@ import {
   useIsNarrowWindow,
   startRecording as storeStartRecording,
   stopRecording as storeStopRecording,
-  setTranscriptPersistenceStatus,
+  togglePauseRecording,
   lockSpeaker,
   setSessionDiarizationEnabled,
   setSessionExpectedCount,
@@ -75,6 +79,7 @@ import {
   type PendingEnhancedSnapshot,
   type PendingNoteWrite,
 } from "../../lib/noteEditorPendingSave";
+import { insertEncounterTemplate } from "../../lib/encounterTemplateInsertion";
 
 function makeContentHash(content: string): string {
   return String(content.length) + "-" + content.slice(0, 50);
@@ -107,7 +112,14 @@ interface PendingEnhancedSave extends PendingEnhancedSnapshot {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
-type PendingSaveReason = "switch" | "overview" | "unmount";
+type PendingSaveReason =
+  | "switch"
+  | "overview"
+  | "unmount"
+  | "manual"
+  | "export"
+  | "complete"
+  | "autosave";
 
 interface PersonalNotesViewProps {
   onOpenSettings?: (section: string) => void;
@@ -134,6 +146,8 @@ export default function PersonalNotesView({
   const isSidePanelLayout = isMeetingMode || (isNarrowWindow && activeNoteId != null);
   const activeFolderId = useActiveFolderId();
   const [isSaving, setIsSaving] = useState(false);
+  const [isExplicitSaveInProgress, setIsExplicitSaveInProgress] = useState(false);
+  const [isInsertingEncounterTemplate, setIsInsertingEncounterTemplate] = useState(false);
   const [draft, setDraftState] = useState<NoteEditorDraft | null>(null);
   const draftRef = useRef<NoteEditorDraft | null>(null);
   const [showActionManager, setShowActionManager] = useState(false);
@@ -141,6 +155,23 @@ export default function PersonalNotesView({
   const [showClinicalExport, setShowClinicalExport] = useState(false);
   const pendingDocumentRef = useRef<PendingDocumentSave | null>(null);
   const pendingEnhancedRef = useRef<PendingEnhancedSave | null>(null);
+  const inFlightSavePromisesRef = useRef<Set<Promise<boolean>>>(new Set());
+
+  const trackSavePromise = useCallback((promise: Promise<boolean>): Promise<boolean> => {
+    inFlightSavePromisesRef.current.add(promise);
+    setIsSaving(true);
+    void promise.then(
+      () => {
+        inFlightSavePromisesRef.current.delete(promise);
+        if (inFlightSavePromisesRef.current.size === 0) setIsSaving(false);
+      },
+      () => {
+        inFlightSavePromisesRef.current.delete(promise);
+        if (inFlightSavePromisesRef.current.size === 0) setIsSaving(false);
+      }
+    );
+    return promise;
+  }, []);
 
   const commitDraft = useCallback((next: NoteEditorDraft | null) => {
     draftRef.current = next;
@@ -179,24 +210,46 @@ export default function PersonalNotesView({
   }, []);
 
   const persistPendingWrites = useCallback(
-    (writes: PendingNoteWrite[], reason: PendingSaveReason) => {
-      for (const write of writes) {
-        void window.electronAPI.updateNote(write.noteId, write.updates).catch((err: unknown) => {
-          logger.warn(
-            `Failed to flush note before ${reason}`,
-            { error: (err as Error).message },
-            "notes"
-          );
-        });
-      }
+    async (writes: PendingNoteWrite[], reason: PendingSaveReason): Promise<boolean> => {
+      if (writes.length === 0) return true;
+      const savePromise = Promise.all(
+        writes.map(async (write) => {
+          try {
+            const result = await window.electronAPI.updateNote(write.noteId, write.updates);
+            if (result?.success === false) throw new Error("Note update was rejected");
+            return true;
+          } catch (err) {
+            logger.warn(
+              `Failed to flush note before ${reason}`,
+              { error: (err as Error).message },
+              "notes"
+            );
+            return false;
+          }
+        })
+      ).then((results) => results.every(Boolean));
+      return trackSavePromise(savePromise);
     },
-    []
+    [trackSavePromise]
   );
 
   const flushPendingSaves = useCallback(
-    (reason: PendingSaveReason) => {
+    async (reason: PendingSaveReason): Promise<boolean> => {
       const pending = takePendingSnapshots();
-      persistPendingWrites(collectPendingNoteWrites(pending.document, pending.enhanced), reason);
+      const pendingResult = await persistPendingWrites(
+        collectPendingNoteWrites(pending.document, pending.enhanced),
+        reason
+      );
+      let inFlightResult = true;
+      // A debounce timer can have already handed a write to IPC by the time
+      // Save, export, or completion is requested. Wait for that write too so
+      // the next action never reads an older database snapshot.
+      while (inFlightSavePromisesRef.current.size > 0) {
+        const saves = [...inFlightSavePromisesRef.current];
+        const results = await Promise.all(saves);
+        inFlightResult = results.every(Boolean) && inFlightResult;
+      }
+      return pendingResult && inFlightResult;
     },
     [persistPendingWrites, takePendingSnapshots]
   );
@@ -205,7 +258,7 @@ export default function PersonalNotesView({
     (nextNote: NoteItem | null, reason: Extract<PendingSaveReason, "switch" | "overview">) => {
       const pending = takePendingSnapshots();
       const transition = planNoteTransition(nextNote, pending.document, pending.enhanced);
-      persistPendingWrites(transition.writes, reason);
+      void persistPendingWrites(transition.writes, reason);
       commitDraft(transition.nextDraft);
     },
     [commitDraft, persistPendingWrites, takePendingSnapshots]
@@ -226,6 +279,7 @@ export default function PersonalNotesView({
   const { isComplete: isOnboardingComplete, complete: completeOnboarding } = useNotesOnboarding();
 
   const isTranscribing = useMeetingRecordingStore((s) => s.isRecording);
+  const isPaused = useMeetingRecordingStore((s) => s.isPaused);
   const transcriptStatus = useMeetingRecordingStore((s) => s.transcriptStatus);
   const diarizationSessionId = useMeetingRecordingStore((s) => s.diarizationSessionId);
   const diarizationStatus = useMeetingRecordingStore((s) => s.diarizationStatus);
@@ -235,7 +289,6 @@ export default function PersonalNotesView({
   const userTouchedStepper = useMeetingRecordingStore((s) => s.userTouchedStepper);
   const meetingRecordingAllowed = useTranscriptionContextAllowed("meeting");
   const [meetingContext, setMeetingContext] = useState<MeetingContext>(readLastMeetingContext);
-  const [isFinalizingTranscript, setIsFinalizingTranscript] = useState(false);
   const [activeEncounter, setActiveEncounter] = useState<LocalEncounter | null>(null);
 
   const spaces = useSpaces();
@@ -319,19 +372,6 @@ export default function PersonalNotesView({
     [activeNote?.id]
   );
 
-  // Derive folder name and calendar event name for the metadata chips
-  const activeFolderName = useMemo(() => {
-    if (!activeNote?.folder_id) return null;
-    return folders.find((f) => f.id === activeNote.folder_id)?.name ?? null;
-  }, [activeNote?.folder_id, folders]);
-
-  // The editor's move-to-folder chip only offers folders in the note's own
-  // space; cross-space moves change the audience and need an explicit confirm.
-  const editorFolders = useMemo(
-    () => (activeNote ? folders.filter((f) => f.space_id === activeNote.space_id) : folders),
-    [activeNote, folders]
-  );
-
   const [calendarEventName, setCalendarEventName] = useState<string | null>(null);
   useEffect(() => {
     if (!activeNote?.calendar_event_id) {
@@ -371,11 +411,7 @@ export default function PersonalNotesView({
   }, [activeNote, meetingContext]);
 
   const stopRecording = useCallback(async () => {
-    setIsFinalizingTranscript(true);
-    const result = await storeStopRecording();
-    if (!result.diarizationSessionId) {
-      setIsFinalizingTranscript(false);
-    }
+    await storeStopRecording();
   }, []);
 
   useEffect(() => {
@@ -414,24 +450,25 @@ export default function PersonalNotesView({
       noteId: snapshot.noteId,
       title: snapshot.title,
       content: snapshot.content,
-      timer: setTimeout(async () => {
+      timer: setTimeout(() => {
         if (pendingDocumentRef.current !== pending) return;
         pendingDocumentRef.current = null;
-        setIsSaving(true);
-        try {
-          await window.electronAPI.updateNote(pending.noteId, {
-            title: pending.title,
-            content: pending.content,
-          });
-        } catch (err) {
-          logger.warn("Failed to save note", { error: (err as Error).message }, "notes");
-        } finally {
-          setIsSaving(false);
-        }
+        void persistPendingWrites(
+          [
+            {
+              noteId: pending.noteId,
+              updates: {
+                title: pending.title,
+                content: pending.content,
+              },
+            },
+          ],
+          "autosave"
+        );
       }, 1000),
     };
     pendingDocumentRef.current = pending;
-  }, []);
+  }, [persistPendingWrites]);
 
   const scheduleEnhancedSave = useCallback((snapshot: NoteEditorDraft) => {
     const current = pendingEnhancedRef.current;
@@ -440,27 +477,22 @@ export default function PersonalNotesView({
     const pending: PendingEnhancedSave = {
       noteId: snapshot.noteId,
       enhancedContent: snapshot.enhancedContent,
-      timer: setTimeout(async () => {
+      timer: setTimeout(() => {
         if (pendingEnhancedRef.current !== pending) return;
         pendingEnhancedRef.current = null;
-        setIsSaving(true);
-        try {
-          await window.electronAPI.updateNote(pending.noteId, {
-            enhanced_content: pending.enhancedContent,
-          });
-        } catch (err) {
-          logger.warn(
-            "Failed to save enhanced note content",
-            { error: (err as Error).message },
-            "notes"
-          );
-        } finally {
-          setIsSaving(false);
-        }
+        void persistPendingWrites(
+          [
+            {
+              noteId: pending.noteId,
+              updates: { enhanced_content: pending.enhancedContent },
+            },
+          ],
+          "autosave"
+        );
       }, 1000),
     };
     pendingEnhancedRef.current = pending;
-  }, []);
+  }, [persistPendingWrites]);
 
   const handleTitleChange = useCallback(
     (sourceNoteId: number, title: string) => {
@@ -490,6 +522,35 @@ export default function PersonalNotesView({
     [commitDraft, scheduleDocumentSave]
   );
 
+  const handleInsertEncounterTemplate = useCallback(async () => {
+    if (
+      !activeNote ||
+      activeNote.id !== activeNoteId ||
+      activeNote.note_type !== "meeting" ||
+      !activeNote.calendar_event_id
+    ) {
+      return;
+    }
+
+    setIsInsertingEncounterTemplate(true);
+    try {
+      const template = await resolveEncounterTemplate(getSettings());
+      const currentDraft = draftRef.current;
+      if (!currentDraft || currentDraft.noteId !== activeNote.id) return;
+
+      const nextContent = insertEncounterTemplate(currentDraft.content, template.templateText);
+      handleContentChange(activeNote.id, nextContent);
+    } catch (error) {
+      toast({
+        title: t("notes.editor.templateInsert.failed"),
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setIsInsertingEncounterTemplate(false);
+    }
+  }, [activeNote, activeNoteId, handleContentChange, t, toast]);
+
   const handleEnhancedContentChange = useCallback(
     (sourceNoteId: number, content: string) => {
       const next = applyNoteDraftMutation(draftRef.current, {
@@ -505,7 +566,9 @@ export default function PersonalNotesView({
   );
 
   useEffect(() => {
-    return () => flushPendingSaves("unmount");
+    return () => {
+      void flushPendingSaves("unmount");
+    };
   }, [flushPendingSaves]);
 
   const handleNewNoteIn = useCallback(
@@ -604,7 +667,11 @@ export default function PersonalNotesView({
   const {
     state: actionProcessingState,
     actionName,
+    isBuiltInAction,
+    errorMessage: actionErrorMessage,
     progress: actionProgress,
+    startedAt: actionStartedAt,
+    cancel: cancelAction,
     runAction,
     candidate,
     candidateBusy,
@@ -630,16 +697,45 @@ export default function PersonalNotesView({
       }
     : null;
   const editorEnhancedContent = editorNote?.enhanced_content ?? null;
+  const [persistedGenerationSourceHash, setPersistedGenerationSourceHash] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activeNote?.id || !window.electronAPI.getNoteGenerationSource) {
+      setPersistedGenerationSourceHash(null);
+      return;
+    }
+    let active = true;
+    void window.electronAPI.getNoteGenerationSource(activeNote.id).then((source) => {
+      if (active) setPersistedGenerationSourceHash(source.success ? source.sourceHash ?? null : null);
+    }).catch(() => {
+      if (active) setPersistedGenerationSourceHash(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    activeNote?.id,
+    activeNote?.generation_source_revision,
+    activeNote?.transcript_revision,
+    activeNote?.updated_at,
+  ]);
 
   const isEnhancementStale = useMemo(() => {
     if (!editorEnhancedContent || !activeNote?.enhanced_at_content_hash) return false;
-    const currentHash = makeContentHash(`${editorNote?.content ?? ""}\n${activeNoteRawTranscript}`);
-    return currentHash !== activeNote.enhanced_at_content_hash;
+    // Custom actions retain their historical weak hash contract. Comparing it
+    // to SHA-256 would mark every custom-action result stale immediately.
+    if (/^\d+-/.test(activeNote.enhanced_at_content_hash)) {
+      return makeContentHash(`${activeNote.content ?? ""}\n${activeNote.transcript ?? ""}`) !==
+        activeNote.enhanced_at_content_hash;
+    }
+    if (!persistedGenerationSourceHash) return false;
+    return persistedGenerationSourceHash !== activeNote.enhanced_at_content_hash;
   }, [
     activeNote?.enhanced_at_content_hash,
-    activeNoteRawTranscript,
+    activeNote?.content,
+    activeNote?.transcript,
     editorEnhancedContent,
-    editorNote?.content,
+    persistedGenerationSourceHash,
   ]);
 
   const handleExportNote = useCallback(
@@ -656,6 +752,48 @@ export default function PersonalNotesView({
       await window.electronAPI.exportTranscript(activeNoteId, format);
     },
     [activeNoteId]
+  );
+
+  const flushDraftForAction = useCallback(
+    async (reason: Extract<PendingSaveReason, "manual" | "export" | "complete">) => {
+      setIsExplicitSaveInProgress(true);
+      try {
+        return await flushPendingSaves(reason);
+      } finally {
+        setIsExplicitSaveInProgress(false);
+      }
+    },
+    [flushPendingSaves]
+  );
+
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    const success = await flushDraftForAction("manual");
+    if (!success) {
+      toast({
+        title: t("common.error"),
+        description: t("notes.editor.encounterCompletion.unavailable"),
+        variant: "destructive",
+      });
+    }
+    return success;
+  }, [flushDraftForAction, t, toast]);
+
+  const handleExportClinicalNote = useCallback(async () => {
+    const success = await flushDraftForAction("export");
+    if (!success) {
+      toast({
+        title: t("common.error"),
+        description: t("notes.editor.encounterCompletion.unavailable"),
+        variant: "destructive",
+      });
+      return;
+    }
+    setShowClinicalExport(true);
+  }, [flushDraftForAction, t, toast]);
+
+  const handleBeforeEncounterComplete = useCallback(
+    () => flushDraftForAction("complete"),
+    [flushDraftForAction]
   );
 
   useEffect(() => {
@@ -702,105 +840,13 @@ export default function PersonalNotesView({
     });
   }, [meetingRecordingRequest, activeNoteId, activeNote, onMeetingRecordingRequestHandled]);
 
-  const prevTranscribingRef = useRef(false);
-  const pendingTranscriptSaveNoteIdRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (prevTranscribingRef.current && !isTranscribing) {
-      pendingTranscriptSaveNoteIdRef.current = recordingNoteId;
-    }
-    prevTranscribingRef.current = isTranscribing;
-
-    const currentDiarizationStatus = useMeetingRecordingStore.getState().diarizationStatus;
-    const pendingNoteId = pendingTranscriptSaveNoteIdRef.current;
-    if (
-      pendingNoteId == null ||
-      isTranscribing ||
-      currentDiarizationStatus === "queued" ||
-      currentDiarizationStatus === "processing"
-    ) {
-      return;
-    }
-
-    const {
-      transcript: realtimeTranscript,
-      segments: realtimeSegments,
-      diarizationSessionId: currentDiarizationSessionId,
-    } = useMeetingRecordingStore.getState();
-    const localTranscript =
-      realtimeSegments.length > 0
-        ? serializeTranscriptSegments(realtimeSegments)
-        : realtimeTranscript;
-    pendingTranscriptSaveNoteIdRef.current = null;
-
-    void (async () => {
-      try {
-        let transcript = localTranscript;
-        // Delayed diarization persists the canonical enriched transcript from
-        // its module-level listener. Re-read it before publishing the
-        // recording-saved event so the local live segments cannot overwrite
-        // those speaker labels.
-        if (currentDiarizationSessionId && window.electronAPI.getNote) {
-          const persisted = await window.electronAPI.getNote(pendingNoteId);
-          if (persisted?.transcript) transcript = persisted.transcript;
-        }
-        if (!transcript) {
-          setTranscriptPersistenceStatus("failed");
-          return;
-        }
-        if (window.electronAPI.saveEncounterRecording) {
-          const result = await window.electronAPI.saveEncounterRecording(pendingNoteId, transcript);
-          if (!result.success) {
-            setTranscriptPersistenceStatus("failed");
-            logger.warn("Failed to save encounter transcript", { error: result.error }, "meeting");
-          } else {
-            setTranscriptPersistenceStatus("ready");
-          }
-        } else {
-          await window.electronAPI.updateNote(pendingNoteId, { transcript });
-          setTranscriptPersistenceStatus("ready");
-        }
-      } catch (error) {
-        pendingTranscriptSaveNoteIdRef.current = pendingNoteId;
-        setTranscriptPersistenceStatus("failed");
-        logger.warn(
-          "Failed to save encounter transcript",
-          { error: (error as Error).message },
-          "meeting"
-        );
-      } finally {
-        setIsFinalizingTranscript(false);
-      }
-    })();
-  }, [diarizationStatus, isTranscribing, recordingNoteId]);
-
-  useEffect(() => {
-    if (!isFinalizingTranscript || isTranscribing) return;
-    if (diarizationStatus !== "queued" && diarizationStatus !== "processing") {
-      setIsFinalizingTranscript(false);
-    }
-  }, [diarizationStatus, isFinalizingTranscript, isTranscribing]);
-
-  useEffect(() => {
-    if (!isTranscribing) return;
-
-    const interval = setInterval(() => {
-      const { recordingNoteId: currentRecordingNoteId, segments: realtimeSegments } =
-        useMeetingRecordingStore.getState();
-      if (!currentRecordingNoteId || realtimeSegments.length === 0) return;
-      window.electronAPI.updateNote(currentRecordingNoteId, {
-        transcript: serializeTranscriptSegments(realtimeSegments),
-      });
-    }, 30_000);
-
-    return () => clearInterval(interval);
-  }, [isTranscribing]);
-
   const isActiveNoteRecording = isTranscribing && recordingNoteId === activeNote?.id;
   const isActiveTranscriptSession = recordingNoteId === activeNote?.id;
   const activeTranscriptStatus = isActiveTranscriptSession ? transcriptStatus : "idle";
   const activeDiarizationStatus = isActiveTranscriptSession ? diarizationStatus : "idle";
-  const isActiveTranscriptProcessing = isActiveTranscriptSession && isFinalizingTranscript;
+  const isActiveTranscriptProcessing =
+    isActiveTranscriptSession &&
+    (transcriptStatus === "finalizing" || transcriptStatus === "saving");
 
   if (!isOnboardingComplete) {
     return (
@@ -875,17 +921,38 @@ export default function PersonalNotesView({
               note={editorNote}
               onTitleChange={handleTitleChange}
               onContentChange={handleContentChange}
-              isSaving={isSaving}
+              isSaving={isSaving || isExplicitSaveInProgress}
               isRecording={isActiveNoteRecording}
+              isPaused={isPaused && isActiveNoteRecording}
               isProcessing={isActiveTranscriptProcessing}
               transcriptStatus={activeTranscriptStatus}
               isEncounterCompleted={activeEncounter?.lifecycle_state === "completed"}
               recordingAllowed={meetingRecordingAllowed}
               onStartRecording={startRecording}
               onStopRecording={stopRecording}
+              onTogglePauseRecording={togglePauseRecording}
               onExportNote={handleExportNote}
               onExportTranscript={handleExportTranscript}
-              onExportClinicalNote={() => setShowClinicalExport(true)}
+              onSave={handleSave}
+              onInsertEncounterTemplate={handleInsertEncounterTemplate}
+              isInsertingEncounterTemplate={isInsertingEncounterTemplate}
+              onExportClinicalNote={handleExportClinicalNote}
+              encounterCompletion={
+                editorNote.note_type === "meeting" && editorNote.calendar_event_id && activeEncounter ? (
+                  <EncounterCompletionPrompt
+                    noteId={editorNote.id}
+                    isRecording={isActiveNoteRecording}
+                    isProcessing={isActiveTranscriptProcessing}
+                    isCompleted={activeEncounter.lifecycle_state === "completed"}
+                    templateReady={Boolean(
+                      editorNote.enhanced_content?.trim() &&
+                        editorNote.enhanced_template_revision_id != null
+                    )}
+                    onBeforeComplete={handleBeforeEncounterComplete}
+                    onCompleted={(encounter) => setActiveEncounter(encounter)}
+                  />
+                ) : null
+              }
               enhancement={
                 editorEnhancedContent
                   ? {
@@ -905,34 +972,94 @@ export default function PersonalNotesView({
               userTouchedStepper={userTouchedStepper}
               onSetSessionDiarizationEnabled={setSessionDiarizationEnabled}
               onSetSessionExpectedCount={setSessionExpectedCount}
-              folderName={activeFolderName}
-              calendarEventName={calendarEventName}
-              folders={editorFolders}
-              onMoveToFolder={handleMoveToFolder}
-              onCreateFolderAndMove={handleCreateFolderAndMove}
               onCancelPendingSaves={cancelPendingSaves}
               actionProcessingState={actionProcessingState}
               actionName={actionName}
+              actionIsBuiltIn={isBuiltInAction}
+              actionErrorMessage={actionErrorMessage}
               actionProgress={actionProgress}
+              actionStartedAt={actionStartedAt}
+              onCancelAction={cancelAction}
               actionPicker={
                 <ActionPicker
-                  onRunAction={(action) => {
+                  onRunAction={async (action) => {
                     if (!editorNote) return;
-                    const {
-                      recordingNoteId: liveNoteId,
-                      transcript: liveTranscript,
-                      meetingContext: liveMeetingContextForAction,
-                    } = useMeetingRecordingStore.getState();
-                    const rawTranscript =
-                      (liveNoteId === activeNote?.id ? liveTranscript : "") ||
-                      activeNoteRawTranscript;
-                    const noteContent = editorNote.content;
+                    const builtInGenerateNotes = isBuiltInGenerateNotesAction(action);
+                    let sourceHash = makeContentHash(`${editorNote.content}\n${activeNoteRawTranscript}`);
+                    let sourceRevision = activeNote?.transcript_revision;
+                    let persistedMeetingContext = activeNote?.meeting_context;
+                    let rawTranscript = activeNoteRawTranscript;
+                    let noteContent = editorNote.content;
+                    let canonicalBuiltInSource: string | null = null;
+
+                    if (builtInGenerateNotes) {
+                      const noteId = editorNote.id;
+                      const flushed = await flushDraftForAction("manual");
+                      if (!flushed) {
+                        toast({
+                          title: t("common.error"),
+                          description: t("notes.editor.encounterCompletion.unavailable"),
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      const sourceApi = window.electronAPI.getNoteGenerationSource;
+                      if (typeof sourceApi !== "function") {
+                        toast({
+                          title: t("common.error"),
+                          description: "The saved note could not be read. Try again.",
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      let source: Awaited<ReturnType<typeof sourceApi>>;
+                      try {
+                        source = await sourceApi(noteId);
+                      } catch {
+                        toast({
+                          title: t("common.error"),
+                          description: "The saved note could not be read. Try again.",
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      if (
+                        !source?.success ||
+                        !source.sourceHash
+                      ) {
+                        toast({
+                          title: t("common.error"),
+                          description: "The saved note could not be read. Try again.",
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      sourceHash = source.sourceHash;
+                      sourceRevision = source.sourceRevision;
+                      noteContent = source.content ?? "";
+                      rawTranscript = source.transcript ?? "";
+                      canonicalBuiltInSource = source.sourceText?.trim() || null;
+                      persistedMeetingContext = source.meetingContext ?? persistedMeetingContext;
+                    } else {
+                      const {
+                        recordingNoteId: liveNoteId,
+                        transcript: liveTranscript,
+                        meetingContext: liveMeetingContextForAction,
+                      } = useMeetingRecordingStore.getState();
+                      rawTranscript =
+                        (liveNoteId === activeNote?.id ? liveTranscript : "") ||
+                        activeNoteRawTranscript;
+                      persistedMeetingContext =
+                        liveNoteId === activeNote?.id
+                          ? liveMeetingContextForAction
+                          : activeNote?.meeting_context;
+                    }
                     const hasNotes = !!noteContent.trim();
                     if (!hasNotes && !rawTranscript) return;
 
                     let formattedTranscript = "";
-                    let isMeetingNote = false;
-                    if (rawTranscript) {
+                    let isMeetingNote = editorNote.note_type === "meeting";
+                    if (rawTranscript && !canonicalBuiltInSource) {
                       const segments = parseTranscriptSegments(rawTranscript);
                       if (segments.length > 0) {
                         isMeetingNote = true;
@@ -941,9 +1068,7 @@ export default function PersonalNotesView({
                             (s) =>
                               `${
                                 s.source === "mic" &&
-                                (liveNoteId === activeNote?.id
-                                  ? liveMeetingContextForAction
-                                  : normalizeMeetingContext(activeNote?.meeting_context)) ===
+                                normalizeMeetingContext(persistedMeetingContext) ===
                                   "telehealth"
                                   ? t("notes.speaker.you")
                                   : s.source === "system"
@@ -958,16 +1083,19 @@ export default function PersonalNotesView({
                       }
                     }
 
-                    const parts = [
-                      hasNotes ? noteContent : "",
-                      formattedTranscript ? `## Meeting Transcript\n${formattedTranscript}` : "",
-                    ]
-                      .filter(Boolean)
-                      .join("\n\n");
-                    runAction(action, parts, makeContentHash(`${noteContent}\n${rawTranscript}`), {
+                    const parts = canonicalBuiltInSource
+                      ? canonicalBuiltInSource
+                      : [
+                          hasNotes ? noteContent : "",
+                          formattedTranscript ? `## Meeting Transcript\n${formattedTranscript}` : "",
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n");
+                    runAction(action, parts, sourceHash, {
                       isCloudMode,
                       modelId: effectiveModelId,
                       isMeetingNote,
+                      sourceRevision,
                       noteType: editorNote.note_type,
                       calendarEventId: editorNote.calendar_event_id,
                       allowTitleGeneration: isRegenerableNoteTitle(
@@ -986,25 +1114,13 @@ export default function PersonalNotesView({
                     (!editorNote?.content?.trim() &&
                       !hasLiveTranscript &&
                       !activeNoteRawTranscript) ||
-                    actionProcessingState === "processing"
+                    actionProcessingState === "processing" ||
+                    actionProcessingState === "retrying"
                   }
                 />
               }
             />
-            {editorNote.note_type === "meeting" && editorNote.calendar_event_id && activeEncounter && (
-              <EncounterCompletionPrompt
-                noteId={editorNote.id}
-                isRecording={isActiveNoteRecording}
-                isProcessing={isActiveTranscriptProcessing}
-                isCompleted={activeEncounter.lifecycle_state === "completed"}
-                templateReady={Boolean(
-                  editorNote.enhanced_content?.trim() &&
-                    editorNote.enhanced_template_revision_id != null
-                )}
-                onCompleted={(encounter) => setActiveEncounter(encounter)}
-              />
-            )}
-            {activeNote && candidate && activeEncounter?.lifecycle_state !== "completed" && (
+            {activeNote && candidate && (
               <NoteGenerationCandidateReview
                 candidate={candidate}
                 busy={candidateBusy}

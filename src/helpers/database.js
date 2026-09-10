@@ -5,6 +5,8 @@ const { randomUUID, createHash } = require("crypto");
 const debugLogger = require("./debugLogger");
 const { buildNoteSearchQuery } = require("./noteSearch");
 const { normalizeStoredSpeakerCount } = require("./speakerCount");
+const { buildCanonicalNoteGenerationSource } = require("./noteGenerationSource");
+const { validateStructuredNoteTemplate, migrateLegacyNoteTemplate } = require("./structuredNoteTemplate.mjs");
 const {
   canonicalCalendarIdentityKey,
   localDayRange,
@@ -30,6 +32,12 @@ const { app } = require("electron");
 const MAX_SNIPPET_TRIGGER_LENGTH = 100;
 
 const ENCOUNTER_OUTPUT_STATUSES = new Set(["pending", "processing", "ready", "failed", "stale"]);
+const ENCOUNTER_OUTPUT_GENERATION_PHASES = new Set(["mapping", "synthesizing", "retrying"]);
+const SAFE_ENCOUNTER_OUTPUT_ERROR_CODES = new Set([
+  "LOCAL_MODEL_NOT_CONFIGURED",
+  "BYOK_NOT_CONFIGURED",
+  "GENERATION_FAILED",
+]);
 const PATIENT_RESOLUTIONS = [
   "created",
   "matched",
@@ -179,16 +187,31 @@ function hashEncounterTranscript(transcript) {
 }
 
 function hashNoteGenerationSource(note) {
-  return hashEncounterTranscript(
-    String(note?.content ?? "") + "\n" + String(note?.transcript ?? "")
-  );
+  return buildCanonicalNoteGenerationSource(note).sourceHash;
+}
+
+function legacyNoteGenerationSourceHash(note) {
+  return hashEncounterTranscript(String(note?.content ?? "") + "\n" + String(note?.transcript ?? ""));
 }
 
 function decorateEncounterOutput(output) {
   if (!output) return null;
   const publicOutput = { ...output };
   delete publicOutput.generation_id;
-  delete publicOutput.generation_started_at;
+  delete publicOutput.merged_evidence_json;
+  for (const field of [
+    "summary_error_code",
+    "soap_error_code",
+    "focus_error_code",
+    "generation_last_error_code",
+  ]) {
+    if (
+      publicOutput[field] != null &&
+      !SAFE_ENCOUNTER_OUTPUT_ERROR_CODES.has(publicOutput[field])
+    ) {
+      publicOutput[field] = null;
+    }
+  }
   // `status` predates the optional focus output and remains the summary/SOAP
   // aggregate consumed by existing encounter flows. Focus has its own status;
   // letting a pending focus hold this legacy aggregate in pending/processing
@@ -199,6 +222,12 @@ function decorateEncounterOutput(output) {
   else if (statuses.includes("failed")) status = "failed";
   else if (statuses.includes("stale")) status = "stale";
   else if (statuses.every((entry) => entry === "ready")) status = "ready";
+  if (!ENCOUNTER_OUTPUT_GENERATION_PHASES.has(publicOutput.generation_phase)) {
+    publicOutput.generation_phase = null;
+  }
+  publicOutput.generation_progress_current = Number(publicOutput.generation_progress_current) || 0;
+  publicOutput.generation_progress_total = Number(publicOutput.generation_progress_total) || 0;
+  publicOutput.generation_attempt = Number(publicOutput.generation_attempt) || 0;
   return { ...publicOutput, status };
 }
 
@@ -877,6 +906,37 @@ class DatabaseManager {
       } catch (err) {
         if (!err.message.includes("duplicate column")) throw err;
       }
+      for (const [column, definition] of [
+        ["generation_source_revision", "INTEGER NOT NULL DEFAULT 0"],
+        ["transcript_persistence_status", "TEXT NOT NULL DEFAULT 'idle'"],
+        ["finalized_transcript_revision", "INTEGER"],
+        ["transcript_finalized_at", "DATETIME"],
+        ["transcript_session_id", "TEXT"],
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE notes ADD COLUMN ${column} ${definition}`);
+        } catch (err) {
+          if (!err.message.includes("duplicate column")) throw err;
+        }
+      }
+      // A recorder cannot survive a process restart. Promote its latest local
+      // checkpoint so a crash cannot strand a usable transcript indefinitely.
+      this.db.exec(`
+        UPDATE notes
+        SET finalized_transcript_revision = transcript_revision,
+            transcript_persistence_status = 'finalized',
+            transcript_finalized_at = COALESCE(transcript_finalized_at, CURRENT_TIMESTAMP),
+            transcript_session_id = NULL
+        WHERE COALESCE(TRIM(transcript), '') <> ''
+          AND (
+            finalized_transcript_revision IS NULL
+            OR transcript_persistence_status IN ('recording', 'checkpointed', 'finalizing')
+          );
+        UPDATE notes
+        SET transcript_persistence_status = 'failed', transcript_session_id = NULL
+        WHERE COALESCE(TRIM(transcript), '') = ''
+          AND transcript_persistence_status IN ('recording', 'checkpointed', 'finalizing');
+      `);
       try {
         this.db.exec("ALTER TABLE notes ADD COLUMN calendar_event_id TEXT");
       } catch (err) {
@@ -1159,6 +1219,12 @@ class DatabaseManager {
           encounter_id INTEGER PRIMARY KEY REFERENCES encounters(id) ON DELETE CASCADE,
           transcript_hash TEXT NOT NULL,
           transcript_revision INTEGER NOT NULL DEFAULT 0,
+          source_hash TEXT,
+          source_revision INTEGER NOT NULL DEFAULT 0,
+          evidence_schema_version INTEGER,
+          evidence_status TEXT NOT NULL DEFAULT 'pending',
+          evidence_model TEXT,
+          merged_evidence_json TEXT,
           summary TEXT,
           soap TEXT,
           focus TEXT,
@@ -1176,10 +1242,17 @@ class DatabaseManager {
           soap_error_code TEXT,
           focus_provider TEXT,
           focus_model TEXT,
-          focus_error_code TEXT,
-          generation_id TEXT,
-          generation_started_at DATETIME,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+           focus_error_code TEXT,
+           generation_id TEXT,
+           generation_started_at DATETIME,
+           generation_phase TEXT,
+           generation_progress_current INTEGER NOT NULL DEFAULT 0,
+           generation_progress_total INTEGER NOT NULL DEFAULT 0,
+           generation_attempt INTEGER NOT NULL DEFAULT 0,
+           generation_next_retry_at DATETIME,
+           generation_last_error_code TEXT,
+           generation_heartbeat_at DATETIME,
+           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           summary_updated_at DATETIME,
           soap_updated_at DATETIME
@@ -1191,6 +1264,12 @@ class DatabaseManager {
       for (const [column, definition] of [
         ["transcript_hash", "TEXT NOT NULL DEFAULT ''"],
         ["transcript_revision", "INTEGER NOT NULL DEFAULT 0"],
+        ["source_hash", "TEXT"],
+        ["source_revision", "INTEGER NOT NULL DEFAULT 0"],
+        ["evidence_schema_version", "INTEGER"],
+        ["evidence_status", "TEXT NOT NULL DEFAULT 'pending'"],
+        ["evidence_model", "TEXT"],
+        ["merged_evidence_json", "TEXT"],
         ["summary", "TEXT"],
         ["soap", "TEXT"],
         ["focus", "TEXT"],
@@ -1208,6 +1287,13 @@ class DatabaseManager {
         ["focus_error_code", "TEXT"],
         ["generation_id", "TEXT"],
         ["generation_started_at", "DATETIME"],
+        ["generation_phase", "TEXT"],
+        ["generation_progress_current", "INTEGER NOT NULL DEFAULT 0"],
+        ["generation_progress_total", "INTEGER NOT NULL DEFAULT 0"],
+        ["generation_attempt", "INTEGER NOT NULL DEFAULT 0"],
+        ["generation_next_retry_at", "DATETIME"],
+        ["generation_last_error_code", "TEXT"],
+        ["generation_heartbeat_at", "DATETIME"],
         ["summary_updated_at", "DATETIME"],
         ["soap_updated_at", "DATETIME"],
         ["focus_updated_at", "DATETIME"],
@@ -1218,6 +1304,24 @@ class DatabaseManager {
           if (!err.message.includes("duplicate column")) throw err;
         }
       }
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS encounter_evidence_chunks (
+          encounter_id INTEGER NOT NULL REFERENCES encounters(id) ON DELETE CASCADE,
+          source_revision INTEGER NOT NULL,
+          source_hash TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          model_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          chunk_count INTEGER NOT NULL,
+          chunk_hash TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (encounter_id, source_revision, schema_version, model_id, chunk_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_encounter_evidence_chunks_lookup
+          ON encounter_evidence_chunks(encounter_id, source_revision, source_hash, schema_version, model_id);
+      `);
       this.db.exec(
         "CREATE INDEX IF NOT EXISTS idx_encounter_outputs_transcript_hash ON encounter_outputs(transcript_hash)"
       );
@@ -2004,6 +2108,34 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_note_generation_runs_updated
         ON note_generation_runs(updated_at);
     `);
+    const revisionColumns = new Set(
+      this.db.pragma("table_info('note_template_revisions')").map((column) => column.name)
+    );
+    if (!revisionColumns.has("definition_json")) {
+      this.db.exec("ALTER TABLE note_template_revisions ADD COLUMN definition_json TEXT");
+    }
+    if (!revisionColumns.has("validation_status")) {
+      this.db.exec(
+        "ALTER TABLE note_template_revisions ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'legacy'"
+      );
+    }
+    const candidateColumns = new Set(
+      this.db.pragma("table_info('note_generation_candidates')").map((column) => column.name)
+    );
+    if (!candidateColumns.has("base_source_revision")) {
+      this.db.exec("ALTER TABLE note_generation_candidates ADD COLUMN base_source_revision INTEGER");
+    }
+    if (!candidateColumns.has("evidence_revision")) {
+      this.db.exec("ALTER TABLE note_generation_candidates ADD COLUMN evidence_revision INTEGER");
+    }
+    if (!candidateColumns.has("template_definition_hash")) {
+      this.db.exec("ALTER TABLE note_generation_candidates ADD COLUMN template_definition_hash TEXT");
+    }
+    if (!candidateColumns.has("candidate_kind")) {
+      this.db.exec(
+        "ALTER TABLE note_generation_candidates ADD COLUMN candidate_kind TEXT NOT NULL DEFAULT 'clinical_template'"
+      );
+    }
   }
 
   _seedNoteTemplate({ templateKey, name, description, kind, templateText, isBuiltin }) {
@@ -2121,6 +2253,7 @@ class DatabaseManager {
     }
     try {
       if (currentVersion < NOTE_TEMPLATES_SCHEMA_VERSION) this._migrateNoteTemplatesSchemaToV3();
+      else this._ensureNoteTemplateTables();
       this.db.transaction(() => this._upgradeLegacyClinicalEncounterTemplate())();
       this.noteTemplatesHealth = {
         ready: true,
@@ -3111,13 +3244,33 @@ class DatabaseManager {
 
   _noteTemplateRevisionRow(row, includeRaw = false) {
     if (!row) return null;
+    let definition = null;
+    try {
+      if (row.definition_json) definition = validateStructuredNoteTemplate(JSON.parse(row.definition_json));
+    } catch {
+      // Older presentation definitions are migrated from their preserved text.
+    }
+    const migrated = migrateLegacyNoteTemplate(row.template_text);
+    const shouldUpgradeNarrativeOnlyDefinition =
+      definition?.sections?.every((section) => section.type === "narrative") &&
+      migrated.definition?.sections?.some((section) => section.type === "canonical");
+    if (!definition || shouldUpgradeNarrativeOnlyDefinition) {
+      definition = migrated.definition;
+      row.validation_status = migrated.status;
+      this.db.prepare("UPDATE note_template_revisions SET definition_json = ?, validation_status = ? WHERE id = ?")
+        .run(definition ? JSON.stringify(definition) : null, migrated.status, row.id);
+    }
     const revision = {
       id: row.id,
       template_id: row.template_id,
       version: row.version,
       created_at: row.created_at,
+      validation_status: row.validation_status ?? "legacy",
     };
-    if (includeRaw) revision.template_text = row.template_text;
+    if (includeRaw) {
+      revision.template_text = row.template_text;
+      revision.definition = definition;
+    }
     return revision;
   }
 
@@ -3187,9 +3340,45 @@ class DatabaseManager {
   getDefaultNoteTemplate(kind = "generic", options = {}) {
     const normalizedKind = normalizeNoteTemplateKind(kind);
     if (!normalizedKind) return null;
-    const row = this.db
+    let row = this.db
       .prepare("SELECT * FROM note_templates WHERE kind = ? AND is_default = 1 LIMIT 1")
       .get(normalizedKind);
+    if (!row && normalizedKind === "encounter") {
+      this._seedNoteTemplate({
+        templateKey: "clinical-encounter",
+        name: "Clinical Encounter",
+        description: "A clinical encounter note template for Enhanced notes.",
+        kind: "encounter",
+        templateText: CLINICAL_ENCOUNTER_TEMPLATE_TEXT,
+        isBuiltin: true,
+      });
+      row = this.db
+        .prepare("SELECT * FROM note_templates WHERE template_key = 'clinical-encounter'")
+        .get();
+      if (row) {
+        this.db
+          .prepare("UPDATE note_templates SET is_default = 1 WHERE kind = 'encounter' AND id = ?")
+          .run(row.id);
+        row = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(row.id);
+      }
+    }
+    if (row?.is_builtin && !this.db.prepare("SELECT id FROM note_template_revisions WHERE id = ? AND template_id = ?").get(row.active_revision_id, row.id)) {
+      this._seedNoteTemplate({
+        templateKey: row.template_key,
+        name: row.name,
+        description: row.description,
+        kind: row.kind,
+        templateText: normalizedKind === "encounter" ? CLINICAL_ENCOUNTER_TEMPLATE_TEXT : GENERIC_NOTE_TEMPLATE_TEXT,
+        isBuiltin: Boolean(row.is_builtin),
+      });
+      const revision = this.db
+        .prepare("SELECT id FROM note_template_revisions WHERE template_id = ? ORDER BY version DESC LIMIT 1")
+        .get(row.id);
+      if (revision) {
+        this.db.prepare("UPDATE note_templates SET active_revision_id = ? WHERE id = ?").run(revision.id, row.id);
+        row = this.db.prepare("SELECT * FROM note_templates WHERE id = ?").get(row.id);
+      }
+    }
     return this._noteTemplateRow(row, options);
   }
 
@@ -3202,6 +3391,10 @@ class DatabaseManager {
       typeof input.templateKey === "string" && input.templateKey.trim()
         ? input.templateKey.trim().toLowerCase()
         : randomUUID();
+    let definitionJson = null;
+    try {
+      if (input.structuredDefinition) definitionJson = JSON.stringify(validateStructuredNoteTemplate(input.structuredDefinition));
+    } catch { return noteTemplateFailure("INVALID_TEMPLATE", { template: null }); }
     if (!name || !templateText || !kind || !/^[a-z0-9][a-z0-9._-]{1,119}$/.test(templateKey)) {
       return noteTemplateFailure("INVALID_TEMPLATE", { template: null });
     }
@@ -3215,9 +3408,11 @@ class DatabaseManager {
           .run(templateKey, name, description, kind);
         const revision = this.db
           .prepare(
-            "INSERT INTO note_template_revisions (template_id, version, template_text) VALUES (?, 1, ?)"
+            `INSERT INTO note_template_revisions
+              (template_id, version, template_text, definition_json, validation_status)
+             VALUES (?, 1, ?, ?, ?)`
           )
-          .run(inserted.lastInsertRowid, templateText);
+          .run(inserted.lastInsertRowid, templateText, definitionJson, definitionJson ? "valid" : "legacy");
         this.db
           .prepare("UPDATE note_templates SET active_revision_id = ? WHERE id = ?")
           .run(revision.lastInsertRowid, inserted.lastInsertRowid);
@@ -3244,6 +3439,10 @@ class DatabaseManager {
     const templateText = hasText
       ? normalizeNoteTemplateText(updates.templateText ?? updates.template_text)
       : null;
+    let definitionJson = null;
+    try {
+      if (updates.structuredDefinition) definitionJson = JSON.stringify(validateStructuredNoteTemplate(updates.structuredDefinition));
+    } catch { return noteTemplateFailure("INVALID_TEMPLATE", { template: null }); }
     if (!name || (hasText && !templateText)) {
       return noteTemplateFailure("INVALID_TEMPLATE", { template: null });
     }
@@ -3259,9 +3458,17 @@ class DatabaseManager {
           .get(id);
         const revision = this.db
           .prepare(
-            "INSERT INTO note_template_revisions (template_id, version, template_text) VALUES (?, ?, ?)"
+            `INSERT INTO note_template_revisions
+              (template_id, version, template_text, definition_json, validation_status)
+             VALUES (?, ?, ?, ?, ?)`
           )
-          .run(id, Number(latest.version) + 1, templateText);
+          .run(
+            id,
+            Number(latest.version) + 1,
+            templateText,
+            definitionJson,
+            definitionJson ? "valid" : "legacy"
+          );
         this.db
           .prepare(
             "UPDATE note_templates SET active_revision_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
@@ -3375,6 +3582,47 @@ class DatabaseManager {
     );
   }
 
+  getNoteGenerationSource(noteId) {
+    const normalizedNoteId = Number(noteId);
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) {
+      return { success: false, code: "NOTE_NOT_FOUND" };
+    }
+    const note = this.db
+      .prepare(
+        `SELECT id, note_type, content, transcript, transcript_revision,
+                generation_source_revision, transcript_persistence_status,
+                finalized_transcript_revision, transcript_finalized_at, meeting_context
+         FROM notes WHERE id = ? AND deleted_at IS NULL`
+      )
+      .get(normalizedNoteId);
+    if (!note) return { success: false, code: "NOTE_NOT_FOUND" };
+    const canonicalSource = buildCanonicalNoteGenerationSource(note);
+    return {
+      success: true,
+      noteId: note.id,
+      content: String(note.content ?? ""),
+      transcript: note.transcript == null ? "" : String(note.transcript),
+      transcriptRevision: Number(note.transcript_revision ?? 0),
+      sourceRevision: Number(note.generation_source_revision ?? 0),
+      finalizedTranscriptRevision:
+        note.finalized_transcript_revision == null
+          ? null
+          : Number(note.finalized_transcript_revision),
+      transcriptStatus: note.transcript_persistence_status ?? "idle",
+      isFinalized:
+        note.transcript_persistence_status === "finalized" &&
+        note.finalized_transcript_revision != null &&
+        Number(note.finalized_transcript_revision) === Number(note.transcript_revision ?? 0),
+      noteType: note.note_type,
+      meetingContext: note.meeting_context ?? null,
+      sourceHash: canonicalSource.sourceHash,
+      sourceText: canonicalSource.sourceText,
+      manualNotes: canonicalSource.manualNotes,
+      transcriptText: canonicalSource.transcriptText,
+      sourceSchemaVersion: canonicalSource.schemaVersion,
+    };
+  }
+
   saveNoteGenerationRun(input = {}) {
     const noteId = Number(input.noteId ?? input.note_id);
     const templateRevisionId = Number(input.templateRevisionId ?? input.template_revision_id);
@@ -3383,6 +3631,7 @@ class DatabaseManager {
     const chunkCount = Number(input.chunkCount ?? input.chunk_count);
     const completedChunks = Number(input.completedChunks ?? input.completed_chunks);
     const extractions = Array.isArray(input.extractions) ? input.extractions : [];
+    const status = input.status === "failed" ? "failed" : "processing";
     if (
       !Number.isInteger(noteId) ||
       noteId <= 0 ||
@@ -3409,7 +3658,7 @@ class DatabaseManager {
         `INSERT INTO note_generation_runs
           (note_id, template_revision_id, source_hash, model_id, chunk_count,
            completed_chunks, extractions_json, status, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', CURRENT_TIMESTAMP)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(note_id) DO UPDATE SET
            template_revision_id = excluded.template_revision_id,
            source_hash = excluded.source_hash,
@@ -3417,7 +3666,7 @@ class DatabaseManager {
            chunk_count = excluded.chunk_count,
            completed_chunks = excluded.completed_chunks,
            extractions_json = excluded.extractions_json,
-           status = 'processing',
+           status = excluded.status,
            updated_at = CURRENT_TIMESTAMP`
       )
       .run(
@@ -3427,7 +3676,8 @@ class DatabaseManager {
         modelId,
         chunkCount,
         completedChunks,
-        JSON.stringify(extractions)
+        JSON.stringify(extractions),
+        status
       );
     return { success: true, run: this._safeNoteGenerationRun(this.db.prepare("SELECT * FROM note_generation_runs WHERE note_id = ?").get(noteId)) };
   }
@@ -3443,6 +3693,12 @@ class DatabaseManager {
 
   _safeNoteGenerationCandidate(row, { includeClinicalSource = false } = {}) {
     if (!row) return null;
+    const sourceNote = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(row.note_id);
+    const isStale = !sourceNote ||
+      (row.base_source_revision != null && Number(row.base_source_revision) !== Number(sourceNote.generation_source_revision)) ||
+      ![hashNoteGenerationSource(sourceNote), legacyNoteGenerationSourceHash(sourceNote),
+        ...(!String(sourceNote.transcript ?? "") ? [hashEncounterTranscript(sourceNote.content)] : [])
+      ].includes(row.base_content_hash);
     const candidate = {
       candidate_id: row.candidate_id,
       note_id: row.note_id,
@@ -3452,6 +3708,11 @@ class DatabaseManager {
       template_revision_version: row.template_revision_version ?? null,
       base_content_hash: row.base_content_hash,
       base_enhanced_content_hash: row.base_enhanced_content_hash,
+      base_source_revision: row.base_source_revision ?? null,
+      evidence_revision: row.evidence_revision ?? null,
+      template_definition_hash: row.template_definition_hash ?? null,
+      candidate_kind: row.candidate_kind ?? "clinical_template",
+      is_stale: isStale,
       generated_content: row.generated_content,
       status: row.status,
       has_clinical_source: Boolean(row.clinical_source),
@@ -3481,6 +3742,7 @@ class DatabaseManager {
       ? noteIdOrInput
       : { ...optionsArg, noteId: noteIdOrInput, generatedContent: generatedContentArg };
     const noteId = input.noteId ?? input.note_id;
+    const candidateKind = input.candidateKind === "generic" ? "generic" : "clinical_template";
     const generatedContent = normalizeNoteTemplateText(
       input.generatedContent ?? input.generated_content ?? input.content ?? input.enhanced_content
     );
@@ -3491,19 +3753,31 @@ class DatabaseManager {
     // Encounter template generation is reserved for notes that are actually
     // owned by an encounter row. A meeting-shaped note by itself is still a
     // regular note and must not enter the clinical generation path.
-    if (!note || note.note_type !== "meeting" || !encounter) {
+    if (!note || (candidateKind === "clinical_template" && (note.note_type !== "meeting" || !encounter)) || (candidateKind === "generic" && encounter)) {
       return noteTemplateFailure("ENCOUNTER_REQUIRED", { candidate: null });
     }
     if (!generatedContent) return noteTemplateFailure("INVALID_TEMPLATE", { candidate: null });
+    const requestedSourceHash = String(input.sourceHash ?? input.source_hash ?? "").trim();
+    const sourceRevision = input.sourceRevision ?? input.source_revision;
+    const revisionMismatch = sourceRevision != null && Number(sourceRevision) !== Number(note.generation_source_revision);
+    const currentSourceHash = hashNoteGenerationSource(note);
+    if (
+      (revisionMismatch || (requestedSourceHash &&
+      requestedSourceHash !== currentSourceHash &&
+      requestedSourceHash !== legacyNoteGenerationSourceHash(note))) &&
+      !(input.preserveStaleDraft === true && requestedSourceHash && Number.isInteger(sourceRevision) && sourceRevision >= 0)
+    ) {
+      return noteTemplateFailure("CANDIDATE_STALE", { candidate: null });
+    }
     const templateRevisionId = input.templateRevisionId ?? input.template_revision_id;
     const revision = templateRevisionId == null
       ? this.db
           .prepare(
             `SELECT r.*, t.id AS template_id FROM note_template_revisions r
              JOIN note_templates t ON t.active_revision_id = r.id
-             WHERE t.kind = 'encounter' AND t.is_default = 1 LIMIT 1`
+             WHERE t.kind = ? AND t.is_default = 1 LIMIT 1`
           )
-          .get()
+          .get(candidateKind === "generic" ? "generic" : "encounter")
       : this.db
           .prepare(
             `SELECT r.*, t.id AS template_id FROM note_template_revisions r
@@ -3511,29 +3785,50 @@ class DatabaseManager {
           )
           .get(templateRevisionId);
     if (!revision) return noteTemplateFailure("TEMPLATE_REVISION_NOT_FOUND", { candidate: null });
+    const definitionMaterial = revision.definition_json || revision.template_text || "";
+    const templateDefinitionHash = definitionMaterial
+      ? createHash("sha256").update(String(definitionMaterial), "utf8").digest("hex")
+      : null;
     const candidateId = randomUUID();
     this.db
       .prepare(
         `INSERT INTO note_generation_candidates
           (candidate_id, note_id, template_id, template_revision_id, base_content_hash,
-           base_enhanced_content_hash, generated_content, clinical_source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           base_enhanced_content_hash, generated_content, clinical_source, base_source_revision,
+           evidence_revision, template_definition_hash, candidate_kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         candidateId,
         note.id,
         revision.template_id,
         revision.id,
-        hashNoteGenerationSource(note),
+        requestedSourceHash || currentSourceHash,
         hashEncounterTranscript(note.enhanced_content),
         generatedContent,
-        input.clinicalSource ?? input.clinical_source ?? note.transcript ?? null
+        candidateKind === "generic" ? null : input.clinicalSource ?? input.clinical_source ?? note.transcript ?? null,
+        input.sourceRevision ?? input.source_revision ?? null,
+        input.evidenceRevision ?? input.evidence_revision ??
+          (candidateKind === "clinical_template" ? sourceRevision ?? note.generation_source_revision : null),
+        input.templateDefinitionHash ?? input.template_definition_hash ?? templateDefinitionHash,
+        candidateKind
       );
     return { success: true, candidate: this._safeNoteGenerationCandidate(this._candidateRow(candidateId)) };
   }
 
   getNoteGenerationCandidate(candidateId, options = {}) {
     return this._safeNoteGenerationCandidate(this._candidateRow(candidateId), options);
+  }
+
+  getPendingNoteGenerationCandidate(noteId) {
+    const row = this.db
+      .prepare(
+        `SELECT candidate_id FROM note_generation_candidates
+         WHERE note_id = ? AND status = 'pending'
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(Number(noteId));
+    return row ? this.getNoteGenerationCandidate(row.candidate_id) : null;
   }
 
   applyNoteGenerationCandidate(candidateIdOrInput, optionsArg = {}) {
@@ -3548,15 +3843,9 @@ class DatabaseManager {
       if (candidate.status !== "pending") return noteTemplateFailure("CANDIDATE_NOT_PENDING", { candidate: this._safeNoteGenerationCandidate(candidate), note: null });
       const note = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(candidate.note_id);
       if (!note) return noteTemplateFailure("CANDIDATE_NOT_FOUND", { candidate: null, note: null });
-      const encounter = this.db
-        .prepare("SELECT lifecycle_state FROM encounters WHERE note_id = ?")
-        .get(note.id);
-      if (encounter?.lifecycle_state === "completed") {
-        return noteTemplateFailure("ENCOUNTER_COMPLETED", {
-          candidate: this._safeNoteGenerationCandidate(candidate),
-          note,
-        });
-      }
+      // Applying a reviewed clinical candidate is a generated-output write,
+      // not a source-note edit. It remains safe after encounter completion as
+      // long as the source hashes below still match the immutable note.
       const currentContentHash = hashNoteGenerationSource(note);
       const currentEnhancedHash = hashEncounterTranscript(note.enhanced_content);
       // Candidates created before source hashing included transcript content
@@ -3564,10 +3853,15 @@ class DatabaseManager {
       // is no transcript to account for, but never let an old content-only
       // hash bypass stale detection for a note that has transcript source.
       const legacyContentHash = hashEncounterTranscript(note.content);
+      const legacyCombinedHash = legacyNoteGenerationSourceHash(note);
       const sourceHashMatches =
         currentContentHash === candidate.base_content_hash ||
+        legacyCombinedHash === candidate.base_content_hash ||
         (!String(note.transcript ?? "") && legacyContentHash === candidate.base_content_hash);
-      if (!sourceHashMatches || currentEnhancedHash !== candidate.base_enhanced_content_hash) {
+      const sourceRevisionMatches =
+        candidate.base_source_revision == null ||
+        Number(candidate.base_source_revision) === Number(note.generation_source_revision ?? 0);
+      if (!sourceHashMatches || !sourceRevisionMatches || currentEnhancedHash !== candidate.base_enhanced_content_hash) {
         return noteTemplateFailure("CANDIDATE_STALE", { candidate: this._safeNoteGenerationCandidate(candidate), note: note });
       }
       if (normalizeNoteTemplateText(note.enhanced_content) && !confirmed) {
@@ -3579,7 +3873,7 @@ class DatabaseManager {
              enhanced_template_revision_id = ?, sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`
         )
-        .run(candidate.generated_content, candidate.base_content_hash, candidate.template_revision_id, note.id);
+        .run(candidate.generated_content, candidate.base_content_hash, candidate.candidate_kind === "generic" ? null : candidate.template_revision_id, note.id);
       this.db
         .prepare(
           "UPDATE note_generation_candidates SET status = 'applied', applied_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE candidate_id = ?"
@@ -3862,10 +4156,13 @@ class DatabaseManager {
         fields.push("sync_status = 'pending'");
       }
       const writesTranscript = updates.transcript !== undefined;
+      const writesGenerationSource =
+        updates.content !== undefined || updates.transcript !== undefined;
       const update = () => {
-        const previousTranscript = writesTranscript
-          ? this.db.prepare("SELECT transcript FROM notes WHERE id = ?").get(id)?.transcript
-          : undefined;
+        const previousSource = writesGenerationSource
+          ? this.db.prepare("SELECT content, transcript FROM notes WHERE id = ?").get(id)
+          : null;
+        const previousTranscript = previousSource?.transcript;
         const updateFields = [...fields];
         const updateValues = [...values];
         if (writesTranscript) {
@@ -3873,6 +4170,23 @@ class DatabaseManager {
             "transcript_revision = CASE WHEN transcript IS NOT ? THEN transcript_revision + 1 ELSE transcript_revision END"
           );
           updateValues.push(updates.transcript);
+          // Legacy/import/editor writes are complete snapshots, unless an
+          // active recording session owns finalization. Interim writes must
+          // never promote that session to generation-ready.
+          updateFields.push(
+            "finalized_transcript_revision = CASE WHEN transcript_session_id IS NULL THEN transcript_revision + CASE WHEN transcript IS NOT ? THEN 1 ELSE 0 END ELSE finalized_transcript_revision END",
+            "transcript_persistence_status = CASE WHEN transcript_session_id IS NULL THEN 'finalized' ELSE transcript_persistence_status END",
+            "transcript_finalized_at = CASE WHEN transcript_session_id IS NULL THEN CURRENT_TIMESTAMP ELSE transcript_finalized_at END"
+          );
+          updateValues.push(updates.transcript);
+        }
+        const sourceWillChange =
+          writesGenerationSource &&
+          previousSource &&
+          ((updates.content !== undefined && updates.content !== previousSource.content) ||
+            (updates.transcript !== undefined && updates.transcript !== previousSource.transcript));
+        if (sourceWillChange) {
+          updateFields.push("generation_source_revision = generation_source_revision + 1");
         }
         updateFields.push("updated_at = CURRENT_TIMESTAMP");
         updateValues.push(id);
@@ -3880,7 +4194,11 @@ class DatabaseManager {
           .prepare(`UPDATE notes SET ${updateFields.join(", ")} WHERE id = ?`)
           .run(...updateValues);
         const note = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(id);
-        if (writesTranscript && note && note.transcript !== previousTranscript) {
+        const sourceChanged =
+          note &&
+          previousSource &&
+          (note.transcript !== previousSource.transcript || note.content !== previousSource.content);
+        if (sourceChanged) {
           this._invalidateEncounterOutputsForNote(id, this._getNoteTranscriptToken(id));
         }
         return { success: true, note };
@@ -3890,6 +4208,49 @@ class DatabaseManager {
       debugLogger.error("Error updating note", { error: error.message }, "notes");
       throw error;
     }
+  }
+
+  updateNoteEnhancedIfSourceMatches(id, expectedSourceHash, updates = {}, expectedSourceRevision) {
+    const normalizedId = Number(id);
+    const expected = String(expectedSourceHash ?? "").trim();
+    if (!Number.isInteger(normalizedId) || normalizedId <= 0 || !expected) {
+      return { success: false, errorCode: "SOURCE_CHANGED" };
+    }
+    const allowed = new Set([
+      "title",
+      "enhanced_content",
+      "enhancement_prompt",
+      "enhanced_at_content_hash",
+    ]);
+    const safeUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([key, value]) => allowed.has(key) && value !== undefined)
+    );
+    if (Object.keys(safeUpdates).length === 0) return { success: false, errorCode: "INVALID_UPDATE" };
+
+    const update = this.db.transaction(() => {
+      const note = this.db
+        .prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL")
+        .get(normalizedId);
+      if (!note) return { success: false, errorCode: "NOTE_NOT_FOUND" };
+      if (
+        (hashNoteGenerationSource(note) !== expected && legacyNoteGenerationSourceHash(note) !== expected) ||
+        (expectedSourceRevision != null && Number(expectedSourceRevision) !== Number(note.generation_source_revision))
+      ) {
+        const draft = Number.isInteger(expectedSourceRevision) && typeof safeUpdates.enhanced_content === "string"
+          ? this.createNoteGenerationCandidate({ noteId: normalizedId, candidateKind: "generic",
+              generatedContent: safeUpdates.enhanced_content, sourceHash: expected,
+              sourceRevision: expectedSourceRevision, preserveStaleDraft: true })
+          : null;
+        return {
+          success: false,
+          errorCode: "SOURCE_CHANGED",
+          error: "The note changed while it was generating.",
+          ...(draft?.candidate ? { candidate: draft.candidate } : {}),
+        };
+      }
+      return this.updateNote(normalizedId, safeUpdates);
+    });
+    return update();
   }
 
   getFolders(spaceId = null) {
@@ -6420,17 +6781,26 @@ class DatabaseManager {
           WHERE encounters.lifecycle_state IN ('in_progress', 'completed')
             AND encounters.note_id IS NOT NULL
             AND COALESCE(TRIM(notes.transcript), '') <> ''
+            AND notes.transcript_persistence_status = 'finalized'
+            AND notes.finalized_transcript_revision = notes.transcript_revision
             AND (
               encounter_outputs.encounter_id IS NULL
               OR encounter_outputs.summary_status IN ('pending', 'stale')
               OR encounter_outputs.soap_status IN ('pending', 'stale')
               OR encounter_outputs.focus_status IN ('pending', 'stale')
               OR (
+                encounter_outputs.generation_phase = 'retrying'
+                AND (
+                  encounter_outputs.generation_next_retry_at IS NULL
+                  OR datetime(encounter_outputs.generation_next_retry_at) <= datetime('now')
+                )
+              )
+              OR (
                 encounter_outputs.summary_status = 'processing'
                 AND (
                   encounter_outputs.generation_id IS NULL
-                  OR encounter_outputs.generation_started_at IS NULL
-                  OR datetime(encounter_outputs.generation_started_at) <=
+                  OR COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at) IS NULL
+                  OR datetime(COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at)) <=
                     datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
                 )
               )
@@ -6438,8 +6808,8 @@ class DatabaseManager {
                 encounter_outputs.soap_status = 'processing'
                 AND (
                   encounter_outputs.generation_id IS NULL
-                  OR encounter_outputs.generation_started_at IS NULL
-                  OR datetime(encounter_outputs.generation_started_at) <=
+                  OR COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at) IS NULL
+                  OR datetime(COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at)) <=
                     datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
                 )
               )
@@ -6447,8 +6817,8 @@ class DatabaseManager {
                 encounter_outputs.focus_status = 'processing'
                 AND (
                   encounter_outputs.generation_id IS NULL
-                  OR encounter_outputs.generation_started_at IS NULL
-                  OR datetime(encounter_outputs.generation_started_at) <=
+                  OR COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at) IS NULL
+                  OR datetime(COALESCE(encounter_outputs.generation_heartbeat_at, encounter_outputs.generation_started_at)) <=
                     datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
                 )
               )
@@ -7125,30 +7495,41 @@ class DatabaseManager {
 
   _getNoteTranscriptToken(noteId) {
     const row = this.db
-      .prepare("SELECT transcript, transcript_revision FROM notes WHERE id = ?")
+      .prepare("SELECT * FROM notes WHERE id = ?")
       .get(noteId);
     if (!row) return null;
+    const source = buildCanonicalNoteGenerationSource(row);
     return {
       transcriptRevision: Number(row.transcript_revision) || 0,
       transcriptHash: hashEncounterTranscript(row.transcript),
+      sourceRevision: Number(row.generation_source_revision) || 0,
+      sourceHash: source.sourceHash,
     };
   }
 
   _getEncounterTranscriptSnapshot(encounterId) {
     const row = this.db
       .prepare(
-        `SELECT notes.id AS note_id, notes.transcript, notes.transcript_revision
+        `SELECT notes.*
          FROM encounters
-         LEFT JOIN notes ON notes.id = encounters.note_id
+         JOIN notes ON notes.id = encounters.note_id
          WHERE encounters.id = ?`
       )
       .get(encounterId);
-    if (!row?.note_id) return null;
+    if (!row?.id) return null;
+    const source = buildCanonicalNoteGenerationSource(row);
     return {
       transcript: String(row.transcript ?? ""),
+      sourceText: source.sourceText,
+      isFinalized:
+        row.transcript_persistence_status === "finalized" &&
+        row.finalized_transcript_revision != null &&
+        Number(row.finalized_transcript_revision) === Number(row.transcript_revision),
       token: {
         transcriptRevision: Number(row.transcript_revision) || 0,
         transcriptHash: hashEncounterTranscript(row.transcript),
+        sourceRevision: Number(row.generation_source_revision) || 0,
+        sourceHash: source.sourceHash,
       },
     };
   }
@@ -7156,11 +7537,18 @@ class DatabaseManager {
   _ensureEncounterOutputForToken(encounterId, token) {
     this.db
       .prepare(
-        `INSERT INTO encounter_outputs (encounter_id, transcript_hash, transcript_revision)
-         VALUES (?, ?, ?)
+        `INSERT INTO encounter_outputs
+          (encounter_id, transcript_hash, transcript_revision, source_hash, source_revision)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(encounter_id) DO NOTHING`
       )
-      .run(encounterId, token.transcriptHash, token.transcriptRevision);
+      .run(
+        encounterId,
+        token.transcriptHash,
+        token.transcriptRevision,
+        token.sourceHash,
+        token.sourceRevision
+      );
     return this._getEncounterOutputRow(encounterId);
   }
 
@@ -7172,6 +7560,10 @@ class DatabaseManager {
         `UPDATE encounter_outputs
          SET transcript_hash = ?,
            transcript_revision = ?,
+           source_hash = ?,
+           source_revision = ?,
+           evidence_status = CASE
+             WHEN merged_evidence_json IS NULL THEN 'pending' ELSE 'stale' END,
            summary_status = CASE
              WHEN COALESCE(summary, '') = '' THEN 'pending'
              ELSE 'stale'
@@ -7186,22 +7578,149 @@ class DatabaseManager {
            END,
            generation_id = NULL,
            generation_started_at = NULL,
+           generation_phase = NULL,
+           generation_progress_current = 0,
+           generation_progress_total = 0,
+           generation_attempt = 0,
+           generation_next_retry_at = NULL,
+           generation_last_error_code = NULL,
+           generation_heartbeat_at = NULL,
            updated_at = CURRENT_TIMESTAMP
          WHERE encounter_id = ?
-           AND (transcript_hash != ? OR transcript_revision != ?)`
+           AND (
+             transcript_hash != ? OR transcript_revision != ?
+             OR COALESCE(source_hash, '') != ? OR source_revision != ?
+           )`
       )
       .run(
         token.transcriptHash,
         token.transcriptRevision,
+        token.sourceHash,
+        token.sourceRevision,
         encounter.id,
         token.transcriptHash,
-        token.transcriptRevision
+        token.transcriptRevision,
+        token.sourceHash,
+        token.sourceRevision
       );
     return { encounterId: encounter.id, ...token, changes: result.changes };
   }
 
   _getEncounterTranscriptHash(encounterId) {
     return this._getEncounterTranscriptSnapshot(encounterId)?.token.transcriptHash || null;
+  }
+
+  getEncounterEvidenceBundle(encounterId, input = {}) {
+    const normalizedId = Number(encounterId);
+    const sourceRevision = Number(input.sourceRevision);
+    const sourceHash = String(input.sourceHash ?? "");
+    const schemaVersion = Number(input.schemaVersion);
+    const modelId = String(input.modelId ?? "");
+    if (
+      !Number.isInteger(normalizedId) || normalizedId <= 0 ||
+      !Number.isInteger(sourceRevision) || sourceRevision < 0 ||
+      !sourceHash || !Number.isInteger(schemaVersion) || schemaVersion <= 0 || !modelId
+    ) return null;
+    const output = this._getEncounterOutputRow(normalizedId);
+    const chunks = this.db.prepare(
+      `SELECT chunk_index, chunk_count, chunk_hash, evidence_json
+       FROM encounter_evidence_chunks
+       WHERE encounter_id = ? AND source_revision = ? AND source_hash = ?
+         AND schema_version = ? AND model_id = ?
+       ORDER BY chunk_index ASC`
+    ).all(normalizedId, sourceRevision, sourceHash, schemaVersion, modelId).map((row) => {
+      try {
+        const { evidence_json: evidenceJson, ...safeRow } = row;
+        return { ...safeRow, evidence: JSON.parse(evidenceJson) };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+    let mergedEvidence = null;
+    if (
+      output?.source_revision === sourceRevision && output?.source_hash === sourceHash &&
+      output?.evidence_schema_version === schemaVersion && output?.evidence_model === modelId &&
+      output?.evidence_status === "ready" && output?.merged_evidence_json
+    ) {
+      try { mergedEvidence = JSON.parse(output.merged_evidence_json); } catch {}
+    }
+    return { chunks, mergedEvidence, status: output?.evidence_status ?? "pending" };
+  }
+
+  saveEncounterEvidenceChunk(encounterId, token, input = {}) {
+    const normalizedId = Number(encounterId);
+    const schemaVersion = Number(input.schemaVersion);
+    const modelId = String(input.modelId ?? "");
+    const chunkIndex = Number(input.chunkIndex);
+    const chunkCount = Number(input.chunkCount);
+    const chunkHash = String(input.chunkHash ?? "");
+    if (
+      !Number.isInteger(normalizedId) || normalizedId <= 0 ||
+      !Number.isInteger(schemaVersion) || schemaVersion <= 0 || !modelId ||
+      !Number.isInteger(chunkIndex) || chunkIndex < 0 ||
+      !Number.isInteger(chunkCount) || chunkCount <= 0 || chunkIndex >= chunkCount ||
+      !chunkHash || !input.evidence
+    ) return { applied: false };
+    return this.db.transaction(() => {
+      const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+      const output = this._getEncounterOutputRow(normalizedId);
+      if (
+        !snapshot?.isFinalized ||
+        snapshot.token.sourceRevision !== Number(token?.sourceRevision) ||
+        snapshot.token.sourceHash !== token?.sourceHash ||
+        output?.generation_id !== token?.generationId
+      ) return { applied: false };
+      this.db.prepare(
+        `INSERT INTO encounter_evidence_chunks
+          (encounter_id, source_revision, source_hash, schema_version, model_id,
+           chunk_index, chunk_count, chunk_hash, evidence_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(encounter_id, source_revision, schema_version, model_id, chunk_index)
+         DO UPDATE SET source_hash = excluded.source_hash, chunk_count = excluded.chunk_count,
+           chunk_hash = excluded.chunk_hash, evidence_json = excluded.evidence_json,
+           updated_at = CURRENT_TIMESTAMP`
+      ).run(
+        normalizedId, snapshot.token.sourceRevision, snapshot.token.sourceHash,
+        schemaVersion, modelId, chunkIndex, chunkCount, chunkHash,
+        JSON.stringify(input.evidence)
+      );
+      this.db.prepare(
+        `UPDATE encounter_outputs SET source_hash = ?, source_revision = ?,
+          evidence_schema_version = ?, evidence_model = ?, evidence_status = 'processing',
+          generation_heartbeat_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE encounter_id = ?`
+      ).run(snapshot.token.sourceHash, snapshot.token.sourceRevision, schemaVersion, modelId, normalizedId);
+      return { applied: true };
+    })();
+  }
+
+  completeEncounterEvidence(encounterId, token, input = {}) {
+    const normalizedId = Number(encounterId);
+    const schemaVersion = Number(input.schemaVersion);
+    const modelId = String(input.modelId ?? "");
+    if (!Number.isInteger(normalizedId) || normalizedId <= 0 || !input.evidence || !modelId) {
+      return { applied: false };
+    }
+    return this.db.transaction(() => {
+      const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+      const output = this._getEncounterOutputRow(normalizedId);
+      if (
+        !snapshot?.isFinalized ||
+        snapshot.token.sourceRevision !== Number(token?.sourceRevision) ||
+        snapshot.token.sourceHash !== token?.sourceHash ||
+        output?.generation_id !== token?.generationId
+      ) return { applied: false };
+      this.db.prepare(
+        `UPDATE encounter_outputs SET source_hash = ?, source_revision = ?,
+          evidence_schema_version = ?, evidence_model = ?, evidence_status = 'ready',
+          merged_evidence_json = ?, generation_heartbeat_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP WHERE encounter_id = ?`
+      ).run(
+        snapshot.token.sourceHash, snapshot.token.sourceRevision, schemaVersion,
+        modelId, JSON.stringify(input.evidence), normalizedId
+      );
+      return { applied: true };
+    })();
   }
 
   getEncounterOutput(encounterId) {
@@ -7267,16 +7786,18 @@ class DatabaseManager {
       if (!Number.isInteger(normalizedId) || normalizedId <= 0 || types.length === 0) return null;
       const transaction = this.db.transaction(() => {
         const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
-        if (!snapshot) return null;
+        if (!snapshot || !snapshot.isFinalized || !String(snapshot.transcript ?? "").trim()) {
+          return null;
+        }
         this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
         let output = this._getEncounterOutputRow(normalizedId);
         const generationState = this.db
           .prepare(
-            `SELECT generation_id, generation_started_at,
-              CASE WHEN generation_id IS NOT NULL
-                AND generation_started_at IS NOT NULL
-                AND datetime(generation_started_at) >
-                  datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
+            `SELECT generation_id, generation_started_at, generation_heartbeat_at,
+               CASE WHEN generation_id IS NOT NULL
+                 AND COALESCE(generation_heartbeat_at, generation_started_at) IS NOT NULL
+                 AND datetime(COALESCE(generation_heartbeat_at, generation_started_at)) >
+                   datetime('now', '-${ENCOUNTER_OUTPUT_PROCESSING_LEASE_MINUTES} minutes')
                 THEN 1 ELSE 0 END AS generation_active
              FROM encounter_outputs
              WHERE encounter_id = ?`
@@ -7295,7 +7816,14 @@ class DatabaseManager {
         }
 
         if (generationState?.generation_id) {
-          const staleClaimFields = ["generation_id = NULL", "generation_started_at = NULL"];
+          const staleClaimFields = [
+            "generation_id = NULL",
+            "generation_started_at = NULL",
+            "generation_heartbeat_at = NULL",
+            "generation_phase = NULL",
+            "generation_progress_current = 0",
+            "generation_progress_total = 0",
+          ];
           for (const type of types) {
             staleClaimFields.push(`${type}_status = CASE WHEN ${type}_status = 'processing' THEN 'pending' ELSE ${type}_status END`);
           }
@@ -7309,6 +7837,13 @@ class DatabaseManager {
         const fields = [
           "generation_id = ?",
           "generation_started_at = CURRENT_TIMESTAMP",
+          "generation_heartbeat_at = CURRENT_TIMESTAMP",
+          "generation_phase = 'mapping'",
+          "generation_progress_current = 0",
+          "generation_progress_total = 0",
+          "generation_attempt = COALESCE(generation_attempt, 0) + 1",
+          "generation_next_retry_at = NULL",
+          "generation_last_error_code = NULL",
           "updated_at = CURRENT_TIMESTAMP",
         ];
         const values = [generationId];
@@ -7324,6 +7859,7 @@ class DatabaseManager {
           .run(...values, normalizedId);
         return {
           transcript: snapshot.transcript,
+          sourceText: snapshot.sourceText,
           token: { ...snapshot.token, generationId },
           busy: false,
           output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
@@ -7340,12 +7876,89 @@ class DatabaseManager {
     }
   }
 
+  updateEncounterOutputGenerationProgress(encounterId, token, progress = {}) {
+    try {
+      if (!this.db) throw new Error("Database not initialized");
+      const normalizedId = Number(encounterId);
+      const expectedRevision = Number(token?.transcriptRevision);
+      const expectedHash = token?.transcriptHash;
+      const expectedSourceRevision = Number(token?.sourceRevision);
+      const expectedSourceHash = token?.sourceHash;
+      const expectedGenerationId = token?.generationId;
+      const phase = progress?.phase;
+      const current = Number(progress?.current);
+      const total = Number(progress?.total);
+      if (
+        !Number.isInteger(normalizedId) ||
+        normalizedId <= 0 ||
+        !Number.isInteger(expectedRevision) ||
+        expectedRevision < 0 ||
+        typeof expectedHash !== "string" ||
+        !Number.isInteger(expectedSourceRevision) ||
+        expectedSourceRevision < 0 ||
+        typeof expectedSourceHash !== "string" ||
+        typeof expectedGenerationId !== "string" ||
+        expectedGenerationId.length === 0 ||
+        !ENCOUNTER_OUTPUT_GENERATION_PHASES.has(phase) ||
+        !Number.isInteger(current) ||
+        current < 0 ||
+        !Number.isInteger(total) ||
+        total < 0 ||
+        current > total
+      ) {
+        return { applied: false, output: null };
+      }
+
+      const transaction = this.db.transaction(() => {
+        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
+        if (!snapshot) return { applied: false, output: null };
+        this._ensureEncounterOutputForToken(normalizedId, snapshot.token);
+        const outputRow = this._getEncounterOutputRow(normalizedId);
+        if (
+          snapshot.token.transcriptRevision !== expectedRevision ||
+          snapshot.token.transcriptHash !== expectedHash ||
+          snapshot.token.sourceRevision !== expectedSourceRevision ||
+          snapshot.token.sourceHash !== expectedSourceHash ||
+          outputRow?.generation_id !== expectedGenerationId
+        ) {
+          return { applied: false, output: decorateEncounterOutput(outputRow) };
+        }
+
+        this.db
+          .prepare(
+            `UPDATE encounter_outputs
+             SET generation_phase = ?,
+               generation_progress_current = ?,
+               generation_progress_total = ?,
+               generation_heartbeat_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+             WHERE encounter_id = ?`
+          )
+          .run(phase, current, total, normalizedId);
+        return {
+          applied: true,
+          output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
+        };
+      });
+      return transaction();
+    } catch (error) {
+      debugLogger.error(
+        "Error updating encounter output generation progress",
+        { error: error.message },
+        "encounter"
+      );
+      throw error;
+    }
+  }
+
   finishEncounterOutputGeneration(encounterId, token, updates = {}) {
     try {
       if (!this.db) throw new Error("Database not initialized");
       const normalizedId = Number(encounterId);
       const expectedRevision = Number(token?.transcriptRevision);
       const expectedHash = token?.transcriptHash;
+      const expectedSourceRevision = Number(token?.sourceRevision);
+      const expectedSourceHash = token?.sourceHash;
       const expectedGenerationId = token?.generationId;
       if (
         !Number.isInteger(normalizedId) ||
@@ -7353,6 +7966,9 @@ class DatabaseManager {
         !Number.isInteger(expectedRevision) ||
         expectedRevision < 0 ||
         typeof expectedHash !== "string" ||
+        !Number.isInteger(expectedSourceRevision) ||
+        expectedSourceRevision < 0 ||
+        typeof expectedSourceHash !== "string" ||
         typeof expectedGenerationId !== "string" ||
         expectedGenerationId.length === 0
       ) {
@@ -7367,6 +7983,8 @@ class DatabaseManager {
         if (
           snapshot.token.transcriptRevision !== expectedRevision ||
           snapshot.token.transcriptHash !== expectedHash ||
+          snapshot.token.sourceRevision !== expectedSourceRevision ||
+          snapshot.token.sourceHash !== expectedSourceHash ||
           outputRow?.generation_id !== expectedGenerationId
         ) {
           return { applied: false, output };
@@ -7391,7 +8009,27 @@ class DatabaseManager {
           fields.push(`${type}_updated_at = CURRENT_TIMESTAMP`);
         }
         if (fields.length === 0) return { applied: false, output };
-        fields.push("generation_id = NULL", "generation_started_at = NULL");
+        const retrying =
+          updates.generation_phase === "retrying" &&
+          typeof updates.generation_next_retry_at === "string" &&
+          updates.generation_next_retry_at.trim();
+        const candidateErrorCode =
+          typeof updates.generation_last_error_code === "string"
+            ? updates.generation_last_error_code
+            : updates.summary_error_code || updates.soap_error_code || updates.focus_error_code || null;
+        const lastErrorCode = SAFE_ENCOUNTER_OUTPUT_ERROR_CODES.has(candidateErrorCode)
+          ? candidateErrorCode
+          : null;
+        fields.push(
+          "generation_id = NULL",
+          "generation_started_at = NULL",
+          "generation_heartbeat_at = NULL",
+          "generation_phase = ?",
+          "generation_next_retry_at = ?",
+          "generation_last_error_code = ?",
+          "generation_progress_current = generation_progress_total"
+        );
+        values.push(retrying ? "retrying" : null, retrying ? updates.generation_next_retry_at : null, lastErrorCode);
         fields.push("updated_at = CURRENT_TIMESTAMP");
         values.push(normalizedId);
         this.db
@@ -7517,6 +8155,13 @@ class DatabaseManager {
         "transcript_revision = ?",
         "generation_id = NULL",
         "generation_started_at = NULL",
+        "generation_phase = NULL",
+        "generation_progress_current = 0",
+        "generation_progress_total = 0",
+        "generation_attempt = 0",
+        "generation_next_retry_at = NULL",
+        "generation_last_error_code = NULL",
+        "generation_heartbeat_at = NULL",
         "updated_at = CURRENT_TIMESTAMP",
       ];
       const values = [snapshot.token.transcriptHash, snapshot.token.transcriptRevision];
@@ -7585,7 +8230,6 @@ class DatabaseManager {
         if (encounter?.lifecycle_state === "completed") {
           return { success: false, errorCode: "ENCOUNTER_COMPLETED" };
         }
-
         const nextTranscript = typeof transcript === "string" ? transcript : note.transcript || "";
         const transcriptChanged = nextTranscript !== note.transcript;
         this.db
@@ -7596,10 +8240,16 @@ class DatabaseManager {
                  WHEN transcript IS NOT ? THEN transcript_revision + 1
                  ELSE transcript_revision
                END,
+               generation_source_revision = generation_source_revision + 1,
+               finalized_transcript_revision = transcript_revision + CASE
+                 WHEN transcript IS NOT ? THEN 1 ELSE 0 END,
+               transcript_persistence_status = 'finalized',
+               transcript_finalized_at = CURRENT_TIMESTAMP,
+               transcript_session_id = NULL,
                sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`
           )
-          .run(nextTranscript, nextTranscript, normalizedNoteId);
+          .run(nextTranscript, nextTranscript, nextTranscript, normalizedNoteId);
 
         if (!encounter) {
           return {
@@ -7634,6 +8284,124 @@ class DatabaseManager {
     }
   }
 
+  beginTranscriptSession(noteId, sessionId) {
+    const normalizedNoteId = Number(noteId);
+    const normalizedSessionId = String(sessionId ?? "").trim();
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0 || !normalizedSessionId) {
+      return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+    }
+    return this.db.transaction(() => {
+      const note = this.db
+        .prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL")
+        .get(normalizedNoteId);
+      if (!note) return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+      const encounter = this.db.prepare("SELECT * FROM encounters WHERE note_id = ?").get(normalizedNoteId);
+      if (encounter?.lifecycle_state === "completed") {
+        return { success: false, errorCode: "ENCOUNTER_COMPLETED" };
+      }
+      this.db.prepare(
+        `UPDATE notes SET transcript_session_id = ?, transcript_persistence_status = 'recording',
+          updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).run(normalizedSessionId, normalizedNoteId);
+      return { success: true, note: this.getNote(normalizedNoteId) };
+    })();
+  }
+
+  checkpointTranscriptSession(noteId, sessionId, transcript) {
+    return this._writeTranscriptSession(noteId, sessionId, transcript, false);
+  }
+
+  finalizeTranscriptSession(noteId, sessionId, transcript) {
+    return this._writeTranscriptSession(noteId, sessionId, transcript, true);
+  }
+
+  failTranscriptSession(noteId, sessionId) {
+    const normalizedNoteId = Number(noteId);
+    const normalizedSessionId = String(sessionId ?? "").trim();
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0 || !normalizedSessionId) {
+      return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+    }
+    const result = this.db.prepare(
+      `UPDATE notes SET transcript_persistence_status = 'failed', transcript_session_id = NULL,
+       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND transcript_session_id = ?`
+    ).run(normalizedNoteId, normalizedSessionId);
+    return result.changes === 1
+      ? { success: true, note: this.getNote(normalizedNoteId) }
+      : { success: false, errorCode: "ENCOUNTER_RECORDING_STALE_SESSION" };
+  }
+
+  getTranscriptSessionState(noteId) {
+    const normalizedNoteId = Number(noteId);
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) return null;
+    const row = this.db.prepare(
+      `SELECT id AS note_id, transcript_revision, generation_source_revision,
+              finalized_transcript_revision, transcript_persistence_status,
+              transcript_finalized_at
+       FROM notes WHERE id = ? AND deleted_at IS NULL`
+    ).get(normalizedNoteId);
+    if (!row) return null;
+    return {
+      ...row,
+      is_finalized:
+        row.transcript_persistence_status === "finalized" &&
+        row.finalized_transcript_revision != null &&
+        Number(row.finalized_transcript_revision) === Number(row.transcript_revision),
+    };
+  }
+
+  _writeTranscriptSession(noteId, sessionId, transcript, finalize) {
+    const normalizedNoteId = Number(noteId);
+    const normalizedSessionId = String(sessionId ?? "").trim();
+    if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0 || !normalizedSessionId) {
+      return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+    }
+    return this.db.transaction(() => {
+      const note = this.db.prepare("SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL").get(normalizedNoteId);
+      if (!note) return { success: false, errorCode: "ENCOUNTER_RECORDING_INVALID_NOTE" };
+      if (note.transcript_session_id !== normalizedSessionId) {
+        return { success: false, errorCode: "ENCOUNTER_RECORDING_STALE_SESSION" };
+      }
+      const nextTranscript = typeof transcript === "string" ? transcript : String(note.transcript ?? "");
+      const changed = nextTranscript !== note.transcript;
+      this.db.prepare(
+        `UPDATE notes SET transcript = ?,
+          transcript_revision = transcript_revision + CASE WHEN transcript IS NOT ? THEN 1 ELSE 0 END,
+          generation_source_revision = generation_source_revision + CASE WHEN transcript IS NOT ? THEN 1 ELSE 0 END,
+          transcript_persistence_status = ?,
+          finalized_transcript_revision = CASE WHEN ? = 1
+            THEN transcript_revision + CASE WHEN transcript IS NOT ? THEN 1 ELSE 0 END
+            ELSE finalized_transcript_revision END,
+          transcript_finalized_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE transcript_finalized_at END,
+          transcript_session_id = CASE WHEN ? = 1 THEN NULL ELSE transcript_session_id END,
+          sync_status = 'pending', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND transcript_session_id = ?`
+      ).run(
+        nextTranscript,
+        nextTranscript,
+        nextTranscript,
+        finalize ? "finalized" : "checkpointed",
+        finalize ? 1 : 0,
+        nextTranscript,
+        finalize ? 1 : 0,
+        finalize ? 1 : 0,
+        normalizedNoteId,
+        normalizedSessionId
+      );
+      if (changed) {
+        this._invalidateEncounterOutputsForNote(normalizedNoteId, this._getNoteTranscriptToken(normalizedNoteId));
+      }
+      const updated = this.getNote(normalizedNoteId);
+      const encounter = this.db.prepare("SELECT * FROM encounters WHERE note_id = ?").get(normalizedNoteId) || null;
+      return {
+        success: true,
+        finalized: finalize,
+        note: updated,
+        encounter,
+        output: encounter ? decorateEncounterOutput(this._getEncounterOutputRow(encounter.id)) : null,
+      };
+    })();
+  }
+
   markEncounterComplete(encounterId) {
     try {
       if (!this.db) throw new Error("Database not initialized");
@@ -7655,40 +8423,24 @@ class DatabaseManager {
           };
         }
 
-        const snapshot = this._getEncounterTranscriptSnapshot(normalizedId);
-        const output = this._getEncounterOutputRow(normalizedId);
-        const outputsReady =
-          snapshot &&
-          snapshot.transcript.trim().length > 0 &&
-          output &&
-          output.transcript_revision === snapshot.token.transcriptRevision &&
-          output.transcript_hash === snapshot.token.transcriptHash &&
-          output.summary_status === "ready" &&
-          output.soap_status === "ready" &&
-          output.focus_status === "ready";
-        if (!outputsReady) {
+        // Completing an encounter closes the source record; it is deliberately
+        // independent from clinical-output generation. Output generation can
+        // be pending or failed and remain retryable after the encounter is
+        // closed without allowing transcript or note edits.
+        if (encounter.lifecycle_state !== "in_progress") {
           return {
             success: false,
-            errorCode: "ENCOUNTER_OUTPUTS_NOT_READY",
-            output: decorateEncounterOutput(output),
+            errorCode: "ENCOUNTER_NOT_STARTED",
+            output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
           };
         }
 
-        const note = this.db
-          .prepare("SELECT enhanced_content, enhanced_template_revision_id FROM notes WHERE id = ?")
-          .get(encounter.note_id);
-        const templateReady = Boolean(
-          note &&
-            normalizeNoteTemplateText(note.enhanced_content) &&
-            note.enhanced_template_revision_id != null
-        );
-        if (!templateReady) {
-          return {
-            success: false,
-            errorCode: "ENCOUNTER_TEMPLATE_NOT_READY",
-            error: "Generate and apply the clinical encounter template before completing this encounter.",
-            output: decorateEncounterOutput(output),
-          };
+        const sourceNote = this.db.prepare(
+          "SELECT transcript_session_id, transcript_persistence_status FROM notes WHERE id = ?"
+        ).get(encounter.note_id);
+        if (sourceNote?.transcript_session_id &&
+            !["checkpointed", "finalized"].includes(sourceNote.transcript_persistence_status)) {
+          return { success: false, errorCode: "ENCOUNTER_TRANSCRIPT_NOT_SAVED" };
         }
 
         this.db
@@ -7703,7 +8455,7 @@ class DatabaseManager {
         return {
           success: true,
           encounter: this.db.prepare("SELECT * FROM encounters WHERE id = ?").get(normalizedId),
-          output: decorateEncounterOutput(output),
+          output: decorateEncounterOutput(this._getEncounterOutputRow(normalizedId)),
         };
       });
       return transaction();

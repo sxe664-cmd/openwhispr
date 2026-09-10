@@ -763,6 +763,91 @@ test("note generation candidates require a real encounter link", (t) => {
   db.db.close();
 });
 
+test("transcript sessions keep interim checkpoints ineligible and finalize after completion", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Finalization contract", "manual emphasis", "meeting").note;
+  const encounterId = Number(
+    db.db.prepare(
+      `INSERT INTO encounters
+        (calendar_event_id, provider, calendar_id, title, note_id, lifecycle_state, patient_resolution)
+       VALUES (?, 'ai_receptionist', 'primary', 'Finalization contract', ?, 'in_progress', 'unassigned_legacy')`
+    ).run("ai_receptionist:primary:finalization-contract", note.id).lastInsertRowid
+  );
+
+  assert.equal(db.beginTranscriptSession(note.id, "session-a").success, true);
+  assert.equal(db.markEncounterComplete(encounterId).errorCode, "ENCOUNTER_TRANSCRIPT_NOT_SAVED");
+  assert.equal(db.db.prepare("SELECT lifecycle_state FROM encounters WHERE id = ?").get(encounterId).lifecycle_state, "in_progress");
+  const checkpoint = db.checkpointTranscriptSession(note.id, "session-a", "partial transcript");
+  assert.equal(checkpoint.success, true);
+  assert.equal(checkpoint.note.transcript_persistence_status, "checkpointed");
+  assert.equal(db.getEncountersNeedingOutputGeneration().length, 0);
+  assert.equal(db.beginEncounterOutputGeneration(encounterId), null);
+  assert.equal(db.getNoteGenerationSource(note.id).isFinalized, false);
+
+  assert.equal(db.markEncounterComplete(encounterId).success, true);
+  const finalized = db.finalizeTranscriptSession(note.id, "session-a", "final transcript");
+  assert.equal(finalized.success, true);
+  assert.equal(finalized.note.transcript_persistence_status, "finalized");
+  assert.equal(finalized.note.finalized_transcript_revision, finalized.note.transcript_revision);
+  assert.equal(db.getEncountersNeedingOutputGeneration().some((item) => item.id === encounterId), true);
+  assert.ok(db.beginEncounterOutputGeneration(encounterId)?.token);
+  db.db.close();
+});
+
+test("an empty recording session can checkpoint and finalize without creating generation work", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Empty recording", "", "meeting").note;
+  const encounterId = Number(
+    db.db.prepare(
+      `INSERT INTO encounters
+        (calendar_event_id, provider, calendar_id, title, note_id, lifecycle_state, patient_resolution)
+       VALUES (?, 'ai_receptionist', 'primary', 'Empty recording', ?, 'in_progress', 'unassigned_legacy')`
+    ).run("ai_receptionist:primary:empty-recording", note.id).lastInsertRowid
+  );
+
+  assert.equal(db.beginTranscriptSession(note.id, "empty-session").success, true);
+  const checkpoint = db.checkpointTranscriptSession(note.id, "empty-session", "");
+  assert.equal(checkpoint.success, true);
+  assert.equal(checkpoint.note.transcript_persistence_status, "checkpointed");
+  assert.equal(db.markEncounterComplete(encounterId).success, true);
+
+  const finalized = db.finalizeTranscriptSession(note.id, "empty-session", "");
+  assert.equal(finalized.success, true);
+  assert.equal(finalized.note.transcript_persistence_status, "finalized");
+  assert.equal(finalized.note.transcript_session_id, null);
+  assert.equal(finalized.note.finalized_transcript_revision, finalized.note.transcript_revision);
+  assert.equal(db.getEncountersNeedingOutputGeneration().some((item) => item.id === encounterId), false);
+  assert.equal(db.beginEncounterOutputGeneration(encounterId), null);
+  db.db.close();
+});
+
+test("transcript session claims reject stale writers and generation sources expose revisions", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Session claim", "first", "meeting").note;
+  assert.equal(db.beginTranscriptSession(note.id, "old-session").success, true);
+  assert.equal(db.beginTranscriptSession(note.id, "new-session").success, true);
+  assert.equal(
+    db.finalizeTranscriptSession(note.id, "old-session", "stale transcript").errorCode,
+    "ENCOUNTER_RECORDING_STALE_SESSION"
+  );
+  const finalized = db.finalizeTranscriptSession(note.id, "new-session", "current transcript");
+  assert.equal(finalized.success, true);
+
+  const beforeEdit = db.getNoteGenerationSource(note.id);
+  db.updateNote(note.id, { content: "second" });
+  const afterEdit = db.getNoteGenerationSource(note.id);
+  assert.ok(afterEdit.sourceRevision > beforeEdit.sourceRevision);
+  assert.equal(afterEdit.isFinalized, true);
+  assert.equal(afterEdit.finalizedTranscriptRevision, afterEdit.transcriptRevision);
+  db.db.close();
+});
+
 test("encounter projection preserves local ownership and start retries reuse one note", (t) => {
   const db = createDb(t);
   if (!db) return;
@@ -928,7 +1013,7 @@ test("final encounter transcript is persisted without completing the encounter",
   db.db.close();
 });
 
-test("encounter completion requires current clinical outputs and locks note edits", (t) => {
+test("encounter completion is independent from clinical output generation and locks source edits", (t) => {
   const db = createDb(t);
   if (!db) return;
 
@@ -938,26 +1023,15 @@ test("encounter completion requires current clinical outputs and locks note edit
   const started = db.startEncounterForCalendarEvent(event.id);
   db.saveEncounterRecording(started.note.id, '[{"text":"Ready to complete"}]');
 
-  const notReady = db.markEncounterComplete(started.encounter.id);
-  assert.equal(notReady.success, false);
-  assert.equal(notReady.errorCode, "ENCOUNTER_OUTPUTS_NOT_READY");
-
-  db.updateEncounterOutput(started.encounter.id, {
-    summary: "Summary",
-    summary_status: "ready",
-    soap: "SOAP",
-    soap_status: "ready",
-    focus: "Focus",
-    focus_status: "ready",
-  });
-  const template = db.getDefaultNoteTemplate("encounter", { includeRaw: true });
-  db.updateNote(started.note.id, {
-    enhanced_content: "# Clinical Encounter\n\nApplied template",
-    enhanced_template_revision_id: template.active_revision_id,
-  });
   const completed = db.markEncounterComplete(started.encounter.id);
   assert.equal(completed.success, true);
   assert.equal(completed.encounter.lifecycle_state, "completed");
+
+  const retry = db.retryEncounterOutput(started.encounter.id, "all");
+  assert.equal(retry.summary_status, "pending");
+  assert.equal(retry.soap_status, "pending");
+  assert.equal(retry.focus_status, "pending");
+
   const edit = db.updateNote(started.note.id, { content: "Should not save" });
   assert.equal(edit.success, false);
   assert.equal(edit.errorCode, "ENCOUNTER_COMPLETED");
@@ -984,6 +1058,9 @@ test("direct encounter resolution and output reconciliation do not depend on sch
   );
   db.upsertCalendarEvents(scheduledEvents);
   db.upsertEncountersFromCalendarEvents(scheduledEvents);
+  // Saving is no longer completion: explicitly close the historical fixture
+  // so the in-progress-first listing legitimately excludes it.
+  assert.equal(db.markEncounterComplete(started.encounter.id).success, true);
 
   const listed = db.getEncounters(200);
   assert.equal(listed.some((encounter) => encounter.id === started.encounter.id), false);
@@ -1073,6 +1150,12 @@ test("output generation claims prevent duplicate work and reclaim stale claims s
   db.db
     .prepare("UPDATE encounter_outputs SET generation_started_at = '2000-01-01 00:00:00' WHERE encounter_id = ?")
     .run(encounterId);
+  const heartbeatProtected = db.beginEncounterOutputGeneration(encounterId);
+  assert.equal(heartbeatProtected.busy, true);
+
+  db.db
+    .prepare("UPDATE encounter_outputs SET generation_heartbeat_at = '2000-01-01 00:00:00' WHERE encounter_id = ?")
+    .run(encounterId);
   const reclaimed = db.beginEncounterOutputGeneration(encounterId);
   assert.equal(reclaimed.busy, false);
   assert.notEqual(reclaimed.token.generationId, first.token.generationId);
@@ -1097,6 +1180,37 @@ test("output generation claims prevent duplicate work and reclaim stale claims s
   });
   assert.equal(currentFinish.applied, true);
   assert.equal(currentFinish.output.summary, "Current summary");
+  db.db.close();
+});
+
+test("progress updates require the current transcript claim and refresh the heartbeat", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const { encounterId, noteId } = startEncounterOutputFixture(db, "output-progress-guard");
+  db.updateNote(noteId, { transcript: '[{"text":"Current transcript"}]' });
+  const begun = db.beginEncounterOutputGeneration(encounterId);
+
+  const progress = db.updateEncounterOutputGenerationProgress(encounterId, begun.token, {
+    phase: "mapping",
+    current: 2,
+    total: 5,
+  });
+  assert.equal(progress.applied, true);
+  assert.equal(progress.output.generation_phase, "mapping");
+  assert.equal(progress.output.generation_progress_current, 2);
+  assert.equal(progress.output.generation_progress_total, 5);
+  assert.ok(progress.output.generation_heartbeat_at);
+
+  db.updateNote(noteId, { transcript: '[{"text":"New transcript"}]' });
+  const stale = db.updateEncounterOutputGenerationProgress(encounterId, begun.token, {
+    phase: "mapping",
+    current: 3,
+    total: 5,
+  });
+  assert.equal(stale.applied, false);
+  assert.equal(stale.output.generation_phase, null);
+  assert.equal(stale.output.generation_progress_current, 0);
   db.db.close();
 });
 

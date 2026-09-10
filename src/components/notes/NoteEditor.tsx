@@ -2,18 +2,16 @@ import { useState, useRef, useEffect, useMemo, useCallback, type ComponentProps 
 import { useTranslation } from "react-i18next";
 import {
   Download,
+  Save,
   Loader2,
   FileText,
   Sparkles,
   AlignLeft,
   MessageSquareText,
   Calendar,
-  LinkIcon,
-  FolderOpen,
-  Search,
-  Plus,
   Check,
   LockKeyhole,
+  FilePlus,
 } from "lucide-react";
 import { RichTextEditor } from "../ui/RichTextEditor";
 import type { Editor } from "@tiptap/react";
@@ -29,12 +27,12 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "../ui/dropdown-menu";
+import { ConfirmDialog } from "../ui/dialog";
 import { cn } from "../lib/utils";
 import type {
   MeetingContext,
   MeetingDiarizationStatus,
   NoteItem,
-  FolderItem,
 } from "../../types/electron";
 import type { ActionProcessingProgress, ActionProcessingState } from "../../hooks/useActionProcessing";
 import ActionProcessingOverlay from "./ActionProcessingOverlay";
@@ -54,9 +52,6 @@ import EncounterClinicalOutputs, {
 import EncounterProcessingStatus from "./EncounterProcessingStatus";
 import type { CalendarAttendee } from "../../types/calendar";
 import type { TranscriptPersistenceStatus } from "../../stores/meetingRecordingStore";
-
-const CHIP_BUTTON_CLASS =
-  "inline-flex items-center gap-1.5 text-[11px] px-1.5 py-0.5 rounded-md border border-border/70 dark:border-white/25 text-foreground/50 dark:text-foreground/35 hover:text-foreground/60 hover:border-border/60 hover:bg-foreground/3 dark:hover:text-foreground/40 dark:hover:border-white/10 dark:hover:bg-white/3 transition-all duration-150 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring/30";
 
 function formatNoteDate(dateStr: string): string {
   const date = normalizeDbDate(dateStr);
@@ -154,22 +149,32 @@ interface NoteEditorProps {
   onContentChange: (sourceNoteId: number, content: string) => void;
   isSaving: boolean;
   isRecording: boolean;
+  isPaused: boolean;
   isProcessing: boolean;
   transcriptStatus?: TranscriptPersistenceStatus;
   isEncounterCompleted?: boolean;
   recordingAllowed?: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
+  onTogglePauseRecording: () => void;
   meetingContext?: MeetingContext;
   onMeetingContextChange?: (context: MeetingContext) => void;
   onExportNote?: (format: "md" | "txt") => void;
   onExportClinicalNote?: () => void;
   onExportTranscript?: (format: "txt" | "srt" | "json" | "md") => void;
+  onSave?: () => boolean | Promise<boolean>;
+  onInsertEncounterTemplate?: () => void | Promise<void>;
+  isInsertingEncounterTemplate?: boolean;
+  encounterCompletion?: React.ReactNode;
   enhancement?: Enhancement;
   actionPicker?: React.ReactNode;
   actionProcessingState?: ActionProcessingState;
   actionName?: string | null;
+  actionIsBuiltIn?: boolean;
+  actionErrorMessage?: string | null;
   actionProgress?: ActionProcessingProgress | null;
+  actionStartedAt?: number | null;
+  onCancelAction?: () => void;
   diarizationSessionId?: string | null;
   diarizationStatus?: MeetingDiarizationStatus;
   onLiveSpeakerLock?: (speakerId: string, displayName: string) => void;
@@ -178,11 +183,6 @@ interface NoteEditorProps {
   userTouchedStepper?: boolean;
   onSetSessionDiarizationEnabled?: (enabled: boolean) => void;
   onSetSessionExpectedCount?: (count: number) => void;
-  folderName?: string | null;
-  calendarEventName?: string | null;
-  folders?: FolderItem[];
-  onMoveToFolder?: (noteId: number, folderId: number) => void;
-  onCreateFolderAndMove?: (noteId: number, folderName: string) => void;
   /** Cancels the owner's debounced autosaves before an external copy is applied. */
   onCancelPendingSaves?: (noteId: number) => void;
 }
@@ -193,22 +193,32 @@ export default function NoteEditor({
   onContentChange,
   isSaving,
   isRecording,
+  isPaused,
   isProcessing,
   transcriptStatus,
   isEncounterCompleted = false,
   recordingAllowed = true,
   onStartRecording,
   onStopRecording,
+  onTogglePauseRecording,
   meetingContext = "telehealth",
   onMeetingContextChange,
   onExportNote,
   onExportClinicalNote,
   onExportTranscript,
+  onSave,
+  onInsertEncounterTemplate,
+  isInsertingEncounterTemplate = false,
+  encounterCompletion,
   enhancement,
   actionPicker,
   actionProcessingState,
   actionName,
+  actionIsBuiltIn = false,
+  actionErrorMessage,
   actionProgress,
+  actionStartedAt,
+  onCancelAction,
   diarizationSessionId,
   diarizationStatus = "idle",
   onLiveSpeakerLock,
@@ -217,22 +227,16 @@ export default function NoteEditor({
   userTouchedStepper,
   onSetSessionDiarizationEnabled,
   onSetSessionExpectedCount,
-  folderName,
-  calendarEventName,
-  folders,
-  onMoveToFolder,
-  onCreateFolderAndMove,
   onCancelPendingSaves,
 }: NoteEditorProps) {
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<MeetingViewMode>("raw");
   const [chatMode, setChatMode] = useState<EmbeddedChatMode>("hidden");
-  const [folderSearch, setFolderSearch] = useState("");
-  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
-  const [newFolderName, setNewFolderName] = useState("");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveRequestRef = useRef(0);
   const [isDiarizing, setIsDiarizing] = useState(false);
+  const [showTemplateAppendConfirm, setShowTemplateAppendConfirm] = useState(false);
   const canEditNote = !isEncounterCompleted;
-  const canMoveToFolders = !isEncounterCompleted;
   const isClinicalEncounter = note.note_type === "meeting" && Boolean(note.calendar_event_id);
   const [diarizedSegments, setDiarizedSegments] = useState<TranscriptSegment[] | null>(null);
   const [speakerMappings, setSpeakerMappings] = useState<Record<string, string>>({});
@@ -260,14 +264,6 @@ export default function NoteEditor({
   }, []);
 
   const hasMeetingTranscript = !!note.transcript;
-
-  const filteredFolders = useMemo(
-    () =>
-      folderSearch && folders
-        ? folders.filter((f) => f.name.toLowerCase().includes(folderSearch.toLowerCase()))
-        : (folders ?? []),
-    [folders, folderSearch]
-  );
 
   const displaySegments = useMemo<TranscriptSegment[]>(() => {
     if (diarizedSegments && diarizedSegments.length > 0) return diarizedSegments;
@@ -333,7 +329,11 @@ export default function NoteEditor({
   useEffect(() => {
     let cancelScheduledUpdate: (() => void) | undefined;
 
-    if (prevProcessingStateRef.current === "processing" && actionProcessingState === "success") {
+    if (
+      (prevProcessingStateRef.current === "processing" ||
+        prevProcessingStateRef.current === "retrying") &&
+      actionProcessingState === "success"
+    ) {
       cancelScheduledUpdate = scheduleUiUpdate(() => setViewMode("enhanced"));
     }
     prevProcessingStateRef.current = actionProcessingState;
@@ -570,6 +570,8 @@ export default function NoteEditor({
 
   const handleTitleInput = useCallback(() => {
     if (titleRef.current) {
+      saveRequestRef.current += 1;
+      setSaveState("idle");
       const text = titleRef.current.textContent || "";
       onTitleChange(note.id, text);
     }
@@ -598,6 +600,8 @@ export default function NoteEditor({
 
   const handleContentChange = useCallback(
     (newValue: string) => {
+      saveRequestRef.current += 1;
+      setSaveState("idle");
       onContentChange(note.id, newValue);
     },
     [note.id, onContentChange]
@@ -605,10 +609,46 @@ export default function NoteEditor({
 
   const handleEnhancedChange = useCallback(
     (value: string) => {
+      saveRequestRef.current += 1;
+      setSaveState("idle");
       enhancement?.onChange(note.id, value);
     },
     [enhancement, note.id]
   );
+
+  const handleSave = useCallback(async () => {
+    if (!onSave) return;
+    const requestId = ++saveRequestRef.current;
+    setSaveState("saving");
+    try {
+      const saved = await onSave();
+      if (requestId !== saveRequestRef.current) return;
+      setSaveState(saved ? "saved" : "error");
+    } catch {
+      if (requestId === saveRequestRef.current) setSaveState("error");
+    }
+  }, [onSave]);
+
+  const insertEncounterTemplate = useCallback(() => {
+    setShowTemplateAppendConfirm(false);
+    setViewMode("raw");
+    void onInsertEncounterTemplate?.();
+    window.requestAnimationFrame(() => editorRef.current?.commands.focus("end"));
+  }, [onInsertEncounterTemplate]);
+
+  const handleInsertEncounterTemplate = useCallback(() => {
+    if (!onInsertEncounterTemplate || isInsertingEncounterTemplate) return;
+    if (note.content.trim()) {
+      setShowTemplateAppendConfirm(true);
+      return;
+    }
+    insertEncounterTemplate();
+  }, [insertEncounterTemplate, isInsertingEncounterTemplate, note.content, onInsertEncounterTemplate]);
+
+  useEffect(() => {
+    saveRequestRef.current += 1;
+    setSaveState("idle");
+  }, [note.id]);
 
   const handleAskSubmit = useCallback(
     (text: string) => {
@@ -655,122 +695,57 @@ export default function NoteEditor({
                 {shortDate}
               </span>
             )}
-            {calendarEventName && (
-              <span className="inline-flex items-center gap-1.5 text-[11px] text-foreground/50 dark:text-foreground/35">
-                <LinkIcon size={11} className="shrink-0" />
-                <span className="truncate max-w-40">{calendarEventName}</span>
-              </span>
-            )}
             {isEncounterCompleted && (
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/5 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
                 <LockKeyhole size={10} />
                 {t("notes.editor.encounterCompleted")}
               </span>
             )}
-            {folders && onMoveToFolder && canMoveToFolders && (
-              <DropdownMenu
-                onOpenChange={(open) => {
-                  if (!open) {
-                    setFolderSearch("");
-                    setIsCreatingFolder(false);
-                    setNewFolderName("");
-                  }
-                }}
-              >
-                <DropdownMenuTrigger asChild>
-                  <button className={CHIP_BUTTON_CLASS}>
-                    <FolderOpen size={11} className="shrink-0" />
-                    {folderName || t("notes.editor.noFolder")}
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" sideOffset={6} className="min-w-44 p-1">
-                  {folders.length > 5 && (
-                    <>
-                      <div className="relative px-1.5 py-0.5">
-                        <Search
-                          size={9}
-                          className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground/15 pointer-events-none"
-                        />
-                        <input
-                          value={folderSearch}
-                          onChange={(e) => setFolderSearch(e.target.value)}
-                          onKeyDown={(e) => e.stopPropagation()}
-                          placeholder={t("notes.context.searchFolders")}
-                          className="input-inline w-full pl-4.5 pr-1 py-0.5 text-xs text-foreground placeholder:text-foreground/15 outline-none border-none appearance-none"
-                        />
-                      </div>
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-                  <div className="overflow-y-auto max-h-48">
-                    {filteredFolders.map((folder) => {
-                      const isCurrent = folder.id === note.folder_id;
-                      return (
-                        <DropdownMenuItem
-                          key={folder.id}
-                          disabled={isCurrent}
-                          onClick={() => onMoveToFolder(note.id, folder.id)}
-                          className="text-xs gap-2 rounded-md px-2 py-1.5"
-                        >
-                          <FolderOpen size={11} className="text-foreground/30 shrink-0" />
-                          <span className="truncate flex-1">{folder.name}</span>
-                          {isCurrent && <Check size={9} className="text-primary shrink-0" />}
-                        </DropdownMenuItem>
-                      );
-                    })}
-                    {folderSearch && filteredFolders.length === 0 && (
-                      <p className="text-xs text-foreground/20 text-center py-1.5">
-                        {t("notes.context.noResults")}
-                      </p>
-                    )}
-                  </div>
-                  {onCreateFolderAndMove && (
-                    <>
-                      <DropdownMenuSeparator />
-                      {isCreatingFolder ? (
-                        <div className="px-1">
-                          <input
-                            autoFocus
-                            value={newFolderName}
-                            onChange={(e) => setNewFolderName(e.target.value)}
-                            onKeyDown={(e) => {
-                              e.stopPropagation();
-                              if (e.key === "Enter" && newFolderName.trim()) {
-                                onCreateFolderAndMove(note.id, newFolderName.trim());
-                                setNewFolderName("");
-                                setIsCreatingFolder(false);
-                              }
-                              if (e.key === "Escape") {
-                                setIsCreatingFolder(false);
-                                setNewFolderName("");
-                              }
-                            }}
-                            placeholder={t("notes.folders.folderName")}
-                            className="input-inline w-full px-2 py-1.5 rounded-md bg-transparent text-xs text-foreground placeholder:text-foreground/20 outline-none border-none appearance-none"
-                          />
-                        </div>
-                      ) : (
-                        <DropdownMenuItem
-                          onSelect={(e) => {
-                            e.preventDefault();
-                            setIsCreatingFolder(true);
-                          }}
-                          className="text-xs gap-2 rounded-md px-2 py-1.5 text-foreground/40"
-                        >
-                          <Plus size={10} />
-                          {t("notes.context.newFolder")}
-                        </DropdownMenuItem>
-                      )}
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
             {isSaving && (
               <span className="inline-flex items-center gap-1 text-[11px] text-foreground/30 dark:text-foreground/15 tabular-nums">
                 <Loader2 size={8} className="animate-spin" />
                 {t("notes.editor.saving")}
               </span>
+            )}
+            {onSave && !isEncounterCompleted && (
+              <button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={isSaving}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45",
+                  saveState === "saved"
+                    ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                    : saveState === "error"
+                      ? "border-destructive/30 text-destructive"
+                      : "border-border/50 text-foreground/60 hover:bg-foreground/5 hover:text-foreground"
+                )}
+                aria-live="polite"
+              >
+                {saveState === "saved" ? <Check size={11} /> : <Save size={11} />}
+                {saveState === "saved"
+                  ? t("noteEditor.saved")
+                  : isSaving
+                    ? t("common.saving")
+                    : t("common.save")}
+              </button>
+            )}
+            {isClinicalEncounter && onInsertEncounterTemplate && !isEncounterCompleted && (
+              <button
+                type="button"
+                onClick={handleInsertEncounterTemplate}
+                disabled={isInsertingEncounterTemplate}
+                className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/50 px-2 text-[11px] font-medium text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isInsertingEncounterTemplate ? (
+                  <Loader2 size={11} className="animate-spin" />
+                ) : (
+                  <FilePlus size={11} />
+                )}
+                {isInsertingEncounterTemplate
+                  ? t("notes.editor.templateInsert.inserting")
+                  : t("notes.editor.templateInsert.button")}
+              </button>
             )}
             <div className="flex-1" />
             <div className="flex items-center gap-1">
@@ -951,6 +926,7 @@ export default function NoteEditor({
               hasDiarizedTranscript={displaySegments.some((segment) => Boolean(segment.speakerName))}
             />
           )}
+          {encounterCompletion && <div className="mt-3">{encounterCompletion}</div>}
         </div>
 
         <div className="flex-1 relative min-h-0">
@@ -961,6 +937,7 @@ export default function NoteEditor({
                 mode={viewMode}
                 isRecording={isRecording}
                 isProcessingTranscript={isProcessing}
+                transcriptStatus={transcriptStatus}
                 isEncounterCompleted={isEncounterCompleted}
                 diarizationStatus={diarizationStatus}
                 transcript={note.transcript}
@@ -1018,7 +995,7 @@ export default function NoteEditor({
                 onChange={handleContentChange}
                 editorRef={editorRef}
                 placeholder={t("notes.editor.startWriting")}
-                disabled={actionProcessingState === "processing"}
+                disabled={actionProcessingState === "processing" && !actionIsBuiltIn}
                 readOnly={!canEditNote}
               />
             )}
@@ -1026,7 +1003,11 @@ export default function NoteEditor({
           <ActionProcessingOverlay
             state={actionProcessingState ?? "idle"}
             actionName={actionName ?? null}
+            isBuiltInAction={actionIsBuiltIn}
+            errorMessage={actionErrorMessage}
             progress={actionProgress}
+            startedAt={actionStartedAt}
+            onCancel={onCancelAction}
           />
           <div
             className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
@@ -1094,10 +1075,12 @@ export default function NoteEditor({
           )}
           <NoteBottomBar
             isRecording={isRecording}
+            isPaused={isPaused}
             isProcessing={isProcessing}
             recordingDisabled={!recordingAllowed}
             onStartRecording={onStartRecording}
             onStopRecording={onStopRecording}
+            onTogglePauseRecording={onTogglePauseRecording}
             onAskSubmit={handleAskSubmit}
             onInputFocus={handleChatInputFocus}
             canRecord={canEditNote}
@@ -1134,6 +1117,15 @@ export default function NoteEditor({
           onNewChat={embeddedChat.startNewChat}
         />
       )}
+      <ConfirmDialog
+        open={showTemplateAppendConfirm}
+        onOpenChange={setShowTemplateAppendConfirm}
+        title={t("notes.editor.templateInsert.confirmTitle")}
+        description={t("notes.editor.templateInsert.confirmDescription")}
+        confirmText={t("notes.editor.templateInsert.confirm")}
+        cancelText={t("notes.editor.templateInsert.cancel")}
+        onConfirm={insertEncounterTemplate}
+      />
     </div>
   );
 }

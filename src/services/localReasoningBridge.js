@@ -7,6 +7,8 @@ class LocalReasoningService {
     this.pendingRequests = [];
     this.nextRequestId = 0;
     this.drainPromise = null;
+    this.activeRequest = null;
+    this.activeAbortController = null;
   }
 
   async isAvailable() {
@@ -41,11 +43,37 @@ class LocalReasoningService {
         modelId,
         config: normalizedConfig,
         enqueuedAt: Date.now(),
+        priority: Number.isFinite(normalizedConfig.queuePriority)
+          ? Number(normalizedConfig.queuePriority)
+          : 0,
         resolve,
         reject,
       });
       void this._drainQueue();
     });
+  }
+
+  cancel(cancellationKey) {
+    if (!cancellationKey) return false;
+    let cancelled = false;
+    const remaining = [];
+    for (const request of this.pendingRequests) {
+      if (request.config?.cancellationKey === cancellationKey) {
+        cancelled = true;
+        const error = Object.assign(new Error("Local generation cancelled."), {
+          code: "LOCAL_INFERENCE_CANCELLED",
+        });
+        request.reject(error);
+      } else {
+        remaining.push(request);
+      }
+    }
+    this.pendingRequests = remaining;
+    if (this.activeRequest?.config?.cancellationKey === cancellationKey) {
+      cancelled = true;
+      this.activeAbortController?.abort();
+    }
+    return cancelled;
   }
 
   async _drainQueue() {
@@ -54,6 +82,9 @@ class LocalReasoningService {
     this.drainPromise = (async () => {
       try {
         while (this.pendingRequests.length > 0) {
+          this.pendingRequests.sort(
+            (left, right) => right.priority - left.priority || left.requestId - right.requestId
+          );
           const request = this.pendingRequests.shift();
           if (request) await this._runQueuedRequest(request);
         }
@@ -72,6 +103,8 @@ class LocalReasoningService {
     const startedAt = Date.now();
     const queueWaitMs = startedAt - request.enqueuedAt;
     this.isProcessing = true;
+    this.activeRequest = request;
+    this.activeAbortController = new AbortController();
 
     debugLogger.logReasoning("LOCAL_BRIDGE_START", {
       requestId: request.requestId,
@@ -83,12 +116,14 @@ class LocalReasoningService {
     });
 
     try {
-      const result = await this._processText(request.text, request.modelId, request.config);
+      const result = await this._processText(request.text, request.modelId, request.config, this.activeAbortController.signal);
       request.resolve(result);
     } catch (error) {
       request.reject(error);
     } finally {
       this.isProcessing = false;
+      this.activeRequest = null;
+      this.activeAbortController = null;
       debugLogger.logReasoning("LOCAL_BRIDGE_COMPLETE", {
         requestId: request.requestId,
         modelId: request.modelId,
@@ -99,25 +134,30 @@ class LocalReasoningService {
     }
   }
 
-  async _processText(text, modelId, config) {
+  async _processText(text, modelId, config, signal) {
     const startTime = Date.now();
 
     try {
       const inferenceConfig = {
-        maxTokens: config.maxTokens || this.calculateMaxTokens(text.length),
-        temperature: config.temperature || 0.7,
-        topK: config.topK || 40,
-        topP: config.topP || 0.9,
-        repeatPenalty: config.repeatPenalty || 1.1,
-        systemPrompt: config.systemPrompt || "",
+        maxTokens: config.maxTokens ?? this.calculateMaxTokens(text.length),
+        temperature: config.temperature ?? 0.7,
+        topK: config.topK ?? 40,
+        topP: config.topP ?? 0.9,
+        repeatPenalty: config.repeatPenalty ?? 1.1,
+        systemPrompt: config.systemPrompt ?? "",
         disableThinking: config.disableThinking !== false,
         requireCompleteOutput: config.requireCompleteOutput === true,
         responseFormat: config.responseFormat,
+        signal,
       };
 
       debugLogger.logReasoning("LOCAL_BRIDGE_INFERENCE", {
         modelId,
-        config: inferenceConfig,
+        inputLength: text.length,
+        systemPromptLength: inferenceConfig.systemPrompt.length,
+        maxTokens: inferenceConfig.maxTokens,
+        disableThinking: inferenceConfig.disableThinking,
+        structuredOutput: Boolean(inferenceConfig.responseFormat),
       });
 
       const result = await modelManager.runInference(modelId, text, inferenceConfig);
@@ -133,7 +173,6 @@ class LocalReasoningService {
         modelId,
         processingTimeMs: Date.now() - startTime,
         resultLength: cleanResult.length,
-        resultPreview: cleanResult.substring(0, 100) + (cleanResult.length > 100 ? "..." : ""),
       });
 
       return cleanResult;
@@ -141,8 +180,7 @@ class LocalReasoningService {
       debugLogger.logReasoning("LOCAL_BRIDGE_ERROR", {
         modelId,
         processingTimeMs: Date.now() - startTime,
-        error: error.message,
-        stack: error.stack,
+        safeErrorCode: error?.code || "LOCAL_INFERENCE_FAILED",
       });
 
       throw error;
@@ -156,4 +194,5 @@ class LocalReasoningService {
 
 module.exports = {
   default: new LocalReasoningService(),
+  LocalReasoningService,
 };

@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Square } from "lucide-react";
-import { stopRecording, useMeetingRecordingStore } from "../../stores/meetingRecordingStore";
+import { Pause, Play, Square } from "lucide-react";
+import {
+  stopRecording,
+  togglePauseRecording,
+  useMeetingRecordingStore,
+} from "../../stores/meetingRecordingStore";
 import { cn } from "../lib/utils";
 import { isControlPanelWindow } from "../../utils/windowContext";
 
@@ -34,12 +38,14 @@ export default function MeetingRecordingPill({
 }: MeetingRecordingPillProps) {
   const { t } = useTranslation();
   const isRecording = useMeetingRecordingStore((s) => s.isRecording);
+  const isPaused = useMeetingRecordingStore((s) => s.isPaused);
   const recordingNoteId = useMeetingRecordingStore((s) => s.recordingNoteId);
   const recordingNoteTitle = useMeetingRecordingStore((s) => s.recordingNoteTitle);
   const micLevel = useMeetingRecordingStore((s) => s.currentMicLevel);
   const micCaptureStatus = useMeetingRecordingStore((s) => s.micCaptureStatus);
   const isWaitingForMic = micCaptureStatus === "reconnecting" || micCaptureStatus === "unavailable";
   const [isStopping, setIsStopping] = useState(false);
+  const [isTogglingPause, setIsTogglingPause] = useState(false);
 
   const isViewingRecordingNote =
     activeView === "personal-notes" && activeNoteId === recordingNoteId;
@@ -58,9 +64,20 @@ export default function MeetingRecordingPill({
     }
   };
 
+  const handleTogglePause = async () => {
+    if (isTogglingPause) return;
+    setIsTogglingPause(true);
+    try {
+      await togglePauseRecording();
+    } finally {
+      setIsTogglingPause(false);
+    }
+  };
+
   const title = truncateTitle(recordingNoteTitle ?? "");
   const returnLabel = t("notes.meetingPill.returnToNote");
   const stopLabel = t("notes.editor.stop");
+  const pauseLabel = isPaused ? t("notes.editor.resume") : t("notes.editor.pause");
 
   return createPortal(
     <div
@@ -112,8 +129,25 @@ export default function MeetingRecordingPill({
 
         <button
           type="button"
+          onClick={handleTogglePause}
+          disabled={isStopping || isTogglingPause}
+          aria-label={pauseLabel}
+          title={pauseLabel}
+          className={cn(
+            "flex items-center justify-center w-7 h-7 rounded-lg",
+            "transition-colors duration-150",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/30",
+            isTogglingPause
+              ? "bg-primary/6 text-primary/40 cursor-not-allowed"
+              : "bg-primary/10 hover:bg-primary/18 active:bg-primary/25 text-primary"
+          )}
+        >
+          {isPaused ? <Play size={11} fill="currentColor" /> : <Pause size={11} />}
+        </button>
+        <button
+          type="button"
           onClick={handleStop}
-          disabled={isStopping}
+          disabled={isStopping || isTogglingPause}
           aria-label={stopLabel}
           title={stopLabel}
           className={cn(

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, CircleDashed, Loader2, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
   EncounterOutput,
@@ -14,6 +14,11 @@ import {
   runEncounterOutputGeneration,
   type EncounterOutputGenerationBridge,
 } from "../../helpers/encounterOutputGeneration";
+import {
+  clinicalOutputStatusCopyKey,
+  isTranscriptPersistenceBusy,
+} from "../../helpers/encounterStatus";
+import type { TranscriptPersistenceStatus } from "../../stores/meetingRecordingStore";
 import { cn } from "../lib/utils";
 import { RichTextEditor } from "../ui/RichTextEditor";
 
@@ -40,6 +45,7 @@ interface EncounterClinicalOutputsProps {
   mode: EncounterClinicalOutputMode;
   isRecording: boolean;
   isProcessingTranscript?: boolean;
+  transcriptStatus?: TranscriptPersistenceStatus;
   isEncounterCompleted?: boolean;
   diarizationStatus?: MeetingDiarizationStatus;
   transcript?: string | null;
@@ -58,29 +64,10 @@ function normalizeOutput(
   return output;
 }
 
-/**
- * Generate only from the canonical main-process snapshot and publish only
- * through the matching guarded finish. This is exported so the renderer race
- * behavior can be tested without mounting the full note editor.
- */
-function statusCopyKey(
-  status: EncounterOutputStatus | null,
-  options: {
-    isRecording: boolean;
-    isProcessingTranscript: boolean;
-    separating: boolean;
-    generating: boolean;
-  }
-): string {
-  if (options.isRecording) return "notes.editor.clinicalOutputs.recording";
-  if (options.isProcessingTranscript) return "notes.editor.clinicalOutputs.processingTranscript";
-  if (options.separating) return "notes.editor.clinicalOutputs.separatingSpeakers";
-  if (options.generating || status === "processing" || status === "pending") {
-    return "notes.editor.clinicalOutputs.generatingNotes";
-  }
-  if (status === "stale") return "notes.editor.clinicalOutputs.stale";
-  if (status === "failed") return "notes.editor.clinicalOutputs.failed";
-  return "notes.editor.clinicalOutputs.ready";
+function parseGenerationTimestamp(value: string | null | undefined): number {
+  if (typeof value !== "string" || !value.trim()) return NaN;
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  return Date.parse(normalized);
 }
 
 export default function EncounterClinicalOutputs({
@@ -88,6 +75,7 @@ export default function EncounterClinicalOutputs({
   mode,
   isRecording,
   isProcessingTranscript = false,
+  transcriptStatus = "idle",
   isEncounterCompleted = false,
   diarizationStatus = "idle",
   transcript = "",
@@ -100,15 +88,32 @@ export default function EncounterClinicalOutputs({
   const [generationFailed, setGenerationFailed] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [outputRefreshKey, setOutputRefreshKey] = useState(0);
+  const [clock, setClock] = useState(() => Date.now());
   const generationAttemptRef = useRef(false);
   const generationScopeRef = useRef(0);
   const mountedRef = useRef(true);
 
   const currentTranscript = transcript || "";
   const separating = diarizationStatus === "queued" || diarizationStatus === "processing";
+  const transcriptBusy = isTranscriptPersistenceBusy(transcriptStatus, isProcessingTranscript);
   const settled =
-    !isRecording && !isProcessingTranscript && !separating && currentTranscript.trim().length > 0;
+    !isRecording && !transcriptBusy && !separating && currentTranscript.trim().length > 0;
   const transcriptReadKey = settled ? currentTranscript : null;
+  const generationPhase = output?.generation_phase ?? null;
+  const outputStartedAt = parseGenerationTimestamp(output?.generation_started_at);
+  const backgroundGenerating =
+    output?.summary_status === "processing" ||
+    output?.soap_status === "processing" ||
+    output?.focus_status === "processing" ||
+    generationPhase === "mapping" ||
+    generationPhase === "synthesizing";
+  const retrying = generationPhase === "retrying";
+
+  useEffect(() => {
+    if (!backgroundGenerating && !retrying) return undefined;
+    const timer = setInterval(() => setClock(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [backgroundGenerating, retrying]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -191,6 +196,7 @@ export default function EncounterClinicalOutputs({
         encounterId == null ||
         isGenerating ||
         generationAttemptRef.current ||
+        transcriptBusy ||
         !currentTranscript.trim()
       )
         return;
@@ -236,7 +242,7 @@ export default function EncounterClinicalOutputs({
         }
       }
     },
-    [currentTranscript, encounterId, isGenerating]
+    [currentTranscript, encounterId, isGenerating, transcriptBusy]
   );
 
   const outputStatus: EncounterOutputStatus | null = output
@@ -245,16 +251,38 @@ export default function EncounterClinicalOutputs({
       : output.soap_status
     : null;
   const effectiveStatus = generationFailed ? "failed" : outputStatus;
-  const statusKey = statusCopyKey(effectiveStatus, {
+  const statusKey = clinicalOutputStatusCopyKey(effectiveStatus, {
+    hasTranscript: currentTranscript.trim().length > 0,
     isRecording,
     isProcessingTranscript,
+    transcriptStatus,
     separating,
     generating: isGenerating,
+    generationPhase,
   });
+  const statusText =
+    statusKey === "notes.editor.processingStatus.generatingProgress"
+      ? t(statusKey, {
+          current: output?.generation_progress_current ?? 0,
+          total: output?.generation_progress_total ?? 0,
+        })
+      : t(statusKey);
+  const elapsedSeconds =
+    backgroundGenerating && Number.isFinite(outputStartedAt)
+      ? Math.max(0, Math.floor((clock - outputStartedAt) / 1_000))
+      : 0;
+  const elapsedText =
+    elapsedSeconds > 0
+      ? ` · ${elapsedSeconds >= 60 ? `${Math.floor(elapsedSeconds / 60)}m ` : ""}${elapsedSeconds % 60}s`
+      : "";
   const content = mode === "summary" ? output?.summary : output?.soap;
   const formattedContent = formatClinicalOutputForDisplay(mode, content);
-  const showRetry = !isEncounterCompleted && (generationFailed || outputStatus === "failed");
-  const showRegenerate = !isEncounterCompleted && outputStatus === "stale" && !isGenerating;
+  // Output generation is independent from encounter lifecycle. A completed
+  // encounter is read-only for source edits, but its generated outputs can
+  // still be retried or regenerated safely from the immutable transcript.
+  const showRetry = !retrying && (generationFailed || outputStatus === "failed");
+  const showRegenerate = outputStatus === "stale" && !isGenerating;
+  const showClinicalWork = isRecording || isGenerating || separating || transcriptBusy || backgroundGenerating || retrying;
 
   if (isLoading && !output) {
     return (
@@ -269,14 +297,20 @@ export default function EncounterClinicalOutputs({
       <div className="mx-auto max-w-3xl">
         <div className="mb-5 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            {isRecording || isGenerating || separating || isProcessingTranscript ? (
+            {showClinicalWork ? (
               <Loader2 size={13} className="shrink-0 animate-spin" />
             ) : effectiveStatus === "failed" ? (
               <AlertCircle size={13} className="shrink-0 text-destructive" />
-            ) : (
+            ) : effectiveStatus === "pending" ? (
+              <CircleDashed size={13} className="shrink-0 text-amber-600 dark:text-amber-300" />
+            ) : effectiveStatus === "stale" ? (
+              <RefreshCw size={13} className="shrink-0 text-amber-600 dark:text-amber-300" />
+            ) : effectiveStatus === "ready" ? (
               <CheckCircle2 size={13} className="shrink-0 text-emerald-500" />
+            ) : (
+              <CircleDashed size={13} className="shrink-0 text-muted-foreground/60" />
             )}
-            <span>{t(statusKey)}</span>
+            <span>{statusText}{elapsedText}</span>
           </div>
           {showRetry && (
             <button
@@ -300,7 +334,7 @@ export default function EncounterClinicalOutputs({
           )}
         </div>
 
-        {effectiveStatus === "failed" && (
+        {effectiveStatus === "failed" && !retrying && (
           <div className="mb-5 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive/80">
             {t(SAFE_ERROR_COPY)}
           </div>

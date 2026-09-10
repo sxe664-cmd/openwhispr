@@ -15,8 +15,11 @@ const ENCOUNTER_PUBLIC_ERRORS = Object.freeze({
   ENCOUNTER_OUTPUT_UNAVAILABLE: "Clinical notes are unavailable for this encounter.",
   ENCOUNTER_RECORDING_ACTIVE: "Another encounter is already recording.",
   ENCOUNTER_RECORDING_INVALID_NOTE: "This recording could not be saved.",
+  ENCOUNTER_RECORDING_STALE_SESSION: "This recording was replaced by a newer session.",
   ENCOUNTER_RECORDING_SAVE_FAILED: "The final transcript could not be saved.",
   ENCOUNTER_OUTPUTS_NOT_READY: "All clinical notes must be generated before completing this encounter.",
+  ENCOUNTER_NOT_STARTED: "Start the encounter before completing it.",
+  ENCOUNTER_TRANSCRIPT_NOT_SAVED: "The recording is still being saved. Try again in a moment.",
   ENCOUNTER_COMPLETED: "This encounter is complete and read-only.",
 });
 
@@ -1277,6 +1280,10 @@ class IPCHandlers {
       return this.databaseManager.getNote(id);
     });
 
+    ipcMain.handle("db-get-note-generation-source", async (_event, noteId) =>
+      this.databaseManager.getNoteGenerationSource(noteId)
+    );
+
     ipcMain.handle("db-get-notes", async (event, noteType, limit, folderId, spaceId) => {
       return this.databaseManager.getNotes(noteType, limit, folderId, spaceId);
     });
@@ -1341,6 +1348,9 @@ class IPCHandlers {
     ipcMain.handle("db-get-note-generation-candidate", async (_event, candidateId) =>
       projectSafeNoteGenerationCandidate(this.databaseManager.getNoteGenerationCandidate(candidateId))
     );
+    ipcMain.handle("db-get-pending-note-generation-candidate", async (_event, noteId) =>
+      projectSafeNoteGenerationCandidate(this.databaseManager.getPendingNoteGenerationCandidate(noteId))
+    );
     ipcMain.handle("db-apply-note-generation-candidate", async (_event, candidateId, options) => {
       const result = this.databaseManager.applyNoteGenerationCandidate(candidateId, options);
       if (result?.success && result.note) this._publishNoteUpdated(result.note);
@@ -1375,6 +1385,20 @@ class IPCHandlers {
       }
       return result;
     });
+
+    ipcMain.handle(
+      "db-update-note-enhanced-if-source-matches",
+      async (_event, id, expectedSourceHash, updates, expectedSourceRevision) => {
+        const result = this.databaseManager.updateNoteEnhancedIfSourceMatches(
+          id,
+          expectedSourceHash,
+          updates,
+          expectedSourceRevision
+        );
+        if (result?.success && result?.note) this._publishNoteUpdated(result.note);
+        return result;
+      }
+    );
 
     ipcMain.handle("db-delete-note", async (event, id) => {
       return this.deleteNoteInternal(id);
@@ -1834,7 +1858,7 @@ class IPCHandlers {
 
         const sections = Array.isArray(options?.sections)
           ? options.sections
-          : ["summary", "soap", "filledTemplate", "encounterDetails"];
+          : ["summary", "soap", "notes", "filledTemplate", "encounterDetails"];
         for (const required of ["summary", "soap"]) {
           if (sections.includes(required) && output[`${required}_status`] !== "ready") {
             return { success: false, error: `${required === "summary" ? "Summary" : "SOAP note"} is not ready yet.` };
@@ -3871,12 +3895,20 @@ class IPCHandlers {
         const result = await LocalReasoningService.processText(text, modelId, config);
         return { success: true, text: result };
       } catch (error) {
-        debugLogger.error("Local reasoning request failed", {
-          error: error.message,
-          code: error.code,
-        });
-        return { success: false, error: "Local reasoning could not be completed. Please try again." };
+        const { safeLocalInferenceErrorCode } = require("./localInferenceErrors");
+        const errorCode = safeLocalInferenceErrorCode(error);
+        debugLogger.error("Local reasoning request failed", { errorCode });
+        return {
+          success: false,
+          error: "Local reasoning could not be completed. Please try again.",
+          errorCode,
+        };
       }
+    });
+
+    ipcMain.handle("cancel-local-reasoning", (_event, cancellationKey) => {
+      const LocalReasoningService = require("../services/localReasoningBridge").default;
+      return { success: true, cancelled: LocalReasoningService.cancel(String(cancellationKey || "")) };
     });
 
     ipcMain.handle(
@@ -4040,6 +4072,33 @@ class IPCHandlers {
         return modelManager.getServerStatus();
       } catch (error) {
         return { available: false, running: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("local-model-runtime-profile", async (_event, modelId) => {
+      try {
+        const modelManager = require("./modelManagerBridge").default;
+        const profile = modelManager.getRuntimeProfile(String(modelId ?? ""));
+        return profile
+          ? { success: true, profile }
+          : { success: false, code: "LOCAL_MODEL_NOT_FOUND" };
+      } catch {
+        return { success: false, code: "LOCAL_MODEL_UNAVAILABLE" };
+      }
+    });
+
+    ipcMain.handle("local-model-token-count", async (_event, modelId, text) => {
+      try {
+        const modelManager = require("./modelManagerBridge").default;
+        const tokenCount = await modelManager.countRuntimeTokens(
+          String(modelId ?? ""),
+          String(text ?? "")
+        );
+        return tokenCount == null
+          ? { success: false, code: "LOCAL_MODEL_NOT_FOUND" }
+          : { success: true, tokenCount };
+      } catch {
+        return { success: false, code: "LOCAL_MODEL_UNAVAILABLE" };
       }
     });
 
@@ -5454,6 +5513,7 @@ class IPCHandlers {
     let meetingOneOnOneProfileBound = false;
     let meetingNoteId = null;
     let meetingStartingNoteId = null;
+    let meetingTranscriptionPaused = false;
     let meetingContextRouting = resolveMeetingContextRouting();
 
     const getLiveSpeakerProfiles = () => {
@@ -6042,6 +6102,7 @@ class IPCHandlers {
       meetingLocalLanguage = null;
       meetingLocalTranscribing = false;
       meetingPendingMicChunks = [];
+      meetingTranscriptionPaused = false;
       resetPendingMicFinals();
       meetingAecEnabled = false;
       meetingStartedAt = null;
@@ -6154,6 +6215,7 @@ class IPCHandlers {
     const resetMeetingStreamingState = () => {
       this._meetingMicStreaming = null;
       this._meetingSystemStreaming = null;
+      meetingTranscriptionPaused = false;
       meetingSendCounts = { mic: 0, system: 0 };
       meetingLiveSpeakerStartedAt = null;
       meetingPendingMicChunks = [];
@@ -6410,6 +6472,7 @@ class IPCHandlers {
       meetingTranscriptionStartInProgress = true;
       meetingStartingNoteId = requestedNoteId;
       meetingStartedAt = Date.now();
+      meetingTranscriptionPaused = false;
       meetingConnectionOptions = options;
       meetingContextRouting = resolveMeetingContextRouting(options.meetingContext);
       meetingConnectionWin = BrowserWindow.fromWebContents(event.sender);
@@ -6569,6 +6632,10 @@ class IPCHandlers {
     };
 
     const sendMeetingAudio = (audioBuffer, source) => {
+      if (meetingTranscriptionPaused) {
+        return;
+      }
+
       const outboundBuffer = Buffer.isBuffer(audioBuffer) ? audioBuffer : Buffer.from(audioBuffer);
 
       if (source === "system") {
@@ -6743,7 +6810,28 @@ class IPCHandlers {
       sendMeetingAudio(audioBuffer, source);
     });
 
+    ipcMain.handle("meeting-transcription-set-paused", async (_event, paused) => {
+      const active =
+        meetingTranscriptionStartInProgress ||
+        meetingLocalMode ||
+        isMeetingStreamingConnected() ||
+        meetingNoteId != null;
+      if (!active) {
+        return { success: false, error: "No active meeting recording" };
+      }
+
+      const nextPaused = paused === true;
+      if (nextPaused) {
+        // Preserve mic audio captured just before the pause boundary, then drop
+        // anything arriving after it until the renderer resumes.
+        flushPendingMeetingMicChunks(true);
+      }
+      meetingTranscriptionPaused = nextPaused;
+      return { success: true, paused: nextPaused };
+    });
+
     ipcMain.handle("meeting-transcription-stop", async () => {
+      meetingTranscriptionPaused = false;
       this.meetingDetectionEngine?.setUserRecording(false);
       const sessionMeetingContext = meetingContextRouting.meetingContext;
       try {
@@ -8067,6 +8155,33 @@ class IPCHandlers {
       }
     });
 
+    ipcMain.handle("encounter-evidence-get", async (_event, encounterId, input) => {
+      try {
+        return {
+          success: true,
+          bundle: this.databaseManager.getEncounterEvidenceBundle(encounterId, input),
+        };
+      } catch {
+        return { success: false, bundle: null, code: "ENCOUNTER_OUTPUT_UNAVAILABLE" };
+      }
+    });
+
+    ipcMain.handle("encounter-evidence-save-chunk", async (_event, encounterId, token, input) => {
+      try {
+        return this.databaseManager.saveEncounterEvidenceChunk(encounterId, token, input);
+      } catch {
+        return { applied: false, code: "ENCOUNTER_OUTPUT_UNAVAILABLE" };
+      }
+    });
+
+    ipcMain.handle("encounter-evidence-complete", async (_event, encounterId, token, input) => {
+      try {
+        return this.databaseManager.completeEncounterEvidence(encounterId, token, input);
+      } catch {
+        return { applied: false, code: "ENCOUNTER_OUTPUT_UNAVAILABLE" };
+      }
+    });
+
     ipcMain.handle("encounter-output-begin", async (_event, encounterId, outputTypes = "all") => {
       try {
         const result = this.databaseManager.beginEncounterOutputGeneration(encounterId, outputTypes);
@@ -8081,6 +8196,12 @@ class IPCHandlers {
             code: error.code,
           };
         }
+        if (result.output) {
+          broadcastToWindows("encounter-output-updated", {
+            encounterId: Number(encounterId),
+            applied: false,
+          });
+        }
         return { success: true, ...result };
       } catch {
         const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
@@ -8094,6 +8215,35 @@ class IPCHandlers {
         };
       }
     });
+
+    ipcMain.handle(
+      "encounter-output-progress",
+      async (_event, encounterId, token, progress = {}) => {
+        try {
+          const result = this.databaseManager.updateEncounterOutputGenerationProgress(
+            encounterId,
+            token,
+            progress
+          );
+          if (result.output) {
+            broadcastToWindows("encounter-output-updated", {
+              encounterId: Number(encounterId),
+              applied: Boolean(result.applied),
+            });
+          }
+          return { success: true, ...result };
+        } catch {
+          const error = encounterIpcError("ENCOUNTER_OUTPUT_UNAVAILABLE");
+          return {
+            success: false,
+            applied: false,
+            output: null,
+            error: error.message,
+            code: error.code,
+          };
+        }
+      }
+    );
 
     ipcMain.handle("encounter-output-finish", async (_event, encounterId, token, updates = {}) => {
       try {
@@ -8153,6 +8303,12 @@ class IPCHandlers {
         }
         if (result.note) this._publishNoteUpdated(result.note);
         if (result.encounter?.id && result.note?.id) {
+          if (result.output) {
+            broadcastToWindows("encounter-output-updated", {
+              encounterId: Number(result.encounter.id),
+              applied: false,
+            });
+          }
           broadcastToWindows("encounter-recording-saved", {
             encounterId: result.encounter.id,
             noteId: result.note.id,
@@ -8163,6 +8319,82 @@ class IPCHandlers {
       } catch {
         const error = encounterIpcError("ENCOUNTER_RECORDING_SAVE_FAILED");
         return { success: false, error: error.message, code: error.code };
+      }
+    });
+
+    const publishTranscriptResult = (result, { finalized = false } = {}) => {
+      if (result?.note) this._publishNoteUpdated(result.note);
+      if (result?.output && result?.encounter?.id) {
+        broadcastToWindows("encounter-output-updated", {
+          encounterId: Number(result.encounter.id),
+          applied: false,
+        });
+      }
+      if (finalized && result?.encounter?.id && result?.note?.id) {
+        broadcastToWindows("encounter-recording-saved", {
+          encounterId: result.encounter.id,
+          noteId: result.note.id,
+          transcriptRevision: Number(result.note.transcript_revision) || 0,
+        });
+      }
+    };
+
+    const transcriptFailure = (result) => {
+      const error = encounterIpcError(
+        result?.errorCode || "ENCOUNTER_RECORDING_SAVE_FAILED"
+      );
+      return { success: false, error: error.message, code: error.code };
+    };
+
+    ipcMain.handle("transcript-session-begin", async (_event, noteId, sessionId) => {
+      try {
+        const result = this.databaseManager.beginTranscriptSession(noteId, sessionId);
+        if (!result?.success) return transcriptFailure(result);
+        publishTranscriptResult(result);
+        return result;
+      } catch {
+        return transcriptFailure(null);
+      }
+    });
+
+    ipcMain.handle("transcript-session-checkpoint", async (_event, noteId, sessionId, transcript) => {
+      try {
+        const result = this.databaseManager.checkpointTranscriptSession(noteId, sessionId, transcript);
+        if (!result?.success) return transcriptFailure(result);
+        publishTranscriptResult(result);
+        return result;
+      } catch {
+        return transcriptFailure(null);
+      }
+    });
+
+    ipcMain.handle("transcript-session-finalize", async (_event, noteId, sessionId, transcript) => {
+      try {
+        const result = this.databaseManager.finalizeTranscriptSession(noteId, sessionId, transcript);
+        if (!result?.success) return transcriptFailure(result);
+        publishTranscriptResult(result, { finalized: true });
+        return result;
+      } catch {
+        return transcriptFailure(null);
+      }
+    });
+
+    ipcMain.handle("transcript-session-fail", async (_event, noteId, sessionId) => {
+      try {
+        const result = this.databaseManager.failTranscriptSession(noteId, sessionId);
+        if (!result?.success) return transcriptFailure(result);
+        publishTranscriptResult(result);
+        return result;
+      } catch {
+        return transcriptFailure(null);
+      }
+    });
+
+    ipcMain.handle("transcript-session-state", async (_event, noteId) => {
+      try {
+        return { success: true, state: this.databaseManager.getTranscriptSessionState(noteId) };
+      } catch {
+        return transcriptFailure(null);
       }
     });
 

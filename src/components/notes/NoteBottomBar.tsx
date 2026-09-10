@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Mic, ArrowUp, Square, Loader2 } from "lucide-react";
+import { Mic, ArrowUp, Pause, Play, Square, Loader2 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { formatMmSs } from "../../utils/formatDuration";
 
@@ -8,10 +8,12 @@ const BAR_COUNT = 5;
 
 interface NoteBottomBarProps {
   isRecording: boolean;
+  isPaused: boolean;
   isProcessing: boolean;
   recordingDisabled?: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
+  onTogglePauseRecording: () => void;
   onAskSubmit: (text: string) => void;
   onInputFocus?: () => void;
   askDisabled?: boolean;
@@ -23,10 +25,12 @@ interface NoteBottomBarProps {
 
 export default function NoteBottomBar({
   isRecording,
+  isPaused,
   isProcessing,
   recordingDisabled = false,
   onStartRecording,
   onStopRecording,
+  onTogglePauseRecording,
   onAskSubmit,
   onInputFocus,
   askDisabled,
@@ -48,10 +52,10 @@ export default function NoteBottomBar({
   }
 
   useEffect(() => {
-    if (!isRecording) return;
+    if (!isRecording || isPaused) return;
     const id = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => clearInterval(id);
-  }, [isRecording]);
+  }, [isPaused, isRecording]);
 
   const elapsedLabel = formatMmSs(elapsed);
 
@@ -111,10 +115,9 @@ export default function NoteBottomBar({
             )}
           >
             {isRecording ? (
-              <button
-                onClick={onStopRecording}
+              <div
                 className={cn(
-                  "flex items-center gap-2 h-10 pl-3.5 pr-3 rounded-xl",
+                  "flex items-center gap-1 h-10 pl-3.5 pr-2 rounded-xl",
                   "bg-primary/6 dark:bg-primary/10",
                   "border border-primary/20 dark:border-primary/25",
                   "transition-colors duration-150",
@@ -128,7 +131,9 @@ export default function NoteBottomBar({
                       className="w-0.5 rounded-full bg-primary/60 dark:bg-primary/70 origin-bottom"
                       style={{
                         height: "100%",
-                        animation: `waveform-bar ${0.5 + i * 0.07}s ease-in-out infinite`,
+                        animation: isPaused
+                          ? "none"
+                          : `waveform-bar ${0.5 + i * 0.07}s ease-in-out infinite`,
                         animationDelay: `${i * 0.04}s`,
                       }}
                     />
@@ -137,8 +142,36 @@ export default function NoteBottomBar({
                 <span className="text-[11px] font-medium tabular-nums text-primary/60 dark:text-primary/70">
                   {elapsedLabel}
                 </span>
-                <Square size={9} fill="currentColor" className="text-primary/50" />
-              </button>
+                <button
+                  type="button"
+                  onClick={onTogglePauseRecording}
+                  className={cn(
+                    "flex items-center justify-center w-6 h-6 rounded-md",
+                    "transition-colors duration-150",
+                    "hover:bg-primary/12 active:bg-primary/20",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/30",
+                    isPaused ? "text-primary" : "text-primary/60"
+                  )}
+                  aria-label={isPaused ? t("notes.editor.resume") : t("notes.editor.pause")}
+                  title={isPaused ? t("notes.editor.resume") : t("notes.editor.pause")}
+                >
+                  {isPaused ? <Play size={11} fill="currentColor" /> : <Pause size={11} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={onStopRecording}
+                  className={cn(
+                    "flex items-center justify-center w-6 h-6 rounded-md",
+                    "text-primary/50 transition-colors duration-150",
+                    "hover:bg-primary/12 hover:text-primary active:bg-primary/20",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/30"
+                  )}
+                  aria-label={t("notes.editor.stop")}
+                  title={t("notes.editor.stop")}
+                >
+                  <Square size={9} fill="currentColor" />
+                </button>
+              </div>
             ) : isProcessing ? (
               <div
                 className={cn(

@@ -206,6 +206,45 @@ class ModelManager {
     };
   }
 
+  getRuntimeProfile(modelId) {
+    this.ensureInitialized();
+    const modelInfo = this.findModelById(modelId);
+    if (!modelInfo) return null;
+    const contextTokens = this.serverOptions(modelInfo).contextSize;
+    return {
+      modelId,
+      contextTokens,
+      maxOutputTokens: Math.max(512, Math.min(3072, Math.floor(contextTokens * 0.25))),
+    };
+  }
+
+  async countRuntimeTokens(modelId, text) {
+    const profile = this.getRuntimeProfile(modelId);
+    if (!profile) return null;
+    const input = String(text ?? "");
+    if (
+      this.serverManager.ready &&
+      this.currentServerModelId === modelId &&
+      Number.isInteger(this.serverManager.port)
+    ) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${this.serverManager.port}/tokenize`, {
+          method: "POST",
+          signal: AbortSignal.timeout(3000),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: input, add_special: false }),
+        });
+        if (response.ok) {
+          const payload = await response.json();
+          if (Array.isArray(payload?.tokens)) return payload.tokens.length;
+        }
+      } catch {
+        // The conservative fallback below is safe when /tokenize is absent.
+      }
+    }
+    return Math.ceil(Array.from(input).length / 2.5);
+  }
+
   async serverStartOptions(modelInfo) {
     const options = this.serverOptions(modelInfo);
     const draftPath = await this.resolveDraftPath(modelInfo.model);
@@ -466,14 +505,13 @@ class ModelManager {
     }
 
     const modelPath = path.join(this.modelsDir, modelInfo.model.fileName);
-    debugLogger.logReasoning("INFERENCE_MODEL_PATH", {
-      modelPath,
+    debugLogger.logReasoning("INFERENCE_MODEL_SELECTED", {
       modelName: modelInfo.model.name,
       providerId: modelInfo.provider.id,
     });
 
     if (!(await this.checkModelValid(modelPath))) {
-      debugLogger.logReasoning("INFERENCE_MODEL_INVALID", { modelId, modelPath });
+      debugLogger.logReasoning("INFERENCE_MODEL_INVALID", { modelId });
       throw new ModelError(
         `Model ${modelId} is not downloaded or is corrupted`,
         "MODEL_NOT_DOWNLOADED",
@@ -517,25 +555,26 @@ class ModelManager {
         disableThinking: options.disableThinking,
         requireCompleteOutput: options.requireCompleteOutput,
         responseFormat: options.responseFormat,
+        signal: options.signal,
       });
 
       const totalTime = Date.now() - startTime;
       debugLogger.logReasoning("INFERENCE_SUCCESS", {
         totalTimeMs: totalTime,
         resultLength: result.length,
-        resultPreview: result.substring(0, 200) + (result.length > 200 ? "..." : ""),
       });
 
       return result;
     } catch (error) {
+      if (error?.code === "LOCAL_INFERENCE_CANCELLED") throw error;
       const totalTime = Date.now() - startTime;
+      const { safeLocalInferenceErrorCode } = require("./localInferenceErrors");
+      const safeErrorCode = safeLocalInferenceErrorCode(error);
       debugLogger.logReasoning("INFERENCE_FAILED", {
         totalTimeMs: totalTime,
-        error: error.message,
+        safeErrorCode,
       });
-      throw new ModelError(`Inference failed: ${error.message}`, "INFERENCE_FAILED", {
-        error: error.message,
-      });
+      throw new ModelError("The local model could not complete this request.", safeErrorCode);
     }
   }
 

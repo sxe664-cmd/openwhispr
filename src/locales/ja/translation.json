@@ -1781,10 +1781,20 @@
         "label": "Encounter processing status",
         "speakers": "Speakers",
         "waitingForTranscript": "Waiting",
+        "queued": "待機中",
+        "needsRegeneration": "再生成が必要です",
+        "finalizingTranscript": "文字起こしを完了しています…",
+        "savingTranscript": "文字起こしを保存しています…",
         "skipped": "Skipped",
         "processingEvidence": "Processing evidence",
         "compiling": "Compiling note",
-        "generating": "Generating note"
+        "generating": "Generating note",
+        "queuedBackground": "Queued in background — safe to move on.",
+        "generatingProgress": "Generating clinical notes · {{current}}/{{total}}.",
+        "finalizingClinicalNotes": "Finalizing clinical notes.",
+        "retryingClinicalNotes": "Retrying automatically.",
+        "readyClinicalNotes": "Clinical notes ready.",
+        "failedClinicalNotes": "Couldn’t generate clinical notes"
       },
       "encounterCompleted": "Encounter complete",
       "encounterCompletion": {
@@ -1795,7 +1805,9 @@
         "markComplete": "Mark complete",
         "confirm": "Confirm complete",
         "completing": "Completing…",
-        "warning": "This locks the transcript and clinical notes. You will not be able to edit or regenerate them afterward.",
+        "warning": "This saves and locks the transcript. Clinical notes will continue generating in the background and can be retried later if needed.",
+        "backgroundDescription": "Clinical notes are still generating. You can close this encounter and continue; the transcript is saved.",
+        "backgroundWarning": "Clinical notes are incomplete and will continue in the background after you close this encounter.",
         "unavailable": "The encounter could not be completed. Please try again."
       },
       "transcribe": "文字起こし",
@@ -1810,6 +1822,8 @@
       "untitled": "無題",
       "noteTitle": "ノートのタイトル",
       "stop": "停止",
+      "pause": "一時停止",
+      "resume": "再開",
       "processing": "処理中...",
       "export": "エクスポート",
       "asMarkdown": "Markdown 形式",
@@ -1821,6 +1835,15 @@
       "raw": "元のテキスト",
       "enhanced": "強化済み",
       "clinicalNote": "診療ノート",
+      "templateInsert": {
+        "button": "テンプレートを挿入",
+        "inserting": "挿入中...",
+        "confirmTitle": "診療テンプレートを追加しますか？",
+        "confirmDescription": "現在の診療テンプレートを既存のメモの下に追加します。",
+        "confirm": "テンプレートを追加",
+        "cancel": "キャンセル",
+        "failed": "テンプレートを挿入できませんでした"
+      },
       "saving": "保存中",
       "startWriting": "書き始める..."
     },

@@ -38,7 +38,7 @@ function candidateActionError(action: CandidateAction, code?: string): string {
 export function useActionProcessing(noteId: number | null) {
   const { t } = useTranslation();
 
-  const { status: state, actionName, progress } = useActionProcessingStore(
+  const { status: state, actionName, isBuiltInAction, progress, errorMessage, startedAt } = useActionProcessingStore(
     useShallow((s) => selectNoteActionState(s, noteId))
   );
   const candidate = useActionProcessingStore(
@@ -51,6 +51,21 @@ export function useActionProcessing(noteId: number | null) {
     setCandidateError(null);
   }, [noteId, candidate?.candidate_id]);
 
+  useEffect(() => {
+    if (noteId == null || candidate || !window.electronAPI.getPendingNoteGenerationCandidate) return;
+    let active = true;
+    void window.electronAPI.getPendingNoteGenerationCandidate(noteId).then((pending) => {
+      if (active && pending) {
+        useActionProcessingStore.setState((state) => ({
+          candidates: { ...state.candidates, [noteId]: pending },
+        }));
+      }
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [candidate, noteId]);
+
   const runAction = useCallback(
     (action: ActionItem, noteContent: string, contentHash: string, options: RunActionOptions) => {
       if (noteId == null) return;
@@ -58,6 +73,9 @@ export function useActionProcessing(noteId: number | null) {
         noModel: t("notes.actions.errors.noModel"),
         noEndpoint: t("notes.actions.errors.noEndpoint"),
         actionFailed: t("notes.actions.errors.actionFailed"),
+        sourceChanged: "The note changed while it was generating. Try again.",
+        clinicalValidationFailed: "The clinical note could not be validated. Try again.",
+        localModelFailed: "The local model could not complete this note.",
       });
     },
     [noteId, t]
@@ -130,6 +148,9 @@ export function useActionProcessing(noteId: number | null) {
     state,
     actionName,
     progress,
+    startedAt,
+    isBuiltInAction,
+    errorMessage,
     runAction,
     cancel,
     candidate,

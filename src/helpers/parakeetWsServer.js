@@ -323,7 +323,6 @@ class ParakeetWsServer {
           elapsed,
           code,
           resultLength: result.length,
-          resultPreview: result.slice(0, 200),
         });
 
         resolve({ text: parseOfflineMessage(result), elapsed });
@@ -378,7 +377,6 @@ class ParakeetWsServer {
         elapsed,
         truncated,
         resultLength: text.length,
-        resultPreview: text.slice(0, 200),
       });
       return truncated ? { text, elapsed, truncated } : { text, elapsed };
     } finally {

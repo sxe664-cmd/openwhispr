@@ -2,6 +2,12 @@ export type ClinicalOutputKind = "summary" | "soap" | "focus";
 
 const COMMON_INSTRUCTIONS = `You format a clinical encounter transcript for the clinician who recorded it. Use only facts supported by the transcript. Do not invent diagnoses, medications, measurements, or plans. If information is absent, say "Not documented". Keep names and identifying details exactly as supplied; do not add any. Return JSON only, with no markdown fence or commentary.`;
 
+export function getClinicalOutputsSystemPrompt(): string {
+  return `${COMMON_INSTRUCTIONS}
+Return exactly: {"summary":{"text":"...","evidenceIds":["e0-0"]},"soap":{"subjective":{"text":"...","evidenceIds":["e0-0"]},"objective":{"text":"...","evidenceIds":[]},"assessment":{"text":"...","evidenceIds":[]},"plan":{"text":"...","evidenceIds":[]}},"focus":{"text":"...","evidenceIds":["e0-0"]}}.
+Write a concise clinical encounter summary, a concise SOAP note, and one neutral 3-10 word phrase describing the encounter focus. Every documented statement must cite only evidence IDs supplied in the user message. Use "Not documented" with an empty evidenceIds array when a section has no supporting evidence. Do not infer content for a section that is not documented.`;
+}
+
 export function getClinicalOutputSystemPrompt(kind: ClinicalOutputKind): string {
   if (kind === "summary") {
     return `${COMMON_INSTRUCTIONS}\nReturn exactly: {"summary":"..."}. Write a concise, readable clinical encounter summary in 1-3 short paragraphs.`;

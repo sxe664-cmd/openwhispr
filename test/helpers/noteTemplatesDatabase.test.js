@@ -182,6 +182,58 @@ test("clinical generation runs persist resumable chunk evidence and clear safely
   assert.equal(db.getNoteGenerationRun(note.id), null);
 });
 
+test("built-in source snapshots and conditional enhanced writes reject stale notes", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Source snapshot", "saved source", "personal").note;
+  const snapshot = db.getNoteGenerationSource(note.id);
+  assert.equal(snapshot.success, true);
+  assert.equal(snapshot.content, "saved source");
+  assert.equal(typeof snapshot.sourceHash, "string");
+
+  db.updateNote(note.id, { content: "newer source" });
+  const rejected = db.updateNoteEnhancedIfSourceMatches(note.id, snapshot.sourceHash, {
+    enhanced_content: "must not overwrite newer source",
+    enhanced_at_content_hash: snapshot.sourceHash,
+  });
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.errorCode, "SOURCE_CHANGED");
+  assert.equal(db.getNote(note.id).enhanced_content, null);
+
+  const latest = db.getNoteGenerationSource(note.id);
+  const applied = db.updateNoteEnhancedIfSourceMatches(note.id, latest.sourceHash, {
+    enhanced_content: "safe enhancement",
+    enhanced_at_content_hash: latest.sourceHash,
+  });
+  assert.equal(applied.success, true);
+  assert.equal(db.getNote(note.id).enhanced_content, "safe enhancement");
+});
+
+test("generic source revision prevents ABA overwrite and preserves an older-source draft", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+  const note = db.saveNote("Personal draft", "source A", "personal").note;
+  const original = db.getNoteGenerationSource(note.id);
+  db.updateNote(note.id, { content: "source B" });
+  db.updateNote(note.id, { content: "source A" });
+  const latest = db.getNoteGenerationSource(note.id);
+  assert.equal(latest.sourceHash, original.sourceHash);
+  assert.notEqual(latest.sourceRevision, original.sourceRevision);
+  const result = db.updateNoteEnhancedIfSourceMatches(note.id, original.sourceHash, {
+    enhanced_content: "Older-source generated draft",
+  }, original.sourceRevision);
+  assert.equal(result.success, false);
+  assert.equal(result.errorCode, "SOURCE_CHANGED");
+  assert.equal(result.candidate.candidate_kind, "generic");
+  assert.equal(result.candidate.is_stale, true);
+  assert.equal(db.getNoteGenerationCandidate(result.candidate.candidate_id).generated_content,
+    "Older-source generated draft");
+  assert.equal(db.applyNoteGenerationCandidate(result.candidate.candidate_id, { confirmed: true }).code,
+    "CANDIDATE_STALE");
+  assert.equal(db.getNote(note.id).enhanced_content, null);
+});
+
 test("editing a template activates the newly created revision", { concurrency: false }, (t) => {
   const db = ensureDb(t);
   if (!db) return;
@@ -196,6 +248,41 @@ test("editing a template activates the newly created revision", { concurrency: f
   const after = db.getNoteTemplate(before.id, { includeRaw: true });
   assert.equal(after.active_revision_id, updated.template.active_revision_id);
   assert.match(after.template_text, /Additional review field/);
+});
+
+test("previous narrative-only legacy migrations upgrade recognized clinical headings", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+
+  const created = db.createNoteTemplate({
+    name: "Legacy SOAP",
+    kind: "encounter",
+    templateText: "## Subjective\n## Objective\n## Assessment\n## Plan\n## Family preferences",
+  });
+  const revisionId = created.template.active_revision_id;
+  const oldDefinition = {
+    version: 1,
+    sections: ["Subjective", "Objective", "Assessment", "Plan", "Family preferences"].map((label, index) => ({
+      id: `section-${index + 1}`,
+      label,
+      type: "narrative",
+      fieldId: null,
+      instruction: "",
+      emptyBehavior: "not_documented",
+    })),
+  };
+  db.db.prepare("UPDATE note_template_revisions SET definition_json = ?, validation_status = 'valid' WHERE id = ?")
+    .run(JSON.stringify(oldDefinition), revisionId);
+
+  const upgraded = db.getNoteTemplate(created.template.id, { includeRaw: true });
+  assert.deepEqual(
+    upgraded.active_revision.definition.sections.map((section) => section.type),
+    ["canonical", "canonical", "canonical", "canonical", "narrative"]
+  );
+  assert.match(
+    db.db.prepare("SELECT definition_json FROM note_template_revisions WHERE id = ?").get(revisionId).definition_json,
+    /historyOfPresentIllness\.currentComplaints/
+  );
 });
 
 test("deleting the encounter default restores the built-in default atomically", { concurrency: false }, (t) => {
@@ -232,6 +319,20 @@ test("stale candidate apply rejects without overwriting enhanced content", { con
   assert.equal(result.success, false);
   assert.equal(result.code, "CANDIDATE_STALE");
   assert.equal(db.getNote(note.id).enhanced_content, null);
+});
+
+test("clinical candidates record authoritative evidence and template revisions", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+  const note = db.saveNote("Encounter metadata", "source", "meeting").note;
+  linkNoteToEncounter(db, note, "candidate-metadata");
+  const source = db.getNoteGenerationSource(note.id);
+  const result = db.createNoteGenerationCandidate({ noteId: note.id,
+    generatedContent: "Grounded note", sourceHash: source.sourceHash,
+    sourceRevision: source.sourceRevision });
+  assert.equal(result.success, true);
+  assert.equal(result.candidate.evidence_revision, source.sourceRevision);
+  assert.match(result.candidate.template_definition_hash, /^[a-f0-9]{64}$/);
 });
 
 test("transcript changes stale a candidate even when note content is unchanged", { concurrency: false }, (t) => {

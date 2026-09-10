@@ -141,10 +141,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
       spaceId
     ),
   getNote: (id) => ipcRenderer.invoke("db-get-note", id),
+  getNoteGenerationSource: (noteId) => ipcRenderer.invoke("db-get-note-generation-source", noteId),
   getNotes: (noteType, limit, folderId, spaceId) =>
     ipcRenderer.invoke("db-get-notes", noteType, limit, folderId, spaceId),
   getSpaceNotes: (spaceId, limit) => ipcRenderer.invoke("db-get-space-notes", spaceId, limit),
   updateNote: (id, updates) => ipcRenderer.invoke("db-update-note", id, updates),
+  updateNoteEnhancedIfSourceMatches: (id, expectedSourceHash, updates, expectedSourceRevision) =>
+    ipcRenderer.invoke("db-update-note-enhanced-if-source-matches", id, expectedSourceHash, updates, expectedSourceRevision),
   deleteNote: (id) => ipcRenderer.invoke("db-delete-note", id),
   listNoteTemplates: (kind) => ipcRenderer.invoke("db-list-note-templates", kind),
   getNoteTemplate: (idOrKey, options) => ipcRenderer.invoke("db-get-note-template", idOrKey, options),
@@ -160,6 +163,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("db-create-note-generation-candidate", input),
   getNoteGenerationCandidate: (candidateId) =>
     ipcRenderer.invoke("db-get-note-generation-candidate", candidateId),
+  getPendingNoteGenerationCandidate: (noteId) =>
+    ipcRenderer.invoke("db-get-pending-note-generation-candidate", noteId),
   applyNoteGenerationCandidate: (candidateId, options) =>
     ipcRenderer.invoke("db-apply-note-generation-candidate", candidateId, options),
   discardNoteGenerationCandidate: (candidateId) =>
@@ -551,6 +556,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Local reasoning
   processLocalReasoning: (text, modelId, agentName, config) =>
     ipcRenderer.invoke("process-local-reasoning", text, modelId, agentName, config),
+  cancelLocalReasoning: (cancellationKey) =>
+    ipcRenderer.invoke("cancel-local-reasoning", cancellationKey),
   checkLocalReasoningAvailable: () => ipcRenderer.invoke("check-local-reasoning-available"),
 
   // Anthropic reasoning
@@ -577,6 +584,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   llamaServerStart: (modelId) => ipcRenderer.invoke("llama-server-start", modelId),
   llamaServerStop: () => ipcRenderer.invoke("llama-server-stop"),
   llamaServerStatus: () => ipcRenderer.invoke("llama-server-status"),
+  getLocalModelRuntimeProfile: (modelId) =>
+    ipcRenderer.invoke("local-model-runtime-profile", modelId),
+  countLocalModelTokens: (modelId, text) =>
+    ipcRenderer.invoke("local-model-token-count", modelId, text),
   llamaGpuReset: () => ipcRenderer.invoke("llama-gpu-reset"),
 
   // Vulkan GPU acceleration
@@ -703,6 +714,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("meeting-transcription-start", options),
   meetingTranscriptionSend: (buffer, source) =>
     ipcRenderer.send("meeting-transcription-send", buffer, source),
+  meetingTranscriptionSetPaused: (paused) =>
+    ipcRenderer.invoke("meeting-transcription-set-paused", paused),
   meetingTranscriptionStop: () => ipcRenderer.invoke("meeting-transcription-stop"),
   meetingTranscriptionCancel: () => ipcRenderer.invoke("meeting-transcription-cancel"),
   onMeetingTranscriptionSegment: registerListener(
@@ -939,10 +952,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getEmailSetup: () => ipcRenderer.invoke("email-setup-get"),
   saveEmailSetup: (config) => ipcRenderer.invoke("email-setup-save", config),
   getEncounterOutput: (encounterId) => ipcRenderer.invoke("encounter-output-get", encounterId),
+  getEncounterEvidenceBundle: (encounterId, input) =>
+    ipcRenderer.invoke("encounter-evidence-get", encounterId, input),
+  saveEncounterEvidenceChunk: (encounterId, token, input) =>
+    ipcRenderer.invoke("encounter-evidence-save-chunk", encounterId, token, input),
+  completeEncounterEvidence: (encounterId, token, input) =>
+    ipcRenderer.invoke("encounter-evidence-complete", encounterId, token, input),
   beginEncounterOutputGeneration: (encounterId, outputTypes) =>
     ipcRenderer.invoke("encounter-output-begin", encounterId, outputTypes),
   finishEncounterOutputGeneration: (encounterId, token, updates) =>
     ipcRenderer.invoke("encounter-output-finish", encounterId, token, updates),
+  updateEncounterOutputGenerationProgress: (encounterId, token, progress) =>
+    ipcRenderer.invoke("encounter-output-progress", encounterId, token, progress),
   retryEncounterOutput: (encounterId, outputType) =>
     ipcRenderer.invoke("encounter-output-retry", encounterId, outputType),
   onEncounterOutputRetryRequested: (callback) => {
@@ -957,6 +978,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   saveEncounterRecording: (noteId, transcript) =>
     ipcRenderer.invoke("encounter-recording-save", noteId, transcript),
+  beginTranscriptSession: (noteId, sessionId) =>
+    ipcRenderer.invoke("transcript-session-begin", noteId, sessionId),
+  checkpointTranscriptSession: (noteId, sessionId, transcript) =>
+    ipcRenderer.invoke("transcript-session-checkpoint", noteId, sessionId, transcript),
+  finalizeTranscriptSession: (noteId, sessionId, transcript) =>
+    ipcRenderer.invoke("transcript-session-finalize", noteId, sessionId, transcript),
+  failTranscriptSession: (noteId, sessionId) =>
+    ipcRenderer.invoke("transcript-session-fail", noteId, sessionId),
+  getTranscriptSessionState: (noteId) =>
+    ipcRenderer.invoke("transcript-session-state", noteId),
   markEncounterComplete: (encounterId) => ipcRenderer.invoke("encounter-mark-complete", encounterId),
   aiReceptionistGetStatus: () => ipcRenderer.invoke("ai-receptionist-status"),
   aiReceptionistStart: (options) => ipcRenderer.invoke("ai-receptionist-start", options),

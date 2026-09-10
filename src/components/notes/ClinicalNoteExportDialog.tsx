@@ -22,6 +22,7 @@ const DEFAULT_SECTIONS: ClinicalNoteExportSection[] = ["summary", "soap", "encou
 const LABELS: Record<ClinicalNoteExportSection, { title: string; description: string }> = {
   summary: { title: "Summary", description: "Concise clinical overview" },
   soap: { title: "SOAP note", description: "Subjective, Objective, Assessment, and Plan" },
+  notes: { title: "Additional notes", description: "Your notes captured during the encounter" },
   filledTemplate: {
     title: "Filled clinical template",
     description: "Generated Clinical Encounter v2 note with formatted sections",
@@ -61,9 +62,12 @@ export default function ClinicalNoteExportDialog({
       const result = await window.electronAPI?.getClinicalNoteExportPreview?.(noteId);
       if (!result?.success) throw new Error(result?.error || "Unable to prepare clinical export.");
       setPreview(result);
+      const available = (section: ClinicalNoteExportSection) =>
+        result.sections?.[section]?.available === true;
       setSections([
-        ...DEFAULT_SECTIONS,
-        ...(result.sections?.filledTemplate?.available ? (["filledTemplate"] as const) : []),
+        ...DEFAULT_SECTIONS.filter((section) => section === "encounterDetails" || available(section)),
+        ...(available("notes") ? (["notes"] as const) : []),
+        ...(available("filledTemplate") ? (["filledTemplate"] as const) : []),
       ]);
     } catch (loadError) {
       setError((loadError as Error).message);
@@ -83,8 +87,7 @@ export default function ClinicalNoteExportDialog({
     const statuses = preview?.sections;
     return Boolean(
       sections.length > 0 &&
-      (!sections.includes("summary") || statuses?.summary?.available) &&
-      (!sections.includes("soap") || statuses?.soap?.available)
+      sections.some((section) => statuses?.[section]?.available)
     );
   }, [preview, sections]);
 
@@ -158,7 +161,7 @@ export default function ClinicalNoteExportDialog({
               const state = preview?.sections?.[section];
               const selected = sections.includes(section);
               const available = state?.available ?? false;
-              const canToggle = available || section === "summary" || section === "soap";
+              const canToggle = available;
               return (
                 <button
                   key={section}
@@ -199,7 +202,7 @@ export default function ClinicalNoteExportDialog({
         {preview &&
           (!preview.sections?.summary?.available || !preview.sections?.soap?.available) && (
             <div className="flex items-start justify-between gap-3 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              <span>Summary and SOAP must finish generating before they can be included.</span>
+              <span>Summary or SOAP is not ready. You can still export the available notes, transcript, and encounter details.</span>
               <Button
                 variant="outline-flat"
                 size="sm"

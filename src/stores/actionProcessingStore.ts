@@ -1,9 +1,15 @@
 import { create } from "zustand";
 import reasoningService from "../services/ReasoningService";
+import { guardLocalRequest, splitGenerationSource } from "../helpers/localGenerationBudget";
+import { prepareNoteGenerationSource } from "../helpers/prepareNoteGenerationSource";
 import { getSettings, selectResolvedNoteFormatting } from "./settingsStore";
 import { appendDictionarySuffix } from "../config/prompts";
 import { generateNoteTitle } from "../utils/generateTitle";
 import { buildNoteFormattingOverrides } from "../helpers/noteFormattingOverrides";
+import {
+  generateLocalGenericNotes,
+  type LocalNoteGenerationProgress,
+} from "../helpers/localNoteGeneration";
 import {
   buildClinicalEncounterActionRequest,
   buildClinicalEncounterCompactActionRequest,
@@ -11,14 +17,30 @@ import {
   mergeClinicalEncounterCompactExtractions,
   parseClinicalEncounterCompactOutput,
   parseClinicalEncounterOutput,
+  validateClinicalEncounterTemplateText,
   type ClinicalEncounterCompactExtraction,
 } from "../services/clinicalEncounterTemplateEngine";
+import {
+  CLINICAL_EVIDENCE_SCHEMA_VERSION,
+  serializeClinicalEvidence,
+  type ClinicalEvidenceChunk,
+  type ClinicalEvidenceV1,
+} from "../helpers/clinicalEvidence";
+import { generateStructuredClinicalNote } from "../helpers/structuredTemplateGeneration";
+import { migrateLegacyNoteTemplate, validateStructuredNoteTemplate, type StructuredNoteTemplate } from "../helpers/structuredNoteTemplate.mjs";
 import type { ActionItem, NoteGenerationCandidate, NoteItem } from "../types/electron";
 
-export type ActionProcessingStatus = "idle" | "processing" | "success";
+export type ActionProcessingStatus = "idle" | "processing" | "retrying" | "success" | "failed";
 
 export type ActionProcessingProgress = {
-  stage: "preparing" | "extracting" | "compiling" | "generating";
+  stage:
+    | "preparing"
+    | "extracting"
+    | "synthesizing"
+    | "retrying"
+    | "applying"
+    | "compiling"
+    | "generating";
   current: number;
   total: number;
 };
@@ -26,7 +48,10 @@ export type ActionProcessingProgress = {
 export interface NoteActionState {
   status: ActionProcessingStatus;
   actionName: string | null;
+  isBuiltInAction: boolean;
   progress: ActionProcessingProgress | null;
+  startedAt: number | null;
+  errorMessage?: string | null;
 }
 
 export interface ActionErrorEvent {
@@ -66,10 +91,19 @@ interface ActionProcessingStoreState {
 }
 
 const cancelledFlags = new Map<number, boolean>();
+const actionClaims = new Map<number, symbol>();
+const localCancellationKeys = new Map<number, string>();
 const processingFlags = new Map<number, boolean>();
 const successTimers = new Map<number, NodeJS.Timeout>();
 
-const IDLE_STATE: NoteActionState = { status: "idle", actionName: null, progress: null };
+const IDLE_STATE: NoteActionState = {
+  status: "idle",
+  actionName: null,
+  isBuiltInAction: false,
+  progress: null,
+  startedAt: null,
+  errorMessage: null,
+};
 
 function setNoteState(noteId: number, patch: Partial<NoteActionState>) {
   const { noteStates } = useActionProcessingStore.getState();
@@ -130,7 +164,7 @@ export function isEncounterNoteForGeneration(
 ): boolean {
   return (
     options.noteType === "meeting" &&
-    (Boolean(options.calendarEventId) || options.hasEncounterLinkage === true)
+    options.hasEncounterLinkage === true
   );
 }
 
@@ -263,29 +297,69 @@ function configuredEncounterTemplateId(settings: ReturnType<typeof getSettings>)
   if (typeof configured === "number" || (typeof configured === "string" && configured.trim())) {
     return configured;
   }
-  try {
-    const stored = window.localStorage.getItem("encounterNoteTemplateId");
-    return stored?.trim() || null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-async function resolveEncounterTemplate(
-  settings: ReturnType<typeof getSettings>
-): Promise<{ revisionId: number; templateText: string }> {
+export async function resolveEncounterTemplate(
+  settings: ReturnType<typeof getSettings>,
+  useStructuredDefinition = false
+): Promise<{ revisionId: number; templateText: string; definition?: StructuredNoteTemplate }> {
   const api = window.electronAPI;
+  const resolvedTemplate = (template: { active_revision_id: number; template_text: string; active_revision?: { definition?: unknown } | null }) => {
+    if (!useStructuredDefinition) return { revisionId: template.active_revision_id, templateText: validateClinicalEncounterTemplateText(template.template_text) };
+    const definition = template.active_revision?.definition
+      ? validateStructuredNoteTemplate(template.active_revision.definition)
+      : migrateLegacyNoteTemplate(template.template_text).definition;
+    if (!definition) throw new Error("Template needs review.");
+    return { revisionId: template.active_revision_id, templateText: template.template_text, definition };
+  };
   const configuredId = configuredEncounterTemplateId(settings);
   if (configuredId != null && api.getNoteTemplate) {
-    const template = await api.getNoteTemplate(configuredId, { includeRaw: true });
-    if (template?.kind === "encounter" && template.active_revision_id != null && typeof template.template_text === "string") {
-      return { revisionId: template.active_revision_id, templateText: template.template_text };
+    let template: Awaited<ReturnType<NonNullable<typeof api.getNoteTemplate>>> = null;
+    try {
+      template = await api.getNoteTemplate(configuredId, { includeRaw: true });
+    } catch {
+      template = null;
+    }
+    if (
+      template?.kind === "encounter" &&
+      template.active_revision_id != null &&
+      typeof template.template_text === "string"
+    ) {
+      try {
+        return resolvedTemplate({ ...template, active_revision_id: template.active_revision_id, template_text: template.template_text });
+      } catch {
+        // An invalid selected template must never block the built-in action.
+      }
     }
   }
   if (api.getDefaultNoteTemplate) {
-    const template = await api.getDefaultNoteTemplate("encounter", { includeRaw: true });
+    let template: Awaited<ReturnType<NonNullable<typeof api.getDefaultNoteTemplate>>> = null;
+    try {
+      template = await api.getDefaultNoteTemplate("encounter", { includeRaw: true });
+    } catch {
+      template = null;
+    }
     if (template?.active_revision_id != null && typeof template.template_text === "string") {
-      return { revisionId: template.active_revision_id, templateText: template.template_text };
+      try {
+        return resolvedTemplate({ ...template, active_revision_id: template.active_revision_id, template_text: template.template_text });
+      } catch {
+        // The database invariant normally repairs this before it reaches the
+        // renderer. Keep the failure safe if an old database is mid-migration.
+      }
+    }
+  }
+  // A custom default can also be invalid. The built-in encounter template is
+  // the last local fallback and is restored by the database template invariant
+  // when an older database is missing its active revision.
+  if (api.getNoteTemplate) {
+    try {
+      const builtin = await api.getNoteTemplate("clinical-encounter", { includeRaw: true });
+      if (builtin?.active_revision_id != null && typeof builtin.template_text === "string") {
+        return resolvedTemplate({ ...builtin, active_revision_id: builtin.active_revision_id, template_text: builtin.template_text });
+      }
+    } catch {
+      // Fall through to the safe error below if the invariant itself is unavailable.
     }
   }
   throw new Error(
@@ -293,7 +367,7 @@ async function resolveEncounterTemplate(
   );
 }
 
-async function generateLocalClinicalEncounter(
+export async function generateLocalClinicalEncounter(
   noteContent: string,
   templateText: string,
   modelId: string,
@@ -303,41 +377,47 @@ async function generateLocalClinicalEncounter(
     noteId: number;
     templateRevisionId: number;
     sourceHash: string;
+    isCancelled?: () => boolean;
   }
 ): Promise<string> {
-  const runExtraction = async (
-    request: ReturnType<typeof buildClinicalEncounterCompactActionRequest>
-  ) => {
-    const compactSchema = JSON.stringify(request.responseSchema);
-    const rawOutput = await reasoningService.processText(
-      request.userPrompt,
-      modelId,
-      null,
-      {
-        systemPrompt: `${request.systemPrompt}\nCompact response contract:\n${compactSchema}`,
-        ...providerOverrides,
-        temperature: 0.1,
-        // Clinical extraction must never emit a reasoning trace alongside the
-        // structured response, regardless of the general note setting.
-        disableThinking: true,
-        requireCompleteOutput: true,
-        maxTokens: 3_072,
-        responseFormat: {
-          type: "json_schema",
-          json_schema: {
-            name: "openwhispr_compact_clinical_evidence",
-            strict: true,
-            schema: request.responseSchema,
-          },
-        },
-      }
+  const localErrorCode = (error: unknown): string =>
+    String((error as { code?: unknown })?.code ?? "").toUpperCase();
+
+  const isTransportFailure = (error: unknown): boolean => {
+    const code = localErrorCode(error);
+    if (["LOCAL_SERVER_TIMEOUT", "LOCAL_SERVER_UNAVAILABLE", "LOCAL_INFERENCE_FAILED"].includes(code)) {
+      return true;
+    }
+    const message = String(error instanceof Error ? error.message : error ?? "").toLowerCase();
+    return /timeout|timed out|connection|socket|econn|server unavailable|inference failed/.test(message);
+  };
+
+  const isSchemaCompatibilityFailure = (error: unknown): boolean => {
+    const code = String((error as { code?: unknown })?.code ?? "").toUpperCase();
+    if (code === "LOCAL_SCHEMA_UNSUPPORTED") return true;
+    const message = String(error instanceof Error ? error.message : error ?? "").toLowerCase();
+    return /response_format|json.?schema|status 400|status 422|unsupported.*schema|invalid.*schema/.test(
+      message
     );
+  };
+
+  const parseExtraction = (
+    rawOutput: string,
+    request: ReturnType<typeof buildClinicalEncounterCompactActionRequest>
+  ): ClinicalEncounterCompactExtraction => {
     const sourceText = request.sourceText ?? noteContent;
     const parsed = parseClinicalEncounterCompactOutput(rawOutput, sourceText, {
       allowedFieldKeys: request.fieldKeys,
     });
     if (!parsed.ok || !parsed.extraction) {
-      throw new Error("Local clinical evidence extraction returned unsupported output.");
+      const error = new Error("Clinical evidence could not be validated.");
+      (error as Error & { code?: string }).code = "CLINICAL_OUTPUT_INVALID";
+      throw error;
+    }
+    if (parsed.extraction.issues.length > 0 && Object.keys(parsed.extraction.fields).length === 0) {
+      const error = new Error("Clinical evidence could not be validated.");
+      (error as Error & { code?: string }).code = "CLINICAL_OUTPUT_INVALID";
+      throw error;
     }
     return rebaseCompactExtraction(
       parsed.extraction,
@@ -346,7 +426,96 @@ async function generateLocalClinicalEncounter(
     );
   };
 
-  const extractionRequests = planLocalClinicalEncounterRequests(noteContent, templateText);
+  const runExtraction = async (
+    request: ReturnType<typeof buildClinicalEncounterCompactActionRequest>
+  ) => {
+    const compactSchema = JSON.stringify(request.responseSchema);
+    const nativeConfig = {
+      systemPrompt: `${request.systemPrompt}\nCompact response contract:\n${compactSchema}`,
+      ...providerOverrides,
+      temperature: 0.1,
+      disableThinking: true,
+      requireCompleteOutput: true,
+      maxTokens: 3_072,
+      queuePriority: 10,
+      responseFormat: {
+        type: "json_schema" as const,
+        json_schema: {
+          name: "openwhispr_compact_clinical_evidence",
+          strict: true,
+          schema: request.responseSchema,
+        },
+      },
+    };
+
+    const runSimpleJsonFallback = async (): Promise<string> => {
+      onProgress?.({ stage: "retrying", current: request.chunkIndex ?? 0, total: request.chunkCount ?? 1 });
+      const fallbackConfig = await guardLocalRequest(modelId, request.userPrompt, {
+        ...nativeConfig,
+        systemPrompt: `${request.systemPrompt}\nReturn only one JSON object with a fields array. Each item must contain the exact field ID, a value, and evidence strings copied verbatim from the source. Use an empty fields array when nothing is documented.`,
+        responseFormat: undefined,
+      });
+      return reasoningService.processText(request.userPrompt, modelId, null, fallbackConfig);
+    };
+
+    let rawOutput: string;
+    try {
+      const boundedConfig = await guardLocalRequest(modelId, request.userPrompt, nativeConfig);
+      rawOutput = await reasoningService.processText(request.userPrompt, modelId, null, boundedConfig);
+    } catch (error) {
+      if (isSchemaCompatibilityFailure(error)) {
+        return parseExtraction(await runSimpleJsonFallback(), request);
+      }
+      // A local server can briefly fail while loading a model or restarting.
+      // Retry the exact schema request once before treating it as failed.
+      if (!isTransportFailure(error)) throw error;
+      onProgress?.({ stage: "retrying", current: request.chunkIndex ?? 0, total: request.chunkCount ?? 1 });
+      rawOutput = await reasoningService.processText(
+        request.userPrompt,
+        modelId,
+        null,
+        await guardLocalRequest(modelId, request.userPrompt, nativeConfig)
+      );
+    }
+
+    try {
+      return parseExtraction(rawOutput, request);
+    } catch (parseError) {
+      // Some local servers accept response_format but their model ignores the
+      // native schema. Give the model one simpler JSON-only contract, never a
+      // Markdown fallback, and validate it with the same canonical parser.
+      const fallbackOutput = await runSimpleJsonFallback();
+      try {
+        return parseExtraction(fallbackOutput, request);
+      } catch {
+        throw parseError;
+      }
+    }
+  };
+
+  const emptyRequest = buildClinicalEncounterCompactActionRequest("", { templateText });
+  const schema = JSON.stringify(emptyRequest.responseSchema);
+  const sourceChunks = await splitGenerationSource(
+    noteContent,
+    modelId,
+    {
+      systemPrompt: `${emptyRequest.systemPrompt}\nCompact response contract:\n${schema}`,
+      maxTokens: 3072,
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "openwhispr_compact_clinical_evidence", strict: true, schema: emptyRequest.responseSchema },
+      },
+    },
+    (source) => buildClinicalEncounterCompactActionRequest(source, { templateText }).userPrompt
+  );
+  const extractionRequests = sourceChunks.map((chunk, chunkIndex) => ({
+    ...buildClinicalEncounterCompactActionRequest(chunk.text, { templateText }),
+    sourceText: chunk.text,
+    sourceStart: chunk.start,
+    sourceEnd: chunk.end,
+    chunkIndex,
+    chunkCount: sourceChunks.length,
+  }));
   const extractions: ClinicalEncounterCompactExtraction[] = [];
   let resumeCount = 0;
   if (resumeContext && window.electronAPI.getNoteGenerationRun) {
@@ -372,17 +541,47 @@ async function generateLocalClinicalEncounter(
     }
   }
   onProgress?.({ stage: "extracting", current: resumeCount, total: extractionRequests.length });
+  const saveFailedRun = async () => {
+    if (!resumeContext || !window.electronAPI.saveNoteGenerationRun) return;
+    await window.electronAPI.saveNoteGenerationRun({
+      noteId: resumeContext.noteId,
+      templateRevisionId: resumeContext.templateRevisionId,
+      sourceHash: resumeContext.sourceHash,
+      modelId,
+      chunkCount: extractionRequests.length,
+      completedChunks: extractions.length,
+      extractions,
+      status: "failed",
+    }).catch(() => undefined);
+  };
   // Keep each batch independent and sequential. The local reasoning bridge
   // also serializes requests, but explicit sequencing makes the merge order
   // deterministic and avoids unnecessary queue growth for long encounters.
   for (const [index, request] of extractionRequests.entries()) {
     if (index < resumeCount) continue;
+    if (resumeContext?.isCancelled?.()) {
+      await saveFailedRun();
+      const error = new Error("Clinical generation cancelled.");
+      (error as Error & { code?: string }).code = "CANCELLED";
+      throw error;
+    }
     onProgress?.({
       stage: "extracting",
       current: index,
       total: extractionRequests.length,
     });
-    extractions.push(await runExtraction(request));
+    try {
+      extractions.push(await runExtraction(request));
+    } catch (error) {
+      await saveFailedRun();
+      throw error;
+    }
+    if (resumeContext?.isCancelled?.()) {
+      await saveFailedRun();
+      const error = new Error("Clinical generation cancelled.");
+      (error as Error & { code?: string }).code = "CANCELLED";
+      throw error;
+    }
     onProgress?.({
       stage: "extracting",
       current: index + 1,
@@ -398,6 +597,7 @@ async function generateLocalClinicalEncounter(
           chunkCount: extractionRequests.length,
           completedChunks: index + 1,
           extractions,
+          status: "processing",
         });
       } catch {
         // Progress persistence is best effort; the current generation remains
@@ -407,9 +607,18 @@ async function generateLocalClinicalEncounter(
   }
 
   onProgress?.({ stage: "compiling", current: 0, total: 1 });
+  if (resumeContext?.isCancelled?.()) {
+    await saveFailedRun();
+    const error = new Error("Clinical generation cancelled.");
+    (error as Error & { code?: string }).code = "CANCELLED";
+    throw error;
+  }
   const parsed = mergeClinicalEncounterCompactExtractions(extractions, noteContent);
   if (!parsed.ok || !parsed.document) {
-    throw new Error("Local clinical evidence could not be validated against the transcript.");
+    await saveFailedRun();
+    const error = new Error("Local clinical evidence could not be validated against the transcript.");
+    (error as Error & { code?: string }).code = "CLINICAL_OUTPUT_INVALID";
+    throw error;
   }
   const compiled = compileClinicalEncounterMarkdown(parsed.document, templateText);
   onProgress?.({ stage: "compiling", current: 1, total: 1 });
@@ -447,12 +656,19 @@ CONTENT RULES:
 
 Instructions: `;
 
+export const BUILTIN_GENERATE_NOTES_TRANSLATION_KEY = "notes.actions.builtin.generateNotes";
+
+export function isBuiltInGenerateNotesAction(action: Pick<ActionItem, "is_builtin" | "translation_key">): boolean {
+  return action.is_builtin === 1 && action.translation_key === BUILTIN_GENERATE_NOTES_TRANSLATION_KEY;
+}
+
 export interface RunActionOptions {
   isCloudMode: boolean;
   modelId: string;
   isMeetingNote?: boolean;
   noteType?: NoteItem["note_type"];
   calendarEventId?: string | null;
+  sourceRevision?: number;
   /** Opt-in so enhancement never renames a note the user has titled. */
   allowTitleGeneration?: boolean;
 }
@@ -461,6 +677,9 @@ export interface RunActionLabels {
   noModel: string;
   noEndpoint: string;
   actionFailed: string;
+  sourceChanged?: string;
+  clinicalValidationFailed?: string;
+  localModelFailed?: string;
 }
 
 /**
@@ -477,14 +696,20 @@ export function runBackgroundAction(
 ): void {
   if (processingFlags.get(noteId)) return;
 
-  const modelId = options.modelId;
+  const settings = getSettings();
+  const noteFormatting = selectResolvedNoteFormatting(settings);
+  const builtIn = isBuiltInGenerateNotesAction(action);
+  if (builtIn && noteFormatting.mode !== "local") {
+    pushErrorEvent({ noteId, message: "Choose a local model for Generate Notes in Settings." });
+    return;
+  }
+  if (builtIn) options = { ...options, isCloudMode: false };
+  const modelId = builtIn ? noteFormatting.model : options.modelId;
   if (!modelId && !options.isCloudMode) {
     pushErrorEvent({ noteId, message: labels.noModel });
     return;
   }
 
-  const settings = getSettings();
-  const noteFormatting = selectResolvedNoteFormatting(settings);
   // A self-hosted config without a URL would fall through to a cloud provider.
   if (!options.isCloudMode && noteFormatting.mode === "self-hosted" && !noteFormatting.remoteUrl) {
     pushErrorEvent({ noteId, message: labels.noEndpoint });
@@ -492,6 +717,11 @@ export function runBackgroundAction(
   }
 
   cancelledFlags.set(noteId, false);
+  const claim = Symbol("note-generation");
+  const cancellationKey = `note-${noteId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  actionClaims.set(noteId, claim);
+  if (builtIn) localCancellationKeys.set(noteId, cancellationKey);
+  const isCancelled = () => actionClaims.get(noteId) !== claim || Boolean(cancelledFlags.get(noteId));
   const previousTimer = successTimers.get(noteId);
   if (previousTimer) {
     clearTimeout(previousTimer);
@@ -501,32 +731,108 @@ export function runBackgroundAction(
   setNoteState(noteId, {
     status: "processing",
     actionName: action.name,
+    isBuiltInAction: isBuiltInGenerateNotesAction(action),
     progress: { stage: "preparing", current: 0, total: 1 },
+    startedAt: Date.now(),
+    errorMessage: null,
   });
 
   (async () => {
     try {
-      const providerOverrides = buildNoteFormattingOverrides(noteFormatting, options.isCloudMode);
+      const usePersistedLocalSource = builtIn || (!options.isCloudMode && noteFormatting.mode === "local");
+      if (usePersistedLocalSource) {
+        const source = await prepareNoteGenerationSource(noteId,
+          window.electronAPI.getNoteGenerationSource, isCancelled);
+        if (!source || isCancelled()) return;
+        noteContent = source.sourceText ?? "";
+        contentHash = source.sourceHash!;
+        options = { ...options, sourceRevision: source.sourceRevision,
+          noteType: source.noteType, isMeetingNote: source.noteType === "meeting" };
+      }
+      const providerOverrides = {
+        ...buildNoteFormattingOverrides(noteFormatting, options.isCloudMode),
+        ...(builtIn ? { cancellationKey } : {}),
+      };
       let enhanced: string;
-      const hasEncounterLinkage =
-        !options.calendarEventId && typeof window.electronAPI.getEncounterByNote === "function"
-          ? Boolean((await window.electronAPI.getEncounterByNote(noteId))?.encounter)
-          : false;
-      const isEncounterNote = isEncounterNoteForGeneration({ ...options, hasEncounterLinkage });
+      const encounterLookup =
+        typeof window.electronAPI.getEncounterByNote === "function"
+          ? await window.electronAPI.getEncounterByNote(noteId)
+          : null;
+      const linkedEncounter = encounterLookup?.encounter ?? null;
+      const hasEncounterLinkage = Boolean(linkedEncounter);
+      // Only Generate Notes means “create the encounter's clinical template”.
+      // Custom actions on a meeting remain the custom action the user chose.
+      const isEncounterNote = builtIn &&
+        isEncounterNoteForGeneration({ ...options, hasEncounterLinkage });
+      const useLocalBoundedGeneric =
+        !isEncounterNote && !options.isCloudMode && noteFormatting.mode === "local";
 
       if (isEncounterNote && settings.encounterEnhancedNotesEnabled !== false) {
-        const template = await resolveEncounterTemplate(settings);
+        const template = await resolveEncounterTemplate(settings, isBuiltInGenerateNotesAction(action));
         if (!options.isCloudMode && noteFormatting.mode === "local") {
-          enhanced = await generateLocalClinicalEncounter(
-            noteContent,
+          let clinicalGenerationSource = noteContent;
+          let sharedEvidence: ClinicalEvidenceV1 | undefined;
+          let reusableEvidenceChunks: Array<{
+            chunk_index: number;
+            chunk_count: number;
+            chunk_hash: string;
+            evidence: ClinicalEvidenceChunk;
+          }> = [];
+          if (
+            linkedEncounter &&
+            typeof window.electronAPI.getEncounterOutput === "function" &&
+            typeof window.electronAPI.getEncounterEvidenceBundle === "function"
+          ) {
+            const outputResult = await window.electronAPI.getEncounterOutput(linkedEncounter.id);
+            const output = outputResult.output;
+            if (
+              output?.evidence_model === modelId &&
+              output.evidence_schema_version === CLINICAL_EVIDENCE_SCHEMA_VERSION &&
+              output.source_hash === contentHash &&
+              output.source_revision === options.sourceRevision
+            ) {
+              const evidenceResult = await window.electronAPI.getEncounterEvidenceBundle(
+                linkedEncounter.id,
+                {
+                  sourceRevision: output.source_revision,
+                  sourceHash: output.source_hash,
+                  schemaVersion: CLINICAL_EVIDENCE_SCHEMA_VERSION,
+                  modelId,
+                }
+              );
+              reusableEvidenceChunks = evidenceResult.bundle?.chunks ?? [];
+              if (evidenceResult.bundle?.mergedEvidence) {
+                sharedEvidence = evidenceResult.bundle.mergedEvidence;
+                clinicalGenerationSource = `DOCUMENTED CLINICAL EVIDENCE\n${serializeClinicalEvidence(
+                  evidenceResult.bundle.mergedEvidence
+                )}`;
+              }
+            }
+          }
+          enhanced = template.definition ? await generateStructuredClinicalNote({
+            source: noteContent, evidence: sharedEvidence, reusableEvidenceChunks,
+            definition: template.definition,
+            modelId, overrides: providerOverrides, reasoner: reasoningService,
+            noteId, sourceHash: contentHash, templateRevisionId: template.revisionId, isCancelled,
+            onProgress: (progress) => {
+              if (!isCancelled()) setNoteState(noteId, { status: progress.stage === "retrying" ? "retrying" : "processing", progress });
+            },
+          }) : await generateLocalClinicalEncounter(
+            clinicalGenerationSource,
             template.templateText,
             modelId,
             providerOverrides,
-            (progress) => setNoteState(noteId, { progress }),
+            (progress) => {
+              if (!isCancelled()) setNoteState(noteId, {
+                status: progress.stage === "retrying" ? "retrying" : "processing",
+                progress,
+              });
+            },
             {
               noteId,
               templateRevisionId: template.revisionId,
               sourceHash: contentHash,
+              isCancelled,
             }
           );
         } else {
@@ -556,33 +862,64 @@ export function runBackgroundAction(
         if (typeof window.electronAPI.createNoteGenerationCandidate !== "function") {
           throw new Error("Encounter note review is unavailable.");
         }
+        if (isCancelled()) return;
         const candidateResult = await window.electronAPI.createNoteGenerationCandidate({
           noteId,
           generatedContent: enhanced,
           templateRevisionId: template.revisionId,
           clinicalSource: noteContent,
+          ...(isBuiltInGenerateNotesAction(action)
+            ? { sourceHash: contentHash, sourceRevision: options.sourceRevision, preserveStaleDraft: true }
+            : {}),
         });
         if (!candidateResult.success || !candidateResult.candidate) {
-          throw new Error(candidateResult.error || candidateResult.code || "Unable to create note review candidate.");
+          const error = new Error(candidateResult.error || candidateResult.code || "Unable to create note review candidate.");
+          (error as Error & { code?: string }).code = candidateResult.code;
+          throw error;
+        }
+        if (isCancelled()) {
+          await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
+          return;
         }
         await window.electronAPI.clearNoteGenerationRun?.(noteId);
+        if (isCancelled()) {
+          await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
+          return;
+        }
         setCandidate(noteId, candidateResult.candidate);
       } else {
         const basePrompt = options.isMeetingNote ? MEETING_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT;
         const systemPrompt = appendDictionarySuffix(
-          basePrompt + action.prompt,
+          basePrompt,
           options.isMeetingNote ? settings.customDictionary : undefined,
           settings.uiLanguage
         );
-        enhanced = await reasoningService.processText(noteContent, modelId, null, {
-          systemPrompt,
-          temperature: 0.3,
-          disableThinking: settings.noteFormattingDisableThinking,
-          ...providerOverrides,
-        });
+        if (useLocalBoundedGeneric) {
+          enhanced = await generateLocalGenericNotes({
+            sourceText: noteContent,
+            systemPrompt,
+            actionPrompt: action.prompt,
+            modelId,
+            providerOverrides,
+            reasoner: reasoningService,
+            onProgress: (progress: LocalNoteGenerationProgress) => {
+              if (!isCancelled()) setNoteState(noteId, {
+                status: progress.stage === "retrying" ? "retrying" : "processing",
+                progress,
+              });
+            },
+          });
+        } else {
+          enhanced = await reasoningService.processText(noteContent, modelId, null, {
+            systemPrompt: `${systemPrompt}${action.prompt}`,
+            temperature: 0.3,
+            disableThinking: settings.noteFormattingDisableThinking,
+            ...providerOverrides,
+          });
+        }
       }
 
-      if (cancelledFlags.get(noteId)) return;
+      if (isCancelled()) return;
 
       let title: string | undefined;
       if (options.allowTitleGeneration && getSettings().autoGenerateNoteTitle) {
@@ -590,10 +927,15 @@ export function runBackgroundAction(
         if (generated) title = generated;
       }
 
-      if (cancelledFlags.get(noteId)) return;
+      if (isCancelled()) return;
 
       if (isEncounterNote && settings.encounterEnhancedNotesEnabled !== false) {
-        setNoteState(noteId, { status: "success", actionName: action.name, progress: null });
+        setNoteState(noteId, {
+          status: "success",
+          actionName: action.name,
+          progress: null,
+          errorMessage: null,
+        });
         if (getActionLifecycleSettlement("success").scheduleSuccessCleanup) {
           scheduleSuccessCleanup(noteId);
         }
@@ -606,38 +948,91 @@ export function runBackgroundAction(
         enhanced_at_content_hash: contentHash,
       };
       if (title) updates.title = title;
-      await window.electronAPI.updateNote(noteId, updates);
+      setNoteState(noteId, {
+        status: "processing",
+        progress: { stage: "applying", current: 1, total: 1 },
+      });
+      if (usePersistedLocalSource && useLocalBoundedGeneric && window.electronAPI.updateNoteEnhancedIfSourceMatches) {
+        const applied = await window.electronAPI.updateNoteEnhancedIfSourceMatches(
+          noteId,
+          contentHash,
+          updates,
+          options.sourceRevision
+        );
+        if (!applied.success) {
+          if (applied.candidate && !isCancelled()) setCandidate(noteId, applied.candidate);
+          const error = new Error("The note changed while it was generating.");
+          (error as Error & { code?: string }).code = applied.errorCode || "SOURCE_CHANGED";
+          throw error;
+        }
+      } else {
+        await window.electronAPI.updateNote(noteId, updates);
+      }
 
-      setNoteState(noteId, { status: "success", actionName: action.name, progress: null });
+      setNoteState(noteId, {
+        status: "success",
+        actionName: action.name,
+        progress: null,
+        errorMessage: null,
+      });
       if (getActionLifecycleSettlement("success").scheduleSuccessCleanup) {
         scheduleSuccessCleanup(noteId);
       }
     } catch (err) {
-      if (cancelledFlags.get(noteId)) {
-        settleAbortedOrFailedAction(noteId, "cancelled");
+      if (isCancelled()) {
+        if (actionClaims.get(noteId) === claim) settleAbortedOrFailedAction(noteId, "cancelled");
         return;
       }
-      settleAbortedOrFailedAction(noteId, "failed");
-      const message = err instanceof Error ? err.message : labels.actionFailed;
+      if (!isBuiltInGenerateNotesAction(action)) {
+        settleAbortedOrFailedAction(noteId, "failed");
+        const message = !options.isCloudMode && noteFormatting.mode === "local"
+          ? labels.localModelFailed || labels.actionFailed
+          : labels.actionFailed;
+        pushErrorEvent({ noteId, message });
+        return;
+      }
+      processingFlags.set(noteId, false);
+      const failureTimer = successTimers.get(noteId);
+      if (failureTimer) clearTimeout(failureTimer);
+      const errorCode = String((err as { code?: unknown })?.code ?? "").toUpperCase();
+      const message =
+        errorCode === "SOURCE_CHANGED" || errorCode === "CANDIDATE_STALE"
+          ? labels.sourceChanged || "The note changed while it was generating. Try again."
+          : errorCode === "CLINICAL_OUTPUT_INVALID"
+            ? labels.clinicalValidationFailed || "The clinical note could not be validated. Try again."
+            : errorCode.startsWith("LOCAL_")
+              ? labels.localModelFailed || labels.actionFailed
+              : labels.actionFailed;
+      setNoteState(noteId, { status: "failed", progress: null, errorMessage: message });
       pushErrorEvent({ noteId, message });
+      const timer = setTimeout(() => {
+        clearNoteState(noteId);
+        successTimers.delete(noteId);
+      }, 4_000);
+      successTimers.set(noteId, timer);
     } finally {
       // Cancellation is intentionally soft: the request may settle after the
       // caller has already cleared the state. This guard also covers any
       // cancellation/early-return path that occurs before an explicit catch.
-      if (processingFlags.get(noteId) && !successTimers.has(noteId)) {
+      if (actionClaims.get(noteId) === claim && processingFlags.get(noteId) && !successTimers.has(noteId)) {
         settleAbortedOrFailedAction(
           noteId,
           cancelledFlags.get(noteId) ? "cancelled" : "failed"
         );
       }
-      cancelledFlags.delete(noteId);
+      if (actionClaims.get(noteId) === claim) {
+        cancelledFlags.delete(noteId);
+        actionClaims.delete(noteId);
+        localCancellationKeys.delete(noteId);
+      }
     }
   })();
 }
 
-/** Soft cancel: the HTTP request continues but the result is discarded. */
 export function cancelAction(noteId: number): void {
   cancelledFlags.set(noteId, true);
+  const cancellationKey = localCancellationKeys.get(noteId);
+  if (cancellationKey) void window.electronAPI?.cancelLocalReasoning?.(cancellationKey);
   settleAbortedOrFailedAction(noteId, "cancelled");
 }
 

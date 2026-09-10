@@ -25,7 +25,9 @@ export const localProvider: InferenceProvider = {
 
     if (!result.success) {
       logger.logReasoning("LOCAL_ERROR", { model, processingTimeMs, error: result.error });
-      throw new Error(result.error);
+      const error = new Error(result.error || "Local reasoning could not be completed.");
+      if (result.errorCode) (error as Error & { code?: string }).code = result.errorCode;
+      throw error;
     }
 
     logger.logReasoning("LOCAL_SUCCESS", {

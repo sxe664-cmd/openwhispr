@@ -1,5 +1,6 @@
 import type { ModelDefinition } from "../models/ModelRegistry";
 import type { TinfoilCatalogModel } from "../models/tinfoilModels";
+import type { ClinicalEvidenceChunk, ClinicalEvidenceV1 } from "../helpers/clinicalEvidence";
 import type { CalendarEvent } from "./calendar";
 import type {
   PatientEncounterHistoryItem,
@@ -34,10 +35,17 @@ export function normalizeMeetingContext(value: unknown): MeetingContext {
 
 export type EncounterLifecycleState = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type EncounterOutputStatus = "pending" | "processing" | "ready" | "failed" | "stale";
+
+export type EncounterOutputErrorCode =
+  | "LOCAL_MODEL_NOT_CONFIGURED"
+  | "BYOK_NOT_CONFIGURED"
+  | "GENERATION_FAILED";
 export type EncounterOutputType = "summary" | "soap" | "focus" | "all";
+export type EncounterOutputGenerationPhase = "mapping" | "synthesizing" | "retrying";
 export type ClinicalNoteExportSection =
   | "summary"
   | "soap"
+  | "notes"
   | "filledTemplate"
   | "encounterDetails"
   | "participants"
@@ -103,7 +111,12 @@ export interface LocalEncounter {
 export interface EncounterOutput {
   encounter_id: number;
   transcript_hash: string;
-  transcript_revision: number;
+  transcript_revision?: number;
+  source_hash?: string | null;
+  source_revision?: number;
+  evidence_schema_version?: number | null;
+  evidence_status?: "pending" | "processing" | "ready" | "failed" | "stale";
+  evidence_model?: string | null;
   summary: string | null;
   soap: string | null;
   focus: string | null;
@@ -118,19 +131,29 @@ export interface EncounterOutput {
   soap_model: string | null;
   focus_provider: string | null;
   focus_model: string | null;
-  summary_error_code: string | null;
-  soap_error_code: string | null;
-  focus_error_code: string | null;
+  summary_error_code: EncounterOutputErrorCode | null;
+  soap_error_code: EncounterOutputErrorCode | null;
+  focus_error_code: EncounterOutputErrorCode | null;
   created_at: string;
   updated_at: string;
   summary_updated_at: string | null;
   soap_updated_at: string | null;
   focus_updated_at: string | null;
+  generation_phase: EncounterOutputGenerationPhase | null;
+  generation_progress_current: number;
+  generation_progress_total: number;
+  generation_attempt: number;
+  generation_next_retry_at: string | null;
+  generation_last_error_code: EncounterOutputErrorCode | null;
+  generation_started_at: string | null;
+  generation_heartbeat_at: string | null;
 }
 
 export interface EncounterTranscriptToken {
   transcriptRevision: number;
   transcriptHash: string;
+  sourceRevision: number;
+  sourceHash: string;
   /** Present for a claimed generation; omitted for read-only transcript snapshots. */
   generationId?: string;
 }
@@ -148,9 +171,18 @@ export interface EncounterOutputGenerationUpdate {
   soap_model?: string | null;
   focus_provider?: string | null;
   focus_model?: string | null;
-  summary_error_code?: string | null;
-  soap_error_code?: string | null;
-  focus_error_code?: string | null;
+  summary_error_code?: EncounterOutputErrorCode | null;
+  soap_error_code?: EncounterOutputErrorCode | null;
+  focus_error_code?: EncounterOutputErrorCode | null;
+  generation_phase?: EncounterOutputGenerationPhase | null;
+  generation_next_retry_at?: string | null;
+  generation_last_error_code?: EncounterOutputErrorCode | null;
+}
+
+export interface EncounterOutputGenerationProgress {
+  phase: EncounterOutputGenerationPhase;
+  current: number;
+  total: number;
 }
 
 export type ChineseScriptPreference = "simplified" | "traditional" | "as-transcribed";
@@ -243,6 +275,17 @@ export interface NoteItem {
   folder_id: number | null;
   space_id: number;
   transcript: string | null;
+  transcript_revision: number;
+  generation_source_revision?: number;
+  transcript_persistence_status?:
+    | "idle"
+    | "recording"
+    | "checkpointed"
+    | "finalizing"
+    | "finalized"
+    | "failed";
+  finalized_transcript_revision?: number | null;
+  transcript_finalized_at?: string | null;
   calendar_event_id: string | null;
   participants: string | null;
   diarization_enabled: number | null;
@@ -278,11 +321,24 @@ export interface NoteItem {
 
 export type NoteTemplateKind = "generic" | "encounter";
 
+export interface TranscriptSessionState {
+  note_id: number;
+  transcript_revision: number;
+  generation_source_revision: number;
+  finalized_transcript_revision: number | null;
+  transcript_persistence_status: NonNullable<NoteItem["transcript_persistence_status"]>;
+  transcript_finalized_at: string | null;
+  is_finalized: boolean;
+}
+
 export interface NoteTemplateRevision {
   id: number;
   template_id: number;
   version: number;
   created_at: string;
+  definition_json?: string | null;
+  validation_status?: "valid" | "needs_review" | "legacy";
+  definition?: unknown;
 }
 
 export interface NoteTemplate {
@@ -311,6 +367,11 @@ export interface NoteGenerationCandidate {
   template_revision_version: number | null;
   base_content_hash: string;
   base_enhanced_content_hash: string;
+  base_source_revision: number | null;
+  evidence_revision: number | null;
+  template_definition_hash: string | null;
+  candidate_kind: "clinical_template" | "generic";
+  is_stale?: boolean;
   generated_content: string;
   status: "pending" | "applied" | "discarded";
   has_clinical_source: boolean;
@@ -1002,6 +1063,25 @@ declare global {
         spaceId?: number | null
       ) => Promise<{ success: boolean; note?: NoteItem }>;
       getNote: (id: number) => Promise<NoteItem | null>;
+      getNoteGenerationSource?: (noteId: number) => Promise<{
+        success: boolean;
+        noteId?: number;
+        content?: string;
+        transcript?: string;
+        transcriptRevision?: number;
+        sourceRevision?: number;
+        finalizedTranscriptRevision?: number | null;
+        transcriptStatus?: string;
+        isFinalized?: boolean;
+        noteType?: NoteItem["note_type"];
+        meetingContext?: MeetingContext | null;
+        sourceHash?: string;
+        sourceText?: string;
+        manualNotes?: string;
+        transcriptText?: string;
+        sourceSchemaVersion?: number;
+        code?: string;
+      }>;
       getNotes: (
         noteType?: string | null,
         limit?: number,
@@ -1033,6 +1113,17 @@ declare global {
           left_team?: number;
         }
       ) => Promise<{ success: boolean; note?: NoteItem }>;
+      updateNoteEnhancedIfSourceMatches?: (
+        id: number,
+        expectedSourceHash: string,
+        updates: {
+          title?: string;
+          enhanced_content?: string | null;
+          enhancement_prompt?: string | null;
+          enhanced_at_content_hash?: string | null;
+        },
+        expectedSourceRevision?: number
+      ) => Promise<{ success: boolean; note?: NoteItem; error?: string; errorCode?: string; candidate?: NoteGenerationCandidate }>;
       deleteNote: (id: number) => Promise<{ success: boolean }>;
       listNoteTemplates?: (kind?: NoteTemplateKind) => Promise<NoteTemplate[]>;
       getNoteTemplate?: (
@@ -1049,10 +1140,11 @@ declare global {
         description?: string;
         kind: NoteTemplateKind;
         templateText: string;
+        structuredDefinition?: unknown;
       }) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
       updateNoteTemplate?: (
         id: number,
-        updates: { name?: string; description?: string; templateText?: string }
+        updates: { name?: string; description?: string; templateText?: string; structuredDefinition?: unknown }
       ) => Promise<{ success: boolean; template?: NoteTemplate; code?: string; error?: string }>;
       deleteNoteTemplate?: (id: number) => Promise<{ success: boolean; code?: string; error?: string }>;
       activateNoteTemplate?: (
@@ -1068,6 +1160,11 @@ declare global {
         generatedContent: string;
         templateRevisionId?: number;
         clinicalSource?: string | null;
+        sourceHash?: string;
+        sourceRevision?: number;
+        evidenceRevision?: number;
+        templateDefinitionHash?: string;
+        preserveStaleDraft?: boolean;
         confirmed?: boolean;
       }) => Promise<{
         success: boolean;
@@ -1076,6 +1173,7 @@ declare global {
         error?: string;
       }>;
       getNoteGenerationCandidate?: (candidateId: string) => Promise<NoteGenerationCandidate | null>;
+      getPendingNoteGenerationCandidate?: (noteId: number) => Promise<NoteGenerationCandidate | null>;
       applyNoteGenerationCandidate?: (
         candidateId: string,
         options?: { confirmed?: boolean }
@@ -1113,6 +1211,7 @@ declare global {
         chunkCount: number;
         completedChunks: number;
         extractions: unknown[];
+        status?: "processing" | "failed";
       }) => Promise<{ success: boolean; run?: unknown; errorCode?: string }>;
       clearNoteGenerationRun?: (noteId: number) => Promise<{ success: boolean; errorCode?: string }>;
       exportNote: (
@@ -1459,7 +1558,18 @@ declare global {
         modelId: string,
         agentName: string | null,
         config: any
-      ) => Promise<{ success: boolean; text?: string; error?: string }>;
+      ) => Promise<{
+        success: boolean;
+        text?: string;
+        error?: string;
+        errorCode?:
+          | "LOCAL_SCHEMA_UNSUPPORTED"
+          | "LOCAL_SERVER_TIMEOUT"
+          | "LOCAL_SERVER_UNAVAILABLE"
+          | "LOCAL_MODEL_NOT_AVAILABLE"
+          | "LOCAL_INFERENCE_FAILED"
+          | "LOCAL_INFERENCE_CANCELLED";
+      }>;
       checkLocalReasoningAvailable: () => Promise<boolean>;
 
       // Anthropic reasoning
@@ -1477,6 +1587,9 @@ declare global {
         agentName: string | null,
         config: any
       ) => Promise<{ success: boolean; text?: string; error?: string; retryable?: boolean }>;
+      cancelLocalReasoning?: (
+        cancellationKey: string
+      ) => Promise<{ success: boolean; cancelled: boolean }>;
       enterpriseStreamStart?: (payload: {
         streamId: string;
         provider: string;
@@ -1511,6 +1624,15 @@ declare global {
       ) => Promise<{ success: boolean; port?: number; error?: string }>;
       llamaServerStop: () => Promise<{ success: boolean; error?: string }>;
       llamaServerStatus: () => Promise<LlamaServerStatus>;
+      getLocalModelRuntimeProfile?: (modelId: string) => Promise<{
+        success: boolean;
+        profile?: { modelId: string; contextTokens: number; maxOutputTokens: number };
+        code?: string;
+      }>;
+      countLocalModelTokens?: (
+        modelId: string,
+        text: string
+      ) => Promise<{ success: boolean; tokenCount?: number; code?: string }>;
       llamaGpuReset: () => Promise<{ success: boolean; error?: string }>;
       detectVulkanGpu?: () => Promise<VulkanGpuResult>;
       getLlamaVulkanStatus?: () => Promise<LlamaVulkanStatus>;
@@ -2251,12 +2373,46 @@ declare global {
         error?: string;
         code?: string;
       }>;
+      getEncounterEvidenceBundle?: (
+        encounterId: number,
+        input: { sourceRevision: number; sourceHash: string; schemaVersion: number; modelId: string }
+      ) => Promise<{
+        success: boolean;
+        bundle: {
+          chunks: Array<{
+            chunk_index: number;
+            chunk_count: number;
+            chunk_hash: string;
+            evidence: ClinicalEvidenceChunk;
+          }>;
+          mergedEvidence: ClinicalEvidenceV1 | null;
+          status: string;
+        } | null;
+      }>;
+      saveEncounterEvidenceChunk?: (
+        encounterId: number,
+        token: EncounterTranscriptToken,
+        input: {
+          schemaVersion: number;
+          modelId: string;
+          chunkIndex: number;
+          chunkCount: number;
+          chunkHash: string;
+          evidence: ClinicalEvidenceChunk;
+        }
+      ) => Promise<{ applied: boolean; code?: string }>;
+      completeEncounterEvidence?: (
+        encounterId: number,
+        token: EncounterTranscriptToken,
+        input: { schemaVersion: number; modelId: string; evidence: ClinicalEvidenceV1 }
+      ) => Promise<{ applied: boolean; code?: string }>;
       beginEncounterOutputGeneration?: (
         encounterId: number,
         outputTypes?: EncounterOutputType | Array<Exclude<EncounterOutputType, "all">>
       ) => Promise<{
         success: boolean;
         output: EncounterOutput | null;
+        sourceText?: string | null;
         transcript: string | null;
         token: EncounterTranscriptToken | null;
         busy?: boolean;
@@ -2267,6 +2423,17 @@ declare global {
         encounterId: number,
         token: EncounterTranscriptToken,
         updates: EncounterOutputGenerationUpdate
+      ) => Promise<{
+        success: boolean;
+        applied: boolean;
+        output: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      updateEncounterOutputGenerationProgress?: (
+        encounterId: number,
+        token: EncounterTranscriptToken,
+        progress: EncounterOutputGenerationProgress
       ) => Promise<{
         success: boolean;
         applied: boolean;
@@ -2297,6 +2464,53 @@ declare global {
         note?: NoteItem;
         encounter?: LocalEncounter | null;
         output?: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      beginTranscriptSession?: (
+        noteId: number,
+        sessionId: string
+      ) => Promise<{
+        success: boolean;
+        note?: NoteItem;
+        error?: string;
+        code?: string;
+      }>;
+      checkpointTranscriptSession?: (
+        noteId: number,
+        sessionId: string,
+        transcript: string
+      ) => Promise<{
+        success: boolean;
+        finalized?: boolean;
+        note?: NoteItem;
+        encounter?: LocalEncounter | null;
+        output?: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      finalizeTranscriptSession?: (
+        noteId: number,
+        sessionId: string,
+        transcript: string
+      ) => Promise<{
+        success: boolean;
+        finalized?: boolean;
+        note?: NoteItem;
+        encounter?: LocalEncounter | null;
+        output?: EncounterOutput | null;
+        error?: string;
+        code?: string;
+      }>;
+      failTranscriptSession?: (
+        noteId: number,
+        sessionId: string
+      ) => Promise<{ success: boolean; note?: NoteItem; error?: string; code?: string }>;
+      getTranscriptSessionState?: (
+        noteId: number
+      ) => Promise<{
+        success: boolean;
+        state?: TranscriptSessionState | null;
         error?: string;
         code?: string;
       }>;
@@ -2371,6 +2585,11 @@ declare global {
         } & PolicyFailureMetadata
       >;
       meetingTranscriptionSend?: (buffer: ArrayBuffer, source: "mic" | "system") => void;
+      meetingTranscriptionSetPaused?: (paused: boolean) => Promise<{
+        success: boolean;
+        paused?: boolean;
+        error?: string;
+      }>;
       meetingTranscriptionStop?: () => Promise<{
         success: boolean;
         transcript?: string;

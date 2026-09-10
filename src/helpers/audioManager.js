@@ -2491,8 +2491,6 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
           logger.logReasoning("REASONING_SUCCESS", {
             resultLength: translatedText.length,
-            resultPreview:
-              translatedText.substring(0, 100) + (translatedText.length > 100 ? "..." : ""),
             processingTime: new Date().toISOString(),
           });
 
@@ -2526,7 +2524,6 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
 
         logger.logReasoning("REASONING_SUCCESS", {
           resultLength: result.length,
-          resultPreview: result.substring(0, 100) + (result.length > 100 ? "..." : ""),
           processingTime: new Date().toISOString(),
         });
 

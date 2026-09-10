@@ -11,6 +11,7 @@ import { useToast } from "../ui/useToast";
 import NotesTemplatesEditor, {
   type NoteTemplateFormValues,
 } from "./NotesTemplatesEditor";
+import { validateStructuredNoteTemplate, renderStructuredTemplatePreview } from "../../helpers/structuredNoteTemplate.mjs";
 
 type EditorMode = "create" | "edit";
 
@@ -119,6 +120,7 @@ export default function NotesTemplates() {
         name: mode === "edit" ? template.name : `${template.name} ${t("settingsPage.notesTemplates.copySuffix")}`,
         description: template.description,
         templateText: rawTemplate.template_text,
+        structuredDefinition: rawTemplate.active_revision?.definition,
       });
       setEditorOpen(true);
     } catch (loadError) {
@@ -149,6 +151,20 @@ export default function NotesTemplates() {
       return;
     }
 
+    let validatedTemplateText: string;
+    let structuredDefinition;
+    try {
+      structuredDefinition = validateStructuredNoteTemplate(values.structuredDefinition);
+      validatedTemplateText = renderStructuredTemplatePreview(structuredDefinition);
+    } catch {
+      toast({
+        title: t("settingsPage.notesTemplates.saveFailed"),
+        description: "Give each section a label and choose what it should contain. The existing template was left unchanged.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const result =
@@ -156,13 +172,15 @@ export default function NotesTemplates() {
           ? await api.updateNoteTemplate!(editorTemplate.id, {
               name: values.name.trim(),
               description: values.description.trim(),
-              templateText: values.templateText.trim(),
+              templateText: validatedTemplateText,
+              structuredDefinition,
             })
           : await api.createNoteTemplate!({
               name: values.name.trim(),
               description: values.description.trim(),
               kind: "encounter",
-              templateText: values.templateText.trim(),
+              templateText: validatedTemplateText,
+              structuredDefinition,
             });
 
       if (!result?.success) {

@@ -12,6 +12,7 @@ function fixture() {
     note: {
       id: 10,
       title: "Follow-up <visit>",
+      content: "Patient's handwritten note\n\n- Bring prior imaging.",
       created_at: "2026-08-15 14:00:00",
       audio_duration_seconds: 125,
       participants: JSON.stringify([
@@ -49,13 +50,27 @@ function fixture() {
   };
 }
 
-test("clinical document defaults to summary, SOAP, filled template, and encounter details", () => {
+test("clinical document defaults to generated outputs, additional notes, and encounter details", () => {
   const document = buildClinicalNoteDocument(fixture());
-  assert.deepEqual(document.selectedSections, ["summary", "soap", "filledTemplate", "encounterDetails"]);
+  assert.deepEqual(document.selectedSections, ["summary", "soap", "notes", "filledTemplate", "encounterDetails"]);
   assert.equal(document.duration, "00:03:05");
   assert.equal(document.soap.subjective, "Reports improvement.");
   assert.equal(document.soap.objective, "Not documented");
+  assert.match(document.notes, /handwritten note/);
   assert.match(document.filledTemplate, /Clinical Encounter/);
+});
+
+test("additional notes are available and rendered as a separate Markdown section", () => {
+  const data = fixture();
+  const preview = buildClinicalNotePreview(data);
+  assert.equal(preview.sections.notes.available, true);
+
+  const html = renderClinicalNoteHtml(
+    buildClinicalNoteDocument({ ...data, sections: ["notes"] })
+  );
+  assert.match(html, /<h2>Additional notes<\/h2>/);
+  assert.match(html, /Patient's handwritten note/);
+  assert.match(html, /<li>Bring prior imaging\.<\/li>/);
 });
 
 test("filled clinical template is available and rendered as safe polished Markdown", () => {

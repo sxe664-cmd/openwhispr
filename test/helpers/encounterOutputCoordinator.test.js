@@ -112,3 +112,95 @@ test("coordinator reconciles targeted pending outputs instead of scanning the ap
 
   assert.equal(beginCalls, 1);
 });
+
+test("coordinator gives newly completed encounters priority over delayed backlog", async () => {
+  const { createEncounterOutputCoordinator } = await load();
+  const beginOrder = [];
+  const bridge = {
+    getEncounterOutput: async () => ({ success: true, output: output() }),
+    beginEncounterOutputGeneration: async (encounterId) => {
+      beginOrder.push(encounterId);
+      return {
+        success: true,
+        output: output("processing"),
+        transcript: "Canonical transcript",
+        token: { transcriptRevision: 1, transcriptHash: "hash", generationId: `generation-${encounterId}` },
+      };
+    },
+    finishEncounterOutputGeneration: async () => ({
+      success: true,
+      applied: true,
+      output: output("ready"),
+    }),
+  };
+  const coordinator = createEncounterOutputCoordinator({
+    bridge,
+    debounceMs: 0,
+    generate: async () => ({
+      summary: { success: true, kind: "summary", content: "Summary", provider: "local", model: "test" },
+      soap: { success: true, kind: "soap", content: "SOAP", provider: "local", model: "test" },
+      focus: { success: true, kind: "focus", content: "Focus", provider: "local", model: "test" },
+    }),
+  });
+  coordinator.start();
+  coordinator.enqueue(101, { priority: 0, delayMs: 25 });
+  coordinator.enqueue(202, { priority: 2, delayMs: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  coordinator.stop();
+
+  assert.deepEqual(beginOrder, [202, 101]);
+});
+
+test("a current encounter preempts an active historical job between local requests", async () => {
+  const { createEncounterOutputCoordinator } = await load();
+  const starts = [];
+  const priorities = new Map();
+  let releaseHistorical;
+  const historicalBlocked = new Promise((resolve) => { releaseHistorical = resolve; });
+  const bridge = {
+    getEncounterOutput: async () => ({ success: true, output: output() }),
+    beginEncounterOutputGeneration: async (encounterId) => ({
+      success: true,
+      output: { ...output("processing"), generation_attempt: 1 },
+      transcript: `encounter-${encounterId}`,
+      token: {
+        transcriptRevision: 1,
+        transcriptHash: `transcript-${encounterId}`,
+        sourceRevision: 1,
+        sourceHash: `source-${encounterId}`,
+        generationId: `generation-${encounterId}`,
+      },
+    }),
+    finishEncounterOutputGeneration: async () => ({
+      success: true,
+      applied: true,
+      output: output("ready"),
+    }),
+  };
+  const coordinator = createEncounterOutputCoordinator({
+    bridge,
+    debounceMs: 0,
+    generate: async (source, options) => {
+      starts.push(source);
+      priorities.set(source, options?.queuePriority);
+      if (source === "encounter-101") await historicalBlocked;
+      return {
+        summary: { success: true, kind: "summary", content: "Summary", provider: "local", model: "test" },
+        soap: { success: true, kind: "soap", content: "SOAP", provider: "local", model: "test" },
+        focus: { success: true, kind: "focus", content: "Focus", provider: "local", model: "test" },
+      };
+    },
+  });
+
+  coordinator.start();
+  coordinator.enqueue(101, { priority: 0, delayMs: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  coordinator.enqueue(202, { priority: 2, delayMs: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  assert.deepEqual(starts, ["encounter-101", "encounter-202"]);
+  assert.ok(priorities.get("encounter-202") > priorities.get("encounter-101"));
+  releaseHistorical();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  coordinator.stop();
+});

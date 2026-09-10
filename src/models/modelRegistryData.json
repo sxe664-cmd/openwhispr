@@ -1153,12 +1153,12 @@
           "name": "LFM2.5 1.2B",
           "size": "0.73GB",
           "sizeBytes": 730895168,
-          "description": "Liquid AI's efficient on-device model, excellent instruction following",
+          "description": "Fast model for short cleanup; use a larger model for structured clinical notes",
           "fileName": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
           "quantization": "q4_k_m",
           "contextLength": 32768,
           "hfRepo": "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-          "recommended": true,
+          "recommended": false,
           "descriptionKey": "models.descriptions.local.liquidai_lfm2_5_1_2b_instruct_q4_k_m"
         },
         {

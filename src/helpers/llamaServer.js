@@ -548,6 +548,19 @@ class LlamaServerManager {
 
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
+      let settled = false;
+      const finish = (callback) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener?.("abort", onAbort);
+        callback();
+      };
+      const onAbort = () => {
+        const error = Object.assign(new Error("Local generation cancelled."), {
+          code: "LOCAL_INFERENCE_CANCELLED",
+        });
+        req.destroy(error);
+      };
 
       const req = http.request(
         {
@@ -573,7 +586,7 @@ class LlamaServerManager {
             });
 
             if (res.statusCode !== 200) {
-              reject(new Error(`llama-server returned status ${res.statusCode}: ${data}`));
+              finish(() => reject(new Error(`llama-server returned status ${res.statusCode}: ${data}`)));
               return;
             }
 
@@ -583,29 +596,35 @@ class LlamaServerManager {
                 options.requireCompleteOutput &&
                 ["length", "max_tokens"].includes(response.choices?.[0]?.finish_reason)
               ) {
-                reject(new Error("Model output was truncated before the selection edit completed"));
+                finish(() => reject(new Error("Model output was truncated before the selection edit completed")));
                 return;
               }
               const message = response.choices?.[0]?.message;
               const text = message?.content || message?.reasoning_content || "";
-              resolve(text.trim());
+              finish(() => resolve(text.trim()));
             } catch (e) {
-              reject(new Error(`Failed to parse llama-server response: ${e.message}`));
+              finish(() => reject(new Error(`Failed to parse llama-server response: ${e.message}`)));
             }
           });
         }
       );
 
       req.on("error", (error) => {
-        reject(new Error(`llama-server request failed: ${error.message}`));
+        if (error?.code === "LOCAL_INFERENCE_CANCELLED") finish(() => reject(error));
+        else finish(() => reject(new Error(`llama-server request failed: ${error.message}`)));
       });
       req.on("timeout", () => {
         req.destroy();
-        reject(new Error("llama-server request timed out"));
+        finish(() => reject(new Error("llama-server request timed out")));
       });
 
-      req.write(body);
-      req.end();
+      if (options.signal?.aborted) onAbort();
+      else options.signal?.addEventListener?.("abort", onAbort, { once: true });
+
+      if (!options.signal?.aborted) {
+        req.write(body);
+        req.end();
+      }
     }).finally(() => this.resetIdleTimer());
   }
 

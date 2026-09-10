@@ -18,6 +18,10 @@ export interface ReasoningConfig {
   maxTokens?: number;
   temperature?: number;
   contextSize?: number;
+  /** Local single-worker scheduling priority; higher jobs run first between requests. */
+  queuePriority?: number;
+  /** Opaque renderer-created key used to cancel every local request belonging to one action. */
+  cancellationKey?: string;
   systemPrompt?: string;
   lanUrl?: string;
   baseUrl?: string;

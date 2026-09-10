@@ -10,6 +10,7 @@ interface EncounterCompletionPromptProps {
   isProcessing?: boolean;
   isCompleted?: boolean;
   templateReady?: boolean;
+  onBeforeComplete?: () => Promise<boolean>;
   onCompleted?: (encounter: LocalEncounter) => void;
 }
 
@@ -25,9 +26,8 @@ function outputsAreReady(output: EncounterOutput | null): boolean {
 export default function EncounterCompletionPrompt({
   noteId,
   isRecording,
-  isProcessing = false,
   isCompleted = false,
-  templateReady = false,
+  onBeforeComplete,
   onCompleted,
 }: EncounterCompletionPromptProps) {
   const { t } = useTranslation();
@@ -91,34 +91,15 @@ export default function EncounterCompletionPrompt({
   if (
     !encounter ||
     isCompleted ||
-    encounter.lifecycle_state === "completed" ||
-    isRecording ||
-    isProcessing ||
-    !outputsAreReady(output)
+    encounter.lifecycle_state !== "in_progress" ||
+    isRecording
   ) {
     return null;
   }
 
-  if (!templateReady) {
-    return (
-      <section
-        className="mx-4 mb-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3"
-        data-testid="encounter-template-required"
-      >
-        <div className="flex items-start gap-2">
-          <LockKeyhole size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-foreground/80">
-              {t("notes.editor.encounterCompletion.templateRequired")}
-            </div>
-            <div className="text-[11px] text-muted-foreground/80">
-              {t("notes.editor.encounterCompletion.templateRequiredDescription")}
-            </div>
-          </div>
-        </div>
-      </section>
-    );
-  }
+  // Applying the enhanced template is a separate editing action. Completion
+  // only needs the source transcript saved; clinical outputs may finish later.
+  const clinicalInfoReady = outputsAreReady(output);
 
   const handleComplete = async () => {
     if (!confirmArmed) {
@@ -129,6 +110,14 @@ export default function EncounterCompletionPrompt({
     setIsCompleting(true);
     setError(null);
     try {
+      if (onBeforeComplete) {
+        const saved = await onBeforeComplete();
+        if (!saved) {
+          setError(t("notes.editor.encounterCompletion.unavailable"));
+          setConfirmArmed(false);
+          return;
+        }
+      }
       const result = await window.electronAPI.markEncounterComplete(encounter.id);
       if (!result.success || !result.encounter) {
         setError(result.error || t("notes.editor.encounterCompletion.unavailable"));
@@ -147,21 +136,30 @@ export default function EncounterCompletionPrompt({
 
   return (
     <section
-      className="mx-4 mb-3 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3"
+      className={
+        clinicalInfoReady
+          ? "rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3"
+          : "rounded-lg border border-amber-500/25 bg-amber-500/5 p-3"
+      }
       data-testid="encounter-completion-prompt"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <CheckCircle2
-            size={15}
-            className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-          />
+          {clinicalInfoReady ? (
+            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <LockKeyhole size={15} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          )}
           <div className="min-w-0">
             <div className="text-xs font-semibold text-foreground/80">
-              {t("notes.editor.encounterCompletion.title")}
+              {clinicalInfoReady
+                ? t("notes.editor.encounterCompletion.title")
+                : t("notes.editor.encounterCompletion.markComplete")}
             </div>
             <div className="text-[11px] text-muted-foreground/80">
-              {t("notes.editor.encounterCompletion.description")}
+              {clinicalInfoReady
+                ? t("notes.editor.encounterCompletion.description")
+                : t("notes.editor.encounterCompletion.backgroundDescription")}
             </div>
           </div>
         </div>
@@ -184,6 +182,11 @@ export default function EncounterCompletionPrompt({
               : t("notes.editor.encounterCompletion.markComplete")}
         </Button>
       </div>
+      {!clinicalInfoReady && !confirmArmed && (
+        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-950 dark:text-amber-100">
+          {t("notes.editor.encounterCompletion.backgroundWarning")}
+        </div>
+      )}
       {confirmArmed && !isCompleting && (
         <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-950 dark:text-amber-100">
           <div>{t("notes.editor.encounterCompletion.warning")}</div>

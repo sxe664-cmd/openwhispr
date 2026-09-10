@@ -86,9 +86,11 @@ interface RecentSystemSpeaker {
 
 interface MeetingRecordingState {
   isRecording: boolean;
+  isPaused: boolean;
   isTranscribing: boolean;
   /** The durable transcript lifecycle; recording=false alone is not completion. */
   transcriptStatus: TranscriptPersistenceStatus;
+  transcriptSessionId: string | null;
   recordingNoteId: number | null;
   recordingNoteTitle: string | null;
   recordingFolderId: number | null;
@@ -433,6 +435,8 @@ let systemSource: MediaStreamAudioSourceNode | null = null;
 let systemProcessor: AudioWorkletNode | null = null;
 let systemStream: MediaStream | null = null;
 let isRecordingFlag = false;
+let isPausedFlag = false;
+let pauseOperationPromise: Promise<boolean> | null = null;
 let isStartingFlag = false;
 let startingNoteId: number | null = null;
 let isPrepared = false;
@@ -445,11 +449,18 @@ let systemPartialSpeakerIdValue: string | null = null;
 let recentSystemSpeaker: RecentSystemSpeaker | null = null;
 let speakerLocks: Map<string, string> = new Map();
 let pushConfigTimeout: ReturnType<typeof setTimeout> | null = null;
+let transcriptCheckpointTimer: ReturnType<typeof setInterval> | null = null;
+const pendingTranscriptSessions = new Map<
+  string,
+  { noteId: number; sessionId: string; rawTranscript: string }
+>();
 
 export const useMeetingRecordingStore = create<MeetingRecordingState>()(() => ({
   isRecording: false,
+  isPaused: false,
   isTranscribing: false,
   transcriptStatus: "idle",
+  transcriptSessionId: null,
   recordingNoteId: null,
   recordingNoteTitle: null,
   recordingFolderId: null,
@@ -482,6 +493,76 @@ function reportMeetingError(error: string, extra: Partial<MeetingRecordingState>
     error,
     errorNonce: state.errorNonce + 1,
   }));
+}
+
+function currentSerializedTranscript(): string {
+  const state = useMeetingRecordingStore.getState();
+  return state.segments.length > 0
+    ? serializeTranscriptSegments(state.segments)
+    : state.transcript;
+}
+
+async function checkpointCurrentTranscript(): Promise<boolean> {
+  const state = useMeetingRecordingStore.getState();
+  if (!state.recordingNoteId || !state.transcriptSessionId) return false;
+  const transcript = currentSerializedTranscript();
+  if (!transcript) return false;
+  const result = await checkpointTranscript(
+    state.recordingNoteId,
+    state.transcriptSessionId,
+    transcript
+  );
+  const current = useMeetingRecordingStore.getState();
+  if (current.recordingNoteId !== state.recordingNoteId ||
+      current.transcriptSessionId !== state.transcriptSessionId) return result;
+  if (!result) {
+    useMeetingRecordingStore.setState({ transcriptStatus: "failed" });
+    return false;
+  }
+  useMeetingRecordingStore.setState({ transcriptStatus: "saving" });
+  return true;
+}
+
+async function checkpointTranscript(
+  noteId: number,
+  sessionId: string,
+  transcript: string
+): Promise<boolean> {
+  const result = await window.electronAPI?.checkpointTranscriptSession?.(
+    noteId,
+    sessionId,
+    transcript
+  );
+  return Boolean(result?.success);
+}
+
+async function finalizeTranscript(
+  noteId: number,
+  sessionId: string,
+  transcript: string
+): Promise<boolean> {
+  const result = await window.electronAPI?.finalizeTranscriptSession?.(
+    noteId,
+    sessionId,
+    transcript
+  );
+  if (!result?.success) return false;
+  const state = useMeetingRecordingStore.getState();
+  if (state.recordingNoteId === noteId && state.transcriptSessionId === sessionId) {
+    useMeetingRecordingStore.setState({ transcriptStatus: "ready", transcriptSessionId: null });
+  }
+  return true;
+}
+
+async function failTranscriptPersistenceSession(): Promise<void> {
+  const state = useMeetingRecordingStore.getState();
+  if (state.recordingNoteId && state.transcriptSessionId) {
+    await window.electronAPI?.failTranscriptSession?.(
+      state.recordingNoteId,
+      state.transcriptSessionId
+    );
+  }
+  useMeetingRecordingStore.setState({ transcriptSessionId: null, transcriptStatus: "failed" });
 }
 
 export const getMicAnalyser = (): AnalyserNode | null => micAnalyser;
@@ -721,10 +802,15 @@ async function cleanup(): Promise<void> {
     clearTimeout(pushConfigTimeout);
     pushConfigTimeout = null;
   }
+  if (transcriptCheckpointTimer) {
+    clearInterval(transcriptCheckpointTimer);
+    transcriptCheckpointTimer = null;
+  }
   isPrepared = false;
   isRecordingFlag = false;
   isStartingFlag = false;
   startingNoteId = null;
+  isPausedFlag = false;
 }
 
 export async function prepareTranscription(context: MeetingContext = "telehealth"): Promise<void> {
@@ -778,6 +864,9 @@ export interface StartRecordingArgs {
 }
 
 export async function startRecording(args: StartRecordingArgs): Promise<boolean> {
+  // Capture teardown belongs to the previous session. Do not let it clear
+  // the state or microphone resources of a newly started recording.
+  if (stopOperationPromise) await stopOperationPromise;
   if (isRecordingFlag || isStartingFlag) {
     const activeNoteId = useMeetingRecordingStore.getState().recordingNoteId ?? startingNoteId;
     if (activeNoteId === args.noteId) return true;
@@ -786,6 +875,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
   }
   isStartingFlag = true;
   startingNoteId = args.noteId;
+  isPausedFlag = false;
 
   const initialEnabled =
     args.diarizationEnabled ??
@@ -796,6 +886,21 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     Math.min(MAX_SPEAKER_COUNT, args.expectedCount ?? DEFAULT_EXPECTED_SPEAKER_COUNT)
   );
   const meetingContext = normalizeMeetingContext(args.meetingContext);
+  const transcriptSessionId = args.noteId == null ? null : globalThis.crypto.randomUUID();
+  if (args.noteId != null && transcriptSessionId) {
+    const begun = await window.electronAPI?.beginTranscriptSession?.(args.noteId, transcriptSessionId)
+      .catch(() => undefined);
+    if (!begun?.success) {
+      isStartingFlag = false;
+      startingNoteId = null;
+      reportMeetingError("This recording could not be started. Try again.", {
+        isRecording: false,
+        isTranscribing: false,
+        transcriptStatus: "failed",
+      });
+      return false;
+    }
+  }
 
   const systemAudioAccessPromise =
     meetingContext === "in_person"
@@ -824,8 +929,10 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
 
   useMeetingRecordingStore.setState({
     isRecording: true,
+    isPaused: false,
     isTranscribing: true,
     transcriptStatus: "recording",
+    transcriptSessionId,
     recordingNoteId: args.noteId,
     recordingNoteTitle: args.noteTitle,
     recordingFolderId: args.folderId,
@@ -851,6 +958,10 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
   });
 
   isRecordingFlag = true;
+  if (transcriptCheckpointTimer) clearInterval(transcriptCheckpointTimer);
+  transcriptCheckpointTimer = setInterval(() => {
+    if (isRecordingFlag) void checkpointCurrentTranscript();
+  }, 30_000);
 
   if (preparePromise) {
     logger.debug("Waiting for in-flight prepare to finish...", {}, "meeting");
@@ -936,6 +1047,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       isRecordingFlag = false;
       isStartingFlag = false;
       startingNoteId = null;
+      await failTranscriptPersistenceSession();
       return false;
     }
 
@@ -984,6 +1096,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       isRecordingFlag = false;
       isStartingFlag = false;
       startingNoteId = null;
+      await failTranscriptPersistenceSession();
       return false;
     }
 
@@ -1196,7 +1309,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
         stream: micResult,
         context: ctx,
         onChunk: (chunk) => {
-          if (!isRecordingFlag) return;
+          if (!isRecordingFlag || isPausedFlag) return;
           if (socketReady) {
             window.electronAPI?.meetingTranscriptionSend?.(chunk, "mic");
             return;
@@ -1281,7 +1394,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
         stream,
         context: ctx,
         onChunk: (chunk) => {
-          if (!isRecordingFlag) return;
+          if (!isRecordingFlag || isPausedFlag) return;
           if (socketReady) {
             window.electronAPI?.meetingTranscriptionSend?.(chunk, "system");
             return;
@@ -1321,10 +1434,10 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     socketReady = true;
 
     for (const chunk of pendingMicChunks) {
-      window.electronAPI?.meetingTranscriptionSend?.(chunk, "mic");
+      if (!isPausedFlag) window.electronAPI?.meetingTranscriptionSend?.(chunk, "mic");
     }
     for (const chunk of pendingSystemChunks) {
-      window.electronAPI?.meetingTranscriptionSend?.(chunk, "system");
+      if (!isPausedFlag) window.electronAPI?.meetingTranscriptionSend?.(chunk, "system");
     }
 
     const totalMs = performance.now() - startTime;
@@ -1351,6 +1464,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     useMeetingRecordingStore.setState({
       error: (err as Error).message,
       isRecording: false,
+      isPaused: false,
       isTranscribing: false,
       transcriptStatus: "failed",
     });
@@ -1358,6 +1472,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
     isStartingFlag = false;
     startingNoteId = null;
     await cleanup();
+    await failTranscriptPersistenceSession();
     return false;
   }
 }
@@ -1366,46 +1481,153 @@ export interface StopRecordingResult {
   diarizationSessionId: string | null;
 }
 
-export async function stopRecording(): Promise<StopRecordingResult> {
+export function togglePauseRecording(): Promise<boolean> {
+  if (!isRecordingFlag || pauseOperationPromise) return Promise.resolve(false);
+
+  const operation = (async () => {
+    const nextPaused = !isPausedFlag;
+    isPausedFlag = nextPaused;
+    useMeetingRecordingStore.setState({
+      isPaused: nextPaused,
+      ...(nextPaused
+        ? {
+            currentMicLevel: 0,
+          }
+        : {}),
+    });
+
+    try {
+      const result = await window.electronAPI?.meetingTranscriptionSetPaused?.(nextPaused);
+      if (result?.success === false) {
+        throw new Error(result.error || "Unable to change recording pause state");
+      }
+
+      const contexts = [micContext, systemContext].filter(Boolean) as AudioContext[];
+      await Promise.all(
+        contexts.map((context) => (nextPaused ? context.suspend() : context.resume()))
+      );
+      return true;
+    } catch (error) {
+      isPausedFlag = !nextPaused;
+      useMeetingRecordingStore.setState({
+        isPaused: isPausedFlag,
+        ...(isPausedFlag ? { currentMicLevel: 0 } : {}),
+      });
+      try {
+        await window.electronAPI?.meetingTranscriptionSetPaused?.(isPausedFlag);
+      } catch {}
+      logger.warn(
+        "Failed to change meeting recording pause state",
+        { paused: nextPaused, error: (error as Error).message },
+        "meeting"
+      );
+      return false;
+    }
+  })();
+
+  pauseOperationPromise = operation;
+  return operation.finally(() => {
+    if (pauseOperationPromise === operation) pauseOperationPromise = null;
+  });
+}
+
+let stopOperationPromise: Promise<StopRecordingResult> | null = null;
+
+export function stopRecording(): Promise<StopRecordingResult> {
+  if (stopOperationPromise) return stopOperationPromise;
+  const operation = stopRecordingOnce();
+  stopOperationPromise = operation;
+  void operation.finally(() => {
+    if (stopOperationPromise === operation) stopOperationPromise = null;
+  }).catch(() => undefined);
+  return operation;
+}
+
+async function stopRecordingOnce(): Promise<StopRecordingResult> {
+  if (pauseOperationPromise) await pauseOperationPromise;
   if (!isRecordingFlag) {
     return { diarizationSessionId: null };
   }
 
   isRecordingFlag = false;
   isStartingFlag = false;
+  isPausedFlag = false;
 
-  useMeetingRecordingStore.setState({ transcriptStatus: "finalizing" });
+  const { recordingNoteId: noteId, transcriptSessionId: sessionId } =
+    useMeetingRecordingStore.getState();
+
+  useMeetingRecordingStore.setState({ isPaused: false, transcriptStatus: "finalizing" });
+
+  if (transcriptCheckpointTimer) {
+    clearInterval(transcriptCheckpointTimer);
+    transcriptCheckpointTimer = null;
+  }
+  // Persist a raw checkpoint before tearing down capture. Navigation and
+  // encounter completion may happen immediately after this point.
+  await checkpointCurrentTranscript().catch(() => false);
 
   await cleanup();
 
   let diarizationSessionId: string | null = null;
   try {
     const result = await window.electronAPI?.meetingTranscriptionStop?.();
+    const rawTranscript = result?.transcript || currentSerializedTranscript();
+    const checkpointed =
+      noteId && sessionId
+        ? await checkpointTranscript(noteId, sessionId, rawTranscript).catch(() => false)
+        : true;
     if (result?.diarizationSessionId) {
       diarizationSessionId = result.diarizationSessionId;
+      if (noteId && sessionId) {
+        pendingTranscriptSessions.set(diarizationSessionId, {
+          noteId,
+          sessionId,
+          rawTranscript,
+        });
+      }
       useMeetingRecordingStore.setState({
         diarizationSessionId,
         diarizationStatus: "processing",
-        transcriptStatus: "saving",
+        transcriptStatus: checkpointed ? "saving" : "failed",
       });
     } else if (result?.success) {
-      useMeetingRecordingStore.setState({ diarizationStatus: "skipped", transcriptStatus: "saving" });
+      const finalized =
+        noteId && sessionId
+          ? await finalizeTranscript(noteId, sessionId, rawTranscript)
+          : !noteId && !sessionId;
+      useMeetingRecordingStore.setState({
+        diarizationStatus: "skipped",
+        transcriptStatus: finalized ? "ready" : "failed",
+      });
+    } else {
+      if (result?.error) reportMeetingError(result.error);
+      const finalized =
+        noteId && sessionId
+          ? await finalizeTranscript(noteId, sessionId, rawTranscript)
+          : false;
+      useMeetingRecordingStore.setState({
+        diarizationStatus: "failed",
+        transcriptStatus: finalized ? "ready" : "failed",
+      });
     }
     if (result?.success && result.transcript) {
       useMeetingRecordingStore.setState({ transcript: result.transcript });
-    } else if (result?.error) {
-      reportMeetingError(result.error);
-      useMeetingRecordingStore.setState({ diarizationStatus: "failed", transcriptStatus: "failed" });
     }
 
   } catch (err) {
     reportMeetingError((err as Error).message);
     logger.error("Meeting transcription stop failed", { error: (err as Error).message }, "meeting");
-    useMeetingRecordingStore.setState({ transcriptStatus: "failed" });
+    const fallback = currentSerializedTranscript();
+    const finalized =
+      noteId && sessionId
+        ? await finalizeTranscript(noteId, sessionId, fallback).catch(() => false)
+        : false;
+    useMeetingRecordingStore.setState({ transcriptStatus: finalized ? "ready" : "failed" });
   }
 
   useMeetingRecordingStore.setState({
     isRecording: false,
+    isPaused: false,
     isTranscribing: false,
     micPartial: "",
     systemPartial: "",
@@ -1474,6 +1696,9 @@ if (typeof window !== "undefined") {
         currentSessionId: diarizationSessionId,
       });
       if (targetNoteId == null) return;
+      const pendingSession = data?.sessionId
+        ? pendingTranscriptSessions.get(data.sessionId) ?? null
+        : null;
 
       // Publishing an empty result clears a waiting editor's spinner without
       // painting an overlay; anything non-empty is already persisted.
@@ -1514,9 +1739,20 @@ if (typeof window !== "undefined") {
           }))
         );
         try {
-          await window.electronAPI?.updateNote?.(targetNoteId, {
-            transcript: serializeTranscriptSegments(preserved),
-          });
+          const serialized =
+            preserved.length > 0
+              ? serializeTranscriptSegments(preserved)
+              : pendingSession?.rawTranscript || persisted.transcript || "";
+          if (pendingSession) {
+            await finalizeTranscript(
+              pendingSession.noteId,
+              pendingSession.sessionId,
+              serialized
+            );
+            if (data?.sessionId) pendingTranscriptSessions.delete(data.sessionId);
+          } else {
+            await window.electronAPI?.updateNote?.(targetNoteId, { transcript: serialized });
+          }
         } catch (error) {
           logger.error(
             "Diarization fallback could not persist its note",
@@ -1604,9 +1840,18 @@ if (typeof window !== "undefined") {
         // Awaited so the next queued completion's getNote is guaranteed to
         // read this write — without it the ordering depends on db-update-note
         // staying synchronous ahead of its first await.
-        await window.electronAPI?.updateNote?.(targetNoteId, {
-          transcript: serializeTranscriptSegments(enriched),
-        });
+        const serialized = serializeTranscriptSegments(enriched);
+        if (pendingSession) {
+          const saved = await finalizeTranscript(
+            pendingSession.noteId,
+            pendingSession.sessionId,
+            serialized
+          );
+          if (!saved) throw new Error("The finalized transcript could not be saved.");
+          if (data?.sessionId) pendingTranscriptSessions.delete(data.sessionId);
+        } else {
+          await window.electronAPI?.updateNote?.(targetNoteId, { transcript: serialized });
+        }
       } catch (error) {
         if (isCurrentSession) {
           useMeetingRecordingStore.setState((state) => ({
