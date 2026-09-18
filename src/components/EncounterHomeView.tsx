@@ -65,11 +65,14 @@ export default function EncounterHomeView() {
     try {
       const result = await window.electronAPI.markEncounterComplete(encounter.id);
       if (!result?.success) {
-        throw new Error(result?.error || t("notes.editor.encounterCompletion.unavailable"));
+        setActionError(result?.error || t("notes.editor.encounterCompletion.unavailable"));
+        return;
       }
       await refresh();
-    } catch (completeError) {
-      setActionError(safeError(completeError));
+    } catch {
+      // IPC exceptions can contain SQLite or Electron internals. Completion
+      // errors shown on Home must stay simple and safe.
+      setActionError(t("notes.editor.encounterCompletion.unavailable"));
     } finally {
       setCompletingId(null);
     }

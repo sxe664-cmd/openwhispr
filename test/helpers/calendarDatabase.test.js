@@ -1107,6 +1107,37 @@ test("bounded encounter and calendar queries use an exclusive end boundary", (t)
   db.db.close();
 });
 
+test("Home local-day encounters include historical in-progress cleanup without old completed history", (t) => {
+  const db = createDb(t);
+  if (!db) return;
+
+  const historicalActive = restEvent("ai_receptionist", "primary", "historical-active");
+  historicalActive.start_time = "2026-07-20T14:00:00Z";
+  historicalActive.end_time = "2026-07-20T15:00:00Z";
+  const historicalComplete = restEvent("ai_receptionist", "primary", "historical-complete");
+  historicalComplete.start_time = "2026-07-20T16:00:00Z";
+  historicalComplete.end_time = "2026-07-20T17:00:00Z";
+  const today = restEvent("ai_receptionist", "primary", "today-scheduled");
+  today.start_time = "2026-07-22T14:00:00Z";
+  today.end_time = "2026-07-22T15:00:00Z";
+
+  db.upsertCalendarEvents([historicalActive, historicalComplete, today]);
+  db.upsertEncountersFromCalendarEvents([historicalActive, historicalComplete, today]);
+  const active = db.startEncounterForCalendarEvent(historicalActive.id);
+  const complete = db.startEncounterForCalendarEvent(historicalComplete.id);
+  assert.equal(db.markEncounterComplete(complete.encounter.id).success, true);
+
+  const listed = db.getEncountersForLocalDay(new Date("2026-07-22T16:00:00Z"), 100);
+  assert.equal(listed.some((encounter) => encounter.id === active.encounter.id), true);
+  assert.equal(listed.some((encounter) => encounter.id === complete.encounter.id), false);
+  assert.equal(listed.some((encounter) => encounter.calendar_event_id === today.id), true);
+  assert.equal(db.markEncounterComplete(active.encounter.id).success, true);
+  assert.equal(db.markEncounterComplete(active.encounter.id).success, true, "repeat completion is idempotent");
+  const refreshed = db.getEncountersForLocalDay(new Date("2026-07-22T16:00:00Z"), 100);
+  assert.equal(refreshed.some((encounter) => encounter.id === active.encounter.id), false);
+  db.db.close();
+});
+
 function startEncounterOutputFixture(db, id) {
   const event = restEvent("ai_receptionist", "primary", id);
   db.upsertCalendarEvents([event]);

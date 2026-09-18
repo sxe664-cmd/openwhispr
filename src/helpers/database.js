@@ -6923,7 +6923,26 @@ class DatabaseManager {
 
   getEncountersForLocalDay(date = new Date(), limit = 100) {
     const range = localDayRange(date);
-    return this.getEncountersInRange(range.startIso, range.endIso, limit);
+    const normalizedLimit = Math.max(1, Math.min(Number(limit) || 100, MAX_CALENDAR_ROWS));
+    return this.db
+      .prepare(
+        `
+        SELECT encounters.*,
+          CASE WHEN calendar_events.hangout_link IS NOT NULL THEN 1 ELSE 0 END AS has_conference_url,
+          CASE WHEN calendar_events.html_link IS NOT NULL THEN 1 ELSE 0 END AS has_calendar_event_url
+        FROM encounters
+        LEFT JOIN calendar_events ON calendar_events.id = encounters.calendar_event_id
+        WHERE encounters.lifecycle_state = 'in_progress'
+          OR (
+            datetime(encounters.start_time) >= datetime(?)
+            AND datetime(encounters.start_time) < datetime(?)
+          )
+        ORDER BY CASE encounters.lifecycle_state WHEN 'in_progress' THEN 0 ELSE 1 END,
+          datetime(encounters.start_time) ASC, encounters.id DESC
+        LIMIT ?
+      `
+      )
+      .all(range.startIso, range.endIso, normalizedLimit);
   }
 
   getCalendarEventsInRange(startIso, endIso, limit = MAX_CALENDAR_ROWS, provider = null) {
