@@ -1780,6 +1780,7 @@
       "processingStatus": {
         "label": "Encounter processing status",
         "speakers": "Speakers",
+        "clinicalNotes": "診療ノート",
         "waitingForTranscript": "Waiting",
         "queued": "待機中",
         "needsRegeneration": "再生成が必要です",

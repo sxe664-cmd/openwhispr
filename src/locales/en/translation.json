@@ -1948,6 +1948,7 @@
       "processingStatus": {
         "label": "Encounter processing status",
         "speakers": "Speakers",
+        "clinicalNotes": "Clinical notes",
         "waitingForTranscript": "Waiting",
         "queued": "Queued",
         "needsRegeneration": "Needs regeneration",

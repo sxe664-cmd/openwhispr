@@ -1802,6 +1802,7 @@
       "processingStatus": {
         "label": "Encounter processing status",
         "speakers": "Speakers",
+        "clinicalNotes": "临床笔记",
         "waitingForTranscript": "Waiting",
         "queued": "排队中",
         "needsRegeneration": "需要重新生成",

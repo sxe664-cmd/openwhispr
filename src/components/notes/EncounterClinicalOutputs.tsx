@@ -280,7 +280,17 @@ export default function EncounterClinicalOutputs({
   // Output generation is independent from encounter lifecycle. A completed
   // encounter is read-only for source edits, but its generated outputs can
   // still be retried or regenerated safely from the immutable transcript.
-  const showRetry = !retrying && (generationFailed || outputStatus === "failed");
+  // Pending work should normally be claimed by the global coordinator. Keep a
+  // direct escape hatch visible as well: if a startup/finalization event was
+  // missed, Dad can start the exact same guarded generation without waiting
+  // for a restart or a hidden reconciliation interval.
+  const showRetry =
+    !retrying &&
+    !backgroundGenerating &&
+    !transcriptBusy &&
+    !isRecording &&
+    !separating &&
+    (generationFailed || outputStatus === "failed" || outputStatus === "pending");
   const showRegenerate = outputStatus === "stale" && !isGenerating;
   const showClinicalWork = isRecording || isGenerating || separating || transcriptBusy || backgroundGenerating || retrying;
 

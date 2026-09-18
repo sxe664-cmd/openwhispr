@@ -1802,6 +1802,7 @@
       "processingStatus": {
         "label": "Encounter processing status",
         "speakers": "Speakers",
+        "clinicalNotes": "Notas clínicas",
         "waitingForTranscript": "Waiting",
         "queued": "Na fila",
         "needsRegeneration": "É necessário regenerar",

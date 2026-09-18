@@ -174,7 +174,7 @@ export default function EncounterProcessingStatus({
       },
       {
         key: "clinical",
-        label: t("notes.editor.clinicalNote"),
+        label: t("notes.editor.processingStatus.clinicalNotes"),
         status: clinicalStage,
         detail:
           clinicalStage === "active"

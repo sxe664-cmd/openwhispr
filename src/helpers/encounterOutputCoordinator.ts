@@ -38,6 +38,9 @@ interface CoordinatorBridge extends EncounterOutputGenerationBridge {
   onEncounterOutputRetryRequested?: (
     callback: (payload: { encounterId?: number | null }) => void
   ) => () => void;
+  onEncounterCompleted?: (
+    callback: (payload: { encounterId?: number | null; noteId?: number | null }) => void
+  ) => () => void;
 }
 
 export interface EncounterOutputCoordinatorOptions {
@@ -63,6 +66,7 @@ function needsGeneration(output: EncounterOutput | null): boolean {
 type QueueEntry = { encounterId: number; priority: number; sequence: number; queuedAt: number };
 
 const RECONCILE_INTERVAL_MS = 30_000;
+const PREFLIGHT_RETRY_DELAYS_MS = [1_000, 5_000];
 
 export function createEncounterOutputCoordinator({
   bridge,
@@ -73,6 +77,7 @@ export function createEncounterOutputCoordinator({
   const inFlight = new Map<number, { priority: number }>();
   const timers = new Map<number, ReturnType<typeof setTimeout>>();
   const queue: QueueEntry[] = [];
+  const preflightFailures = new Map<number, number>();
   let disposed = false;
   let draining = false;
   let reconciling = false;
@@ -95,7 +100,12 @@ export function createEncounterOutputCoordinator({
     inFlight.set(encounterId, { priority: entry.priority });
     try {
       const current = await bridge.getEncounterOutput?.(encounterId);
-      if (current?.success !== false && needsGeneration(current?.output ?? null)) {
+      if (current?.success === false) {
+        throw Object.assign(new Error("Encounter output unavailable"), {
+          code: "ENCOUNTER_OUTPUT_UNAVAILABLE",
+        });
+      }
+      if (needsGeneration(current?.output ?? null)) {
         const result = await runEncounterOutputGeneration(
           bridge,
           encounterId,
@@ -127,9 +137,23 @@ export function createEncounterOutputCoordinator({
           safeErrorCode: result.output?.generation_last_error_code ?? null,
         });
       }
+      preflightFailures.delete(encounterId);
     } catch {
-      // Failed output is persisted by the guarded runner when possible and
-      // remains available for an explicit user retry.
+      // Model failures after a claim are persisted by the guarded runner. A
+      // failure before the claim (for example, a renderer/main-process race
+      // while finalization settles) otherwise leaves the row looking queued
+      // forever. Retry those hand-off failures briefly; normal reconciliation
+      // remains the slower recovery path after the bounded attempts.
+      const failures = (preflightFailures.get(encounterId) ?? 0) + 1;
+      preflightFailures.set(encounterId, failures);
+      const delayMs = PREFLIGHT_RETRY_DELAYS_MS[failures - 1];
+      void logger.logReasoning("CLINICAL_OUTPUT_PREFLIGHT_FAILED", {
+        encounterId,
+        attempt: failures,
+        retryScheduled: delayMs != null,
+        safeErrorCode: "ENCOUNTER_OUTPUT_UNAVAILABLE",
+      });
+      if (delayMs != null) enqueue(encounterId, { priority: entry.priority, delayMs });
     } finally {
       inFlight.delete(encounterId);
       void drain();
@@ -181,7 +205,12 @@ export function createEncounterOutputCoordinator({
   async function resolveEncounterForNote(noteId: number) {
     const result = await bridge.getEncounterByNote?.(noteId);
     const encounter = result?.encounter ?? null;
-    if (encounter?.lifecycle_state === "completed") enqueue(encounter.id, { priority: 2 });
+    if (
+      encounter?.lifecycle_state === "in_progress" ||
+      encounter?.lifecycle_state === "completed"
+    ) {
+      enqueue(encounter.id, { priority: 2 });
+    }
   }
 
   async function reconcile() {
@@ -192,6 +221,11 @@ export function createEncounterOutputCoordinator({
     reconciling = true;
     try {
       const result = await bridge.getEncountersNeedingOutputGeneration?.();
+      if (result?.success === false) {
+        throw Object.assign(new Error("Encounter output reconciliation unavailable"), {
+          code: "ENCOUNTER_OUTPUT_UNAVAILABLE",
+        });
+      }
       for (const encounter of result?.encounters ?? []) {
         if (
           (encounter.lifecycle_state === "in_progress" || encounter.lifecycle_state === "completed") &&
@@ -218,8 +252,21 @@ export function createEncounterOutputCoordinator({
     if (bridge.onNoteUpdated) {
       cleanups.push(
         bridge.onNoteUpdated((note) => {
-          if (note?.note_type === "meeting" && note.id) void resolveEncounterForNote(note.id);
+          if (
+            note?.note_type === "meeting" &&
+            note.id &&
+            note.transcript_persistence_status === "finalized" &&
+            note.finalized_transcript_revision != null &&
+            Number(note.finalized_transcript_revision) === Number(note.transcript_revision)
+          ) {
+            void resolveEncounterForNote(note.id);
+          }
         })
+      );
+    }
+    if (bridge.onEncounterCompleted) {
+      cleanups.push(
+        bridge.onEncounterCompleted((payload) => enqueue(payload.encounterId, { priority: 2 }))
       );
     }
     if (bridge.onEncounterOutputRetryRequested) {
@@ -241,6 +288,7 @@ export function createEncounterOutputCoordinator({
     for (const cleanup of cleanups.splice(0)) cleanup();
     queue.length = 0;
     queued.clear();
+    preflightFailures.clear();
   }
 
   return { start, stop, enqueue };

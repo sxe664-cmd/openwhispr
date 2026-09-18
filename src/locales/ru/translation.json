@@ -1808,6 +1808,7 @@
       "processingStatus": {
         "label": "Encounter processing status",
         "speakers": "Speakers",
+        "clinicalNotes": "Клинические заметки",
         "waitingForTranscript": "Waiting",
         "queued": "В очереди",
         "needsRegeneration": "Требуется повторная генерация",

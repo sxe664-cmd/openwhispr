@@ -113,6 +113,210 @@ test("coordinator reconciles targeted pending outputs instead of scanning the ap
   assert.equal(beginCalls, 1);
 });
 
+test("a finalized in-progress note update wakes automatic clinical output generation", async () => {
+  const { createEncounterOutputCoordinator } = await load();
+  const listeners = {};
+  let beginCalls = 0;
+  const bridge = {
+    getEncounterByNote: async () => ({
+      success: true,
+      encounter: { id: 71, note_id: 9, lifecycle_state: "in_progress" },
+    }),
+    getEncounterOutput: async () => ({ success: true, output: output() }),
+    beginEncounterOutputGeneration: async () => {
+      beginCalls += 1;
+      return {
+        success: true,
+        output: { ...output("processing"), generation_attempt: 1 },
+        transcript: "Finalized transcript",
+        token: {
+          transcriptRevision: 4,
+          transcriptHash: "transcript-hash",
+          sourceRevision: 4,
+          sourceHash: "source-hash",
+          generationId: "generation-71",
+        },
+      };
+    },
+    finishEncounterOutputGeneration: async () => ({
+      success: true,
+      applied: true,
+      output: output("ready"),
+    }),
+    onNoteUpdated: (callback) => {
+      listeners.updated = callback;
+      return () => delete listeners.updated;
+    },
+    getEncountersNeedingOutputGeneration: async () => ({ success: true, encounters: [] }),
+  };
+  const coordinator = createEncounterOutputCoordinator({
+    bridge,
+    debounceMs: 0,
+    generate: async () => ({
+      summary: { success: true, kind: "summary", content: "Summary", provider: "local", model: "test" },
+      soap: { success: true, kind: "soap", content: "SOAP", provider: "local", model: "test" },
+      focus: { success: true, kind: "focus", content: "Focus", provider: "local", model: "test" },
+    }),
+  });
+
+  coordinator.start();
+  listeners.updated({
+    id: 9,
+    note_type: "meeting",
+    transcript_revision: 4,
+    finalized_transcript_revision: 4,
+    transcript_persistence_status: "finalized",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  coordinator.stop();
+
+  assert.equal(beginCalls, 1);
+});
+
+test("a finalized recording publishes Summary, SOAP, and Focus as one guarded result", async () => {
+  const { createEncounterOutputCoordinator } = await load();
+  const listeners = {};
+  let persistedOutput = {
+    ...output(),
+    encounter_id: 81,
+    transcript_revision: 6,
+    transcript_hash: "final-transcript-hash",
+    source_revision: 6,
+    source_hash: "final-source-hash",
+    generation_attempt: 0,
+  };
+  const token = {
+    transcriptRevision: 6,
+    transcriptHash: "final-transcript-hash",
+    sourceRevision: 6,
+    sourceHash: "final-source-hash",
+    generationId: "generation-81",
+  };
+  const bridge = {
+    getEncounterOutput: async () => ({ success: true, output: persistedOutput }),
+    beginEncounterOutputGeneration: async () => {
+      persistedOutput = {
+        ...persistedOutput,
+        summary_status: "processing",
+        soap_status: "processing",
+        focus_status: "processing",
+        generation_phase: "mapping",
+        generation_attempt: 1,
+      };
+      return {
+        success: true,
+        output: persistedOutput,
+        transcript: "Finalized canonical encounter transcript",
+        sourceText: "Finalized canonical encounter transcript",
+        token,
+      };
+    },
+    finishEncounterOutputGeneration: async (_encounterId, receivedToken, updates) => {
+      assert.deepEqual(receivedToken, token);
+      persistedOutput = {
+        ...persistedOutput,
+        ...updates,
+        generation_phase: null,
+      };
+      return { success: true, applied: true, output: persistedOutput };
+    },
+    onEncounterRecordingSaved: (callback) => {
+      listeners.saved = callback;
+      return () => delete listeners.saved;
+    },
+    getEncountersNeedingOutputGeneration: async () => ({ success: true, encounters: [] }),
+  };
+  const coordinator = createEncounterOutputCoordinator({
+    bridge,
+    debounceMs: 0,
+    generate: async (source) => {
+      assert.equal(source, "Finalized canonical encounter transcript");
+      return {
+        summary: {
+          success: true,
+          kind: "summary",
+          content: "The patient reports steady improvement.",
+          provider: "local",
+          model: "test-local",
+        },
+        soap: {
+          success: true,
+          kind: "soap",
+          content: "Subjective\nImproving\n\nObjective\nDocumented exam\n\nAssessment\nStable\n\nPlan\nFollow up",
+          provider: "local",
+          model: "test-local",
+        },
+        focus: {
+          success: true,
+          kind: "focus",
+          content: "Follow-up",
+          provider: "local",
+          model: "test-local",
+        },
+      };
+    },
+  });
+
+  coordinator.start();
+  listeners.saved({ encounterId: 81, noteId: 18, transcriptRevision: 6 });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  coordinator.stop();
+
+  assert.equal(persistedOutput.summary_status, "ready");
+  assert.equal(persistedOutput.soap_status, "ready");
+  assert.equal(persistedOutput.focus_status, "ready");
+  assert.equal(persistedOutput.summary, "The patient reports steady improvement.");
+  assert.match(persistedOutput.soap, /Assessment\nStable/);
+  assert.equal(persistedOutput.focus, "Follow-up");
+  assert.equal(persistedOutput.summary_provider, "local");
+  assert.equal(persistedOutput.soap_model, "test-local");
+});
+
+test("coordinator retries a bounded pre-claim hand-off failure", async () => {
+  const { createEncounterOutputCoordinator } = await load();
+  let beginCalls = 0;
+  const bridge = {
+    getEncounterOutput: async () => ({ success: true, output: output() }),
+    beginEncounterOutputGeneration: async () => {
+      beginCalls += 1;
+      if (beginCalls === 1) throw new Error("temporary IPC hand-off failure");
+      return {
+        success: true,
+        output: { ...output("processing"), generation_attempt: 1 },
+        transcript: "Finalized transcript",
+        token: {
+          transcriptRevision: 1,
+          transcriptHash: "transcript-hash",
+          sourceRevision: 1,
+          sourceHash: "source-hash",
+          generationId: "generation-recovered",
+        },
+      };
+    },
+    finishEncounterOutputGeneration: async () => ({
+      success: true,
+      applied: true,
+      output: output("ready"),
+    }),
+  };
+  const coordinator = createEncounterOutputCoordinator({
+    bridge,
+    debounceMs: 0,
+    generate: async () => ({
+      summary: { success: true, kind: "summary", content: "Summary", provider: "local", model: "test" },
+      soap: { success: true, kind: "soap", content: "SOAP", provider: "local", model: "test" },
+      focus: { success: true, kind: "focus", content: "Focus", provider: "local", model: "test" },
+    }),
+  });
+
+  coordinator.start();
+  coordinator.enqueue(72, { priority: 2, delayMs: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  coordinator.stop();
+
+  assert.equal(beginCalls, 2);
+});
+
 test("coordinator gives newly completed encounters priority over delayed backlog", async () => {
   const { createEncounterOutputCoordinator } = await load();
   const beginOrder = [];
