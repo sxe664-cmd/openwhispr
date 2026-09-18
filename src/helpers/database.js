@@ -2088,26 +2088,12 @@ class DatabaseManager {
         applied_at DATETIME,
         discarded_at DATETIME
       );
-      CREATE TABLE IF NOT EXISTS note_generation_runs (
-        note_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
-        template_revision_id INTEGER NOT NULL REFERENCES note_template_revisions(id),
-        source_hash TEXT NOT NULL,
-        model_id TEXT NOT NULL,
-        chunk_count INTEGER NOT NULL DEFAULT 0,
-        completed_chunks INTEGER NOT NULL DEFAULT 0,
-        extractions_json TEXT NOT NULL DEFAULT '[]',
-        status TEXT NOT NULL DEFAULT 'processing'
-          CHECK (status IN ('processing', 'failed')),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
       CREATE INDEX IF NOT EXISTS idx_note_template_revisions_template
         ON note_template_revisions(template_id, version);
       CREATE INDEX IF NOT EXISTS idx_note_generation_candidates_note
         ON note_generation_candidates(note_id, status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_note_generation_runs_updated
-        ON note_generation_runs(updated_at);
     `);
+    this._ensureNoteGenerationRunTable();
     const revisionColumns = new Set(
       this.db.pragma("table_info('note_template_revisions')").map((column) => column.name)
     );
@@ -2136,6 +2122,30 @@ class DatabaseManager {
         "ALTER TABLE note_generation_candidates ADD COLUMN candidate_kind TEXT NOT NULL DEFAULT 'clinical_template'"
       );
     }
+  }
+
+  _ensureNoteGenerationRunTable() {
+    // This resumable-cache table was added after the v3 template migration
+    // shipped. Existing v3 databases therefore cannot rely on user_version to
+    // create it. Keep this additive invariant independently repairable so a
+    // missing disposable cache can never break an otherwise valid note.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS note_generation_runs (
+        note_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+        template_revision_id INTEGER NOT NULL REFERENCES note_template_revisions(id),
+        source_hash TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        chunk_count INTEGER NOT NULL DEFAULT 0,
+        completed_chunks INTEGER NOT NULL DEFAULT 0,
+        extractions_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'processing'
+          CHECK (status IN ('processing', 'failed')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_note_generation_runs_updated
+        ON note_generation_runs(updated_at);
+    `);
   }
 
   _seedNoteTemplate({ templateKey, name, description, kind, templateText, isBuiltin }) {
@@ -3575,6 +3585,7 @@ class DatabaseManager {
   getNoteGenerationRun(noteId) {
     const normalizedNoteId = Number(noteId);
     if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) return null;
+    this._ensureNoteGenerationRunTable();
     return this._safeNoteGenerationRun(
       this.db
         .prepare("SELECT * FROM note_generation_runs WHERE note_id = ?")
@@ -3647,6 +3658,7 @@ class DatabaseManager {
     ) {
       return { success: false, errorCode: "INVALID_GENERATION_RUN" };
     }
+    this._ensureNoteGenerationRunTable();
     const note = this.db.prepare("SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL").get(noteId);
     const revision = this.db
       .prepare("SELECT id FROM note_template_revisions WHERE id = ?")
@@ -3687,6 +3699,7 @@ class DatabaseManager {
     if (!Number.isInteger(normalizedNoteId) || normalizedNoteId <= 0) {
       return { success: false, errorCode: "INVALID_GENERATION_RUN" };
     }
+    this._ensureNoteGenerationRunTable();
     this.db.prepare("DELETE FROM note_generation_runs WHERE note_id = ?").run(normalizedNoteId);
     return { success: true };
   }

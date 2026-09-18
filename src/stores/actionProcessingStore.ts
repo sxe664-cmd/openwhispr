@@ -881,7 +881,14 @@ export function runBackgroundAction(
           await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
           return;
         }
-        await window.electronAPI.clearNoteGenerationRun?.(noteId);
+        // The run row is only a resumable extraction cache. Once the guarded
+        // candidate exists, cache cleanup is best-effort and must never hide a
+        // successfully generated note from the review UI.
+        try {
+          await window.electronAPI.clearNoteGenerationRun?.(noteId);
+        } catch {
+          // A later generation safely replaces the cache for this note.
+        }
         if (isCancelled()) {
           await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
           return;

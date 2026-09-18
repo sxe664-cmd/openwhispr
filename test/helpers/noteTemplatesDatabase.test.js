@@ -182,6 +182,34 @@ test("clinical generation runs persist resumable chunk evidence and clear safely
   assert.equal(db.getNoteGenerationRun(note.id), null);
 });
 
+test("a current-version database repairs a missing generation-run cache table", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+
+  assert.equal(db.db.pragma("user_version", { simple: true }), 3);
+  db.db.exec("DROP TABLE note_generation_runs");
+
+  const repaired = db._initializeNoteTemplatesStorage();
+  assert.equal(repaired.success, true);
+  assert.equal(
+    db.db
+      .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'note_generation_runs'")
+      .get().count,
+    1
+  );
+});
+
+test("generation-run cache methods self-heal when the disposable table is missing", { concurrency: false }, (t) => {
+  const db = ensureDb(t);
+  if (!db) return;
+
+  const note = db.saveNote("Encounter run repair", "source", "meeting").note;
+  db.db.exec("DROP TABLE note_generation_runs");
+
+  assert.deepEqual(db.clearNoteGenerationRun(note.id), { success: true });
+  assert.equal(db.getNoteGenerationRun(note.id), null);
+});
+
 test("built-in source snapshots and conditional enhanced writes reject stale notes", { concurrency: false }, (t) => {
   const db = ensureDb(t);
   if (!db) return;

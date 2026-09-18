@@ -1994,7 +1994,7 @@
       "asTranscriptMarkdown": "As Markdown (.md)",
       "raw": "Raw",
       "enhanced": "Enhanced",
-      "clinicalNote": "Clinical note",
+      "clinicalNote": "Template",
       "templateInsert": {
         "button": "Insert template",
         "inserting": "Inserting...",
