@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, CheckCircle2, CircleAlert, Clock3, Loader2, MapPin, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { LocalEncounter } from "../types/electron";
@@ -10,8 +10,10 @@ export interface EncounterCardProps {
   compact?: boolean;
   cached?: boolean;
   isStarting?: boolean;
+  isCompleting?: boolean;
   onStart: (encounter: LocalEncounter) => void | Promise<void>;
   onOpen: (encounter: LocalEncounter) => void | Promise<void>;
+  onComplete?: (encounter: LocalEncounter) => void | Promise<void>;
 }
 
 function formatEncounterDate(startTime: string | null, language: string): string {
@@ -52,10 +54,13 @@ export default function EncounterCard({
   compact = false,
   cached = false,
   isStarting = false,
+  isCompleting = false,
   onStart,
   onOpen,
+  onComplete,
 }: EncounterCardProps) {
   const { t, i18n } = useTranslation();
+  const [completeArmed, setCompleteArmed] = useState(false);
   const Icon = statusIcon(encounter.lifecycle_state);
   const patientReady = hasLinkedPatientFolder(encounter);
   const canStart = Boolean(encounter.calendar_event_id) && patientReady &&
@@ -63,6 +68,10 @@ export default function EncounterCard({
   const canOpen =
     (encounter.lifecycle_state === "in_progress" || encounter.lifecycle_state === "completed") &&
     encounter.note_id != null;
+  const canComplete = encounter.lifecycle_state === "in_progress" && Boolean(onComplete);
+  useEffect(() => {
+    setCompleteArmed(false);
+  }, [encounter.id, encounter.lifecycle_state]);
   const patientState = patientReady ? "linked" : "review";
   const patientStateLabel = patientState === "linked"
     ? t("encounters.patient.linked")
@@ -135,7 +144,37 @@ export default function EncounterCard({
         )}
       </div>
 
-      {canOpen && <Button size="sm" variant="outline" className="mt-3 h-8 w-full text-xs" onClick={() => onOpen(encounter)}>{t("encounters.openNote")}</Button>}
+      {(canOpen || canComplete) && (
+        <div className="mt-3 flex gap-2">
+          {canOpen && (
+            <Button size="sm" variant="outline" className="h-8 flex-1 text-xs" onClick={() => onOpen(encounter)}>
+              {t("encounters.openNote")}
+            </Button>
+          )}
+          {canComplete && (
+            <Button
+              size="sm"
+              variant={completeArmed ? "default" : "outline"}
+              className="h-8 flex-1 text-xs"
+              disabled={isCompleting}
+              onClick={() => {
+                if (!completeArmed) {
+                  setCompleteArmed(true);
+                  return;
+                }
+                void onComplete?.(encounter);
+              }}
+            >
+              {isCompleting && <Loader2 size={13} className="animate-spin" />}
+              {isCompleting
+                ? t("notes.editor.encounterCompletion.completing")
+                : completeArmed
+                  ? t("notes.editor.encounterCompletion.confirm")
+                  : t("notes.editor.encounterCompletion.markComplete")}
+            </Button>
+          )}
+        </div>
+      )}
     </article>
   );
 }

@@ -21,7 +21,7 @@ test("Home renders encounter cards from the local encounter hook and preserves c
   assert.match(card, /patient_profile_id/);
   assert.match(card, /patient_resolution/);
   assert.match(card, /encounters\.patient\.linked/);
-  assert.match(card, /encounters\.patient\.review/);
+  assert.match(card, /encounters\.patient\.detailsRequired/);
   assert.match(card, /data-testid="encounter-patient-state"/);
   assert.doesNotMatch(card, /patient_metadata|metadata_json|patient\.(email|phone)|folder\.name/);
 });
@@ -44,12 +44,15 @@ test("Home start and open actions reuse existing encounter IPC/navigation paths"
   assert.match(home, /startEncounter\(encounter\.calendar_event_id/);
   assert.match(home, /getEncounter\?\.\(encounter\.id\)/);
   assert.match(home, /agentOpenNote/);
+  assert.match(home, /markEncounterComplete\(encounter\.id\)/);
   assert.match(home, /meetingContext: "in_person"/);
   assert.doesNotMatch(card, /encounters\.context\.telehealth/);
   assert.doesNotMatch(card, /setMeetingContext|useState<MeetingContext>/);
   assert.match(read("src/components/EncounterCard.tsx"), /encounters\.startEncounter/);
+  assert.match(card, /encounterCompletion\.markComplete/);
+  assert.match(card, /encounterCompletion\.confirm/);
   assert.match(history, /EncounterHomeView/);
-  assert.match(history, /quickDictation/);
+  assert.match(history, /EncounterHomeView/);
   assert.match(upcoming, /EncounterCard/);
   assert.doesNotMatch(home, /startRecording|diariz|transcri/i);
 });

@@ -1023,6 +1023,12 @@ test("encounter completion is independent from clinical output generation and lo
   const started = db.startEncounterForCalendarEvent(event.id);
   db.saveEncounterRecording(started.note.id, '[{"text":"Ready to complete"}]');
 
+  db.db.prepare(
+    `UPDATE encounter_outputs
+     SET summary_status = 'failed', soap_status = 'failed', focus_status = 'failed'
+     WHERE encounter_id = ?`
+  ).run(started.encounter.id);
+
   const completed = db.markEncounterComplete(started.encounter.id);
   assert.equal(completed.success, true);
   assert.equal(completed.encounter.lifecycle_state, "completed");

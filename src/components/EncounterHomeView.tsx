@@ -20,6 +20,7 @@ export default function EncounterHomeView() {
   const { t } = useTranslation();
   const { encounters, isLoading, syncState, lastSyncedAt, error, refresh } = useEncounters();
   const [startingId, setStartingId] = useState<number | null>(null);
+  const [completingId, setCompletingId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const scheduled = useMemo(() => encounters.filter((encounter) => encounter.lifecycle_state === "scheduled"), [encounters]);
@@ -57,9 +58,26 @@ export default function EncounterHomeView() {
     if (!result?.success) setActionError(result?.error || t("encounters.openError"));
   }, [t]);
 
+  const handleComplete = useCallback(async (encounter: LocalEncounter) => {
+    if (!window.electronAPI?.markEncounterComplete) return;
+    setCompletingId(encounter.id);
+    setActionError(null);
+    try {
+      const result = await window.electronAPI.markEncounterComplete(encounter.id);
+      if (!result?.success) {
+        throw new Error(result?.error || t("notes.editor.encounterCompletion.unavailable"));
+      }
+      await refresh();
+    } catch (completeError) {
+      setActionError(safeError(completeError));
+    } finally {
+      setCompletingId(null);
+    }
+  }, [refresh, t]);
+
   const renderCards = (items: LocalEncounter[], emptyLabel: string) => {
     if (items.length === 0) return <p className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">{emptyLabel}</p>;
-    return <div className="grid gap-3 md:grid-cols-2">{items.map((encounter) => <EncounterCard key={encounter.id} encounter={encounter} cached={cached} isStarting={startingId === encounter.id} onStart={handleStart} onOpen={handleOpen} />)}</div>;
+    return <div className="grid gap-3 md:grid-cols-2">{items.map((encounter) => <EncounterCard key={encounter.id} encounter={encounter} cached={cached} isStarting={startingId === encounter.id} isCompleting={completingId === encounter.id} onStart={handleStart} onOpen={handleOpen} onComplete={handleComplete} />)}</div>;
   };
 
   return (
