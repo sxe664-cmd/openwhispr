@@ -246,6 +246,32 @@ function setCandidate(noteId: number, candidate: NoteGenerationCandidate | null)
   useActionProcessingStore.setState({ candidates: { ...candidates, [noteId]: candidate } });
 }
 
+export async function publishClinicalGenerationCandidate(
+  noteId: number,
+  candidate: NoteGenerationCandidate,
+  isCancelled: () => boolean,
+  api: Pick<Window["electronAPI"], "clearNoteGenerationRun" | "discardNoteGenerationCandidate"> = window.electronAPI
+): Promise<boolean> {
+  if (isCancelled()) {
+    await api.discardNoteGenerationCandidate?.(candidate.candidate_id);
+    return false;
+  }
+  // The run row is only a resumable extraction cache. Once the guarded
+  // candidate exists, cache cleanup is best-effort and must never hide a
+  // successfully generated note from the review UI.
+  try {
+    await api.clearNoteGenerationRun?.(noteId);
+  } catch {
+    // A later generation safely replaces the cache for this note.
+  }
+  if (isCancelled()) {
+    await api.discardNoteGenerationCandidate?.(candidate.candidate_id);
+    return false;
+  }
+  setCandidate(noteId, candidate);
+  return true;
+}
+
 function rebaseCompactExtraction(
   extraction: ClinicalEncounterCompactExtraction,
   sourceStart = 0,
@@ -877,23 +903,11 @@ export function runBackgroundAction(
           (error as Error & { code?: string }).code = candidateResult.code;
           throw error;
         }
-        if (isCancelled()) {
-          await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
-          return;
-        }
-        // The run row is only a resumable extraction cache. Once the guarded
-        // candidate exists, cache cleanup is best-effort and must never hide a
-        // successfully generated note from the review UI.
-        try {
-          await window.electronAPI.clearNoteGenerationRun?.(noteId);
-        } catch {
-          // A later generation safely replaces the cache for this note.
-        }
-        if (isCancelled()) {
-          await window.electronAPI.discardNoteGenerationCandidate?.(candidateResult.candidate.candidate_id);
-          return;
-        }
-        setCandidate(noteId, candidateResult.candidate);
+        if (!await publishClinicalGenerationCandidate(
+          noteId,
+          candidateResult.candidate,
+          isCancelled
+        )) return;
       } else {
         const basePrompt = options.isMeetingNote ? MEETING_SYSTEM_PROMPT : BASE_SYSTEM_PROMPT;
         const systemPrompt = appendDictionarySuffix(

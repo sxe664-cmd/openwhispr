@@ -6,7 +6,10 @@ import {
   generateLocalClinicalEncounter,
   isEncounterNoteForGeneration,
   planLocalClinicalEncounterRequests,
+  publishClinicalGenerationCandidate,
   resolveEncounterTemplate,
+  selectNoteGenerationCandidate,
+  useActionProcessingStore,
 } from "../../src/stores/actionProcessingStore.ts";
 import reasoningService from "../../src/services/ReasoningService.ts";
 
@@ -93,6 +96,77 @@ test("invalid or missing selected encounter templates fall back to the built-in 
   } finally {
     globalThis.window = originalWindow;
   }
+});
+
+test("the configured encounter template is used when it is valid", async () => {
+  const originalWindow = globalThis.window;
+  const selectedTemplate = "## Subjective\n## Objective\n## Assessment\n## Plan";
+  globalThis.window = {
+    electronAPI: {
+      getNoteTemplate: async (id) => ({
+        id,
+        kind: "encounter",
+        active_revision_id: 27,
+        template_text: selectedTemplate,
+      }),
+      getDefaultNoteTemplate: async () => {
+        throw new Error("the selected valid template must win");
+      },
+    },
+  };
+  try {
+    const result = await resolveEncounterTemplate({ encounterNoteTemplateId: 14 }, true);
+    assert.equal(result.revisionId, 27);
+    assert.equal(result.templateText, selectedTemplate);
+    assert.deepEqual(
+      result.definition.sections.map((section) => section.label),
+      ["Subjective", "Objective", "Assessment", "Plan"]
+    );
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("a cache-cleanup failure cannot hide a completed clinical candidate", async () => {
+  const noteId = 901;
+  const candidate = {
+    candidate_id: "candidate-901",
+    note_id: noteId,
+    template_id: 14,
+    template_revision_id: 27,
+    generated_content: "## Subjective\n\nBack pain",
+    status: "pending",
+    is_stale: false,
+  };
+  let cleanupCalls = 0;
+  let discardCalls = 0;
+  useActionProcessingStore.setState((state) => ({
+    candidates: { ...state.candidates, [noteId]: null },
+  }));
+
+  const published = await publishClinicalGenerationCandidate(
+    noteId,
+    candidate,
+    () => false,
+    {
+      clearNoteGenerationRun: async () => {
+        cleanupCalls += 1;
+        throw new Error("no such table: note_generation_runs");
+      },
+      discardNoteGenerationCandidate: async () => {
+        discardCalls += 1;
+        return { success: true };
+      },
+    }
+  );
+
+  assert.equal(published, true);
+  assert.equal(cleanupCalls, 1);
+  assert.equal(discardCalls, 0);
+  assert.equal(
+    selectNoteGenerationCandidate(useActionProcessingStore.getState(), noteId)?.candidate_id,
+    candidate.candidate_id
+  );
 });
 
 test("local clinical extraction uses one evidence request per source chunk", () => {
